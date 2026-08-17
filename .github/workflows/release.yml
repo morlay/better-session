@@ -1,0 +1,88 @@
+name: release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+
+      - run: just dep
+      - run: just lint
+      - run: just test
+        env:
+          TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - run: just build
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+      - run: just dep
+
+      - name: Publish to GitHub Packages
+        run: |
+          # registry 由各包 package.json 的 publishConfig 声明（GitHub
+          # Packages）；认证 token 写到全局 ~/.npmrc（pnpm publish 拒绝脏
+          # working tree，不能覆盖仓库根的 .npmrc）。
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
+          # 显式判断每个 workspace 包的版本是否已发布：已发布 → 跳过（打印
+          # 提示）；未发布 → 收集到 filter 列表，一次性经 pnpm publish 发布
+          # （pnpm 发布时把 workspace:^ 依赖替换为各包实际版本）。
+          # npm view 对未发布的版本返回 404（E404）；其余错误如实失败。
+          filters=()
+          for pkg_dir in packages/*; do
+            [ -f "$pkg_dir/package.json" ] || continue
+            PKG="$(node -p "require('./$pkg_dir/package.json').name")"
+            VERSION="$(node -p "require('./$pkg_dir/package.json').version")"
+            if npm view "$PKG@$VERSION" version --registry=https://npm.pkg.github.com/ \
+              >/dev/null 2>"$HOME/.view-err"; then
+              echo "skip $PKG: $VERSION already published"
+              continue
+            fi
+            if ! grep -q "E404" "$HOME/.view-err"; then
+              cat "$HOME/.view-err"
+              rm -f "$HOME/.view-err"
+              exit 1
+            fi
+            rm -f "$HOME/.view-err"
+            echo "to publish: $PKG@$VERSION"
+            filters+=("--filter=$PKG")
+          done
+          if [ "${#filters[@]}" -eq 0 ]; then
+            echo "all workspace versions already published; nothing to do"
+          else
+            # --access=public：scoped 包默认 restricted，显式公开（仓库公开）。
+            pnpm publish "${filters[@]}" --access=public --registry=https://npm.pkg.github.com/
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,15 @@
+- id: session-persistence-jsonl
+  disabled: true
+
+- insert:
+    - id: session-branch
+      name: "@morlay/session-branch"
+
+    - id: session-rdb
+      name: "@morlay/session-rdb"
+      config:
+        type: sqlite
+        path: !!js dshHomePath('sessions', 'sessions.sqlite')
+
+    - id: ui-conversation-message-actions
+      name: "@morlay/ui-conversation-message-actions"

@@ -1,0 +1,13 @@
+# @morlay/session-rdb bundle patch.
+#
+# 在 profile 的 dsh.profile.bundles 中列出本包后，本 patch 在 base 层之后
+# 生效，插入 RDB 持久化后端插件行（默认 SQLite，库文件放
+# $DSH_HOME/sessions/sessions.sqlite）。用户可在 profile 的 cordis.patch.yml 中
+# 按 id 覆盖 config（例如切到 PostgreSQL）。
+
+- insert:
+    - id: session-rdb
+      name: "@morlay/session-rdb"
+      config:
+        type: sqlite
+        path: !!js dshHomePath('sessions', 'sessions.sqlite')

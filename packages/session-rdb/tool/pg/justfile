@@ -1,0 +1,9 @@
+up:
+    docker compose up -d --wait db
+
+down:
+    docker compose down
+
+[no-cd]
+test: up
+    TEST_PG_URL="postgres://postgres:postgres@localhost:25433/postgres" nub exec vitest run src/__tests__/pg.spec.ts

@@ -1,0 +1,49 @@
+{
+  "name": "@morlay/better-session",
+  "version": "0.0.3",
+  "description": "Example dsh profile bundle: assembles @morlay/session-rdb and @morlay/ui-conversation-message-actions into a web profile — rewind / retry / fork closed loop on RDB persistence.",
+  "keywords": [
+    "dsh",
+    "dsh-bundle",
+    "fork",
+    "retry",
+    "rewind",
+    "session-rdb",
+    "ui-conversation-message-actions"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/morlay/better-session.git"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    "./invariant": {
+      "types": "./lib/invariant.d.mts",
+      "default": "./lib/invariant.mjs"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "prepare": "nub exec tsdown"
+  },
+  "dependencies": {
+    "@morlay/session-branch": "workspace:^",
+    "@morlay/session-rdb": "workspace:^",
+    "@morlay/ui-conversation-message-actions": "workspace:^"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

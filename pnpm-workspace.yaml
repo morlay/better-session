@@ -1,0 +1,11 @@
+# 依赖安装用 pnpm（workspace 语义），nub 只做运行器（nub exec）。
+# example/ 是独立的 profile bundle 包（版本号依赖，不进 workspace）。
+packages:
+  - packages/*
+
+allowBuilds:
+  "@deepseek-ai/dsh-subprocess-local": true
+  "@google/genai": true
+  koffi: true
+  node-pty: true
+  protobufjs: true

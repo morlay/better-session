@@ -1,0 +1,9 @@
+# @morlay/ui-conversation-message-actions bundle patch.
+#
+# 在 profile 的 dsh.profile.bundles 中列出本包后，本 patch 插入编排层插件行，
+# 注册 ctx.sessionEditor。依赖 ctx.sessionBranch（由 provider 实现插件如
+# @morlay/session-rdb 提供），请确保其在 bundles 中排在前面。
+
+- insert:
+    - id: ui-conversation-message-actions
+      name: "@morlay/ui-conversation-message-actions"

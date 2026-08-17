@@ -1,0 +1,24 @@
+.input {
+  /* composer-card 同款视觉（ui-conversation InputBar.module.css 的 .card）：
+     圆角胶囊 + 输入 surface token + 阴影，编辑弹窗与主输入框观感一致。 */
+  width: 100%;
+  min-height: 96px;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 16px;
+  line-height: 24px;
+  padding: 10px 16px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 22px;
+  background: var(--dsw-specific-input-major);
+  box-shadow: var(--dsw-shadow-lv2);
+  color: var(--dsw-text, inherit);
+  resize: none;
+  overflow-y: auto;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
