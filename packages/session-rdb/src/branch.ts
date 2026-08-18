@@ -43,6 +43,7 @@ import {
 import { randomUUID } from "node:crypto";
 import type { SessionPersistenceRdb } from "./index.ts";
 import { rowToMeta } from "./log.ts";
+import { isPersistedEvent } from "./schema.ts";
 
 /**
  * 定位 `atSeq` 锚定的闭合 `turn/end` 边界 seq。见
@@ -264,18 +265,30 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     }
 
     const internals = this.persistence.internals();
+    // —— 坐标换算：上游 seq（live log / 编排层 boundary）→ RDB 稠密 seq ——
+    // live 会话的 `inspection.events` 是内存 log 的上游 seq：delta 事件
+    // （assistant/chunk）与 ignorable 事件（版本效果）也占用连续 seq，而
+    // RDB 只在写路径持久化 survived 事件并稠密重编号（f_sequence），
+    // `head.fHeadSequence` 是稠密坐标。rewind 的 boundary 来自编排层基于
+    // live log 计算的上游 seq，必须映射为 RDB 的删除目标 = 前缀中
+    // persisted 事件数 - 1；否则「boundary > stored head」恒误报（上游
+    // head 永远大于稠密 head）。cold 视图本身已是稠密 seq，直接使用。
+    const denseBoundary =
+      live === undefined
+        ? toBoundary
+        : inspection.events.slice(0, toBoundary + 1).filter(isPersistedEvent).length - 1;
     await internals.backend.transaction(async (tx) => {
       signal?.throwIfAborted();
       const head = await tx.getHead(id);
-      if (toBoundary > head.fHeadSequence) {
+      if (denseBoundary > head.fHeadSequence) {
         throw new SessionBranchError(
           `rewind boundary ${toBoundary} is beyond the stored head ${head.fHeadSequence}`,
           "INVALID_BOUNDARY",
         );
       }
-      if (toBoundary < head.fHeadSequence) {
-        await tx.deleteBridgeTail(id, toBoundary + 1);
-        const prev = toBoundary === -1 ? undefined : await tx.getPrevBridge(id, toBoundary);
+      if (denseBoundary < head.fHeadSequence) {
+        await tx.deleteBridgeTail(id, denseBoundary + 1);
+        const prev = denseBoundary === -1 ? undefined : await tx.getPrevBridge(id, denseBoundary);
         if (prev === undefined) {
           await tx.updateHead(id, "", -1);
         } else {
@@ -285,8 +298,9 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       await tx.bumpRevision(id);
     });
 
-    // 更新本实例的确认 head（下一次 append 的并发校验基准）。
-    internals.writeGuard.confirmHead(id, toBoundary);
+    // 更新本实例的确认 head（下一次 append 的并发校验基准）——稠密坐标，
+    // 与 `appendBatch` 内 `confirmHead` 的稠密语义一致。
+    internals.writeGuard.confirmHead(id, denseBoundary);
 
     if (live !== undefined) {
       // live 分支：截断内存 log 并重置派生缓存；同步 coordinator 的
@@ -410,10 +424,13 @@ export class SessionBranchRdb extends SessionBranch {
   }
 
   /**
-   * 同步 live 会话的 coordinator 内存 cursor 到其 log 长度。编排层在
-   * rewind 后把 ignorable 版本效果 push 进 live log（不发布、不进缓冲），
-   * 使 cursor 落后于 log；flush 前调用本方法对齐，manualTurn 的 append
-   * 才能通过 seq 连续性校验。
+   * 同步 live 会话的 coordinator 内存 cursor，跳过 ignorable 占位事件。
+   * 编排层在 rewind 后把 ignorable 版本效果 push 进 live log（不发布、不
+   * 进缓冲）——它占用一个上游 seq，但 coordinator 的 cursor（rewind 设到
+   * 截断后长度）看不见它；不跳过的话，flush 的 `appendLiveBatch` 会以
+   * `e.seq >= cursor` 过滤掉 cursor 之前的事件（manualTurn 永远不落盘），
+   * 或 `appendCore` 的 seq 连续性校验错位。这里把 cursor 从当前值起跳过
+   * 连续的 ignorable 事件，对齐到下一个待持久化事件的 seq。
    */
   syncLiveCursor(sessionId: SessionId): void {
     const live = this.ctx.sessions.get(sessionId);
@@ -424,7 +441,10 @@ export class SessionBranchRdb extends SessionBranch {
       };
     };
     const state = persistence.coordinator?.states?.get(sessionId);
-    if (state !== undefined) state.cursor = live.events.length;
+    if (state === undefined) return;
+    let cursor = state.cursor;
+    while (live.events[cursor]?.ignorable === true) cursor += 1;
+    state.cursor = cursor;
   }
 
   async timeline(sessionId: SessionId, signal?: AbortSignal) {

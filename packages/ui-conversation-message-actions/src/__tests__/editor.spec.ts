@@ -178,6 +178,105 @@ describe("SessionEditor rewind/retry/fork", () => {
     }
   });
 
+  it("edits after an interrupted run (open turn with delta events) without misreading the stored head", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // 轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 流式输出中途停止：
+      // turn/start + user/message + step/start + 大量 assistant/chunk（delta，
+      // 落盘时被 RDB 过滤）+ assistant/message + step/end，没有 turn/end。
+      const chunk = (seq: number, text: string): SessionEvent => ({
+        type: "assistant/chunk",
+        seq,
+        time: seq,
+        data: { turn: 3, step: 1, chunk: { type: "text-delta", index: 0, text } },
+      });
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        {
+          type: "user/message",
+          seq: 13,
+          time: 13,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/start", seq: 14, time: 14, data: { turn: 3, step: 1 } },
+        chunk(15, "a"),
+        chunk(16, "b"),
+        chunk(17, "c"),
+        {
+          type: "assistant/message",
+          seq: 18,
+          time: 18,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: 19, time: 19, data: { turn: 3, step: 1 } },
+      ];
+      ctx.sessions.create(SessionIdBrand("live"), {
+        meta: meta("live"),
+        seed: [...twoTurnLog(), ...openTail],
+      });
+      const live = ctx.sessions.get(SessionIdBrand("live"))!;
+      await ctx.sessions.flush(live);
+
+      // live 上游 head = 20（含构造时自动补记的 session/end-seed）；
+      // RDB 稠密 head = 17（3 个 delta 被过滤，end-seed 落盘）。
+      const backend = (
+        ctx.sessionPersistence as unknown as {
+          internals(): {
+            backend: { getHead(id: SessionIdBrand): Promise<{ fHeadSequence: number }> };
+          };
+        }
+      ).internals().backend;
+      expect(live.events.at(-1)?.seq).toBe(20);
+      expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(17);
+
+      // 编辑轮 2 的助手文本 → boundary = 轮 1 的 turn/end（上游 seq 5）。
+      // 修复前：上游 seq 与稠密 head 直接比较 → 误报
+      // "rewind boundary 5 is beyond the stored head 17"。
+      const result = await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("live"),
+        eventSeq: 9,
+        blockIndex: 0,
+        text: "edited",
+        cascade: "truncate",
+      });
+      expect(result.sessionId).toBe(SessionIdBrand("live"));
+      expect(result.queuedTurns).toBe(0);
+
+      // live 内存 log：截断前缀（0..5）+ ignorable 版本效果（6）+ 手工闭合轮（7..12）。
+      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(live.events[6]?.type).toBe("session-branch/version");
+      expect(live.events.at(-1)?.type).toBe("turn/end");
+      // RDB canonical log：截断前缀 + 手工轮（版本效果 ignorable 不落库）→ head = 11。
+      expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(11);
+
+      // 截断后继续 append 成功（coordinator cursor 已对齐，无残留 writer 校验误报）。
+      const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
+      liveAppend.append("turn/start", { turn: 4 });
+      await ctx.sessions.flush(live);
+      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(12);
+    } finally {
+      await dispose();
+    }
+  });
+
   it("retry on a live session replays queued input through the live agent", async () => {
     const { ctx, editor, dispose } = await harness();
     try {

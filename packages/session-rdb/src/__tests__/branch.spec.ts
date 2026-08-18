@@ -317,6 +317,82 @@ describe("rewind", () => {
     }
   });
 
+  it("rewinds a live session whose log contains dropped delta events (upstream vs dense seq)", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      // live 会话：seed 含 assistant/chunk（delta——落盘时被 RDB 过滤，稠密
+      // 重编号后 RDB head 落后于 live 上游 head）。上游 seq 0..15（两轮各
+      // 6 个 persisted + 2 个 delta）+ 构造时自动补记的 session/end-seed（seq 16）。
+      const turn2: SessionEvent[] = oneTurnLog().map(
+        (event) =>
+          ({
+            ...event,
+            seq: event.seq + 8,
+            time: event.time + 100,
+            data: { ...event.data, turn: 2 },
+          }) as SessionEvent,
+      );
+      const seed: SessionEvent[] = [
+        ...oneTurnLog(),
+        {
+          type: "assistant/chunk",
+          seq: 6,
+          time: 7,
+          data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "x" } },
+        },
+        {
+          type: "assistant/chunk",
+          seq: 7,
+          time: 8,
+          data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "y" } },
+        },
+        ...turn2,
+        {
+          type: "assistant/chunk",
+          seq: 14,
+          time: 15,
+          data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "z" } },
+        },
+        {
+          type: "assistant/chunk",
+          seq: 15,
+          time: 16,
+          data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "w" } },
+        },
+      ];
+      ctx.sessions.create(SessionId("live-delta"), { meta: meta("live-delta"), seed: [...seed] });
+      const live = ctx.sessions.get(SessionId("live-delta"))!;
+      await ctx.sessions.flush(live);
+
+      const backend = persistence.internals().backend as unknown as {
+        getHead(id: SessionId): Promise<{ fHeadSequence: number }>;
+      };
+      // live 上游 head = 16；RDB 稠密 head = 12（persisted：轮 1 seq 0..5、
+      // 轮 2 seq 8..13、end-seed seq 16；4 个 delta 被过滤）。
+      expect(live.events.at(-1)?.seq).toBe(16);
+      expect((await backend.getHead(SessionId("live-delta"))).fHeadSequence).toBe(12);
+
+      // 编辑轮 2 → boundary = 轮 1 的 turn/end（上游 seq 5）。修复前此处
+      // 误报 "rewind boundary 5 is beyond the stored head 12"。
+      const snapshot = await provider.rewind(SessionId("live-delta"), 5);
+      expect(snapshot.header.id).toBe("live-delta");
+
+      // live 内存 log 截断到上游边界。
+      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      // RDB head 截断到稠密目标（轮 1 无 delta 插入中间 → 上游 5 == 稠密 5）。
+      expect((await backend.getHead(SessionId("live-delta"))).fHeadSequence).toBe(5);
+
+      // 截断后继续 append 成功（coordinator cursor 已对齐新尾部）。
+      const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
+      liveAppend.append("turn/start", { turn: 2 });
+      await ctx.sessions.flush(live);
+      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect((await backend.getHead(SessionId("live-delta"))).fHeadSequence).toBe(6);
+    } finally {
+      await dispose();
+    }
+  });
+
   it("rewinds to the empty prefix when boundary is -1", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
