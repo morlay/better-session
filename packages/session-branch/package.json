@@ -1,6 +1,6 @@
 {
   "name": "@morlay/session-branch",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Provider abstraction + high-level service for rewind / retry / fork over DeepSeek Harness event-sourced sessions.",
   "keywords": [
     "dsh",
