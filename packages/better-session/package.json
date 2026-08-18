@@ -30,7 +30,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "prepare": "nub exec tsdown"
+    "prepare": "pnpm exec tsdown"
   },
   "dependencies": {
     "@morlay/session-branch": "workspace:^",

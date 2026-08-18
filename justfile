@@ -4,32 +4,35 @@ default:
     just --list
 
 pm *args:
-    nub pm {{ args }}
+    pnpm pm {{ args }}
 
 mise *args:
     mise {{ args }}
 
 view *args:
-    nub view {{ args }}
+    pnpm view {{ args }}
 
 dep *args:
     pnpm install {{ args }}
 
 clean:
     rm -f pnpm-lock.yaml;
-    rm -rf node_modules;
+    find . \
+        -type d \
+        -name "node_modules" \
+        -prune -print -exec rm -rf '{}' \;
 
 fmt:
-    nub exec oxfmt .
+    pnpm exec oxfmt .
 
 lint:
-    nub exec oxlint .
+    pnpm exec oxlint .
 
 build:
-    nub -r run prepare
+    pnpm -r run prepare
 
 test:
-    nub exec vitest run
+    pnpm exec vitest run
 
 export DSH_HOME := join(justfile_directory(), ".dsh-store")
 
