@@ -45,7 +45,7 @@ import type {
 } from "@deepseek-ai/dsh-session";
 import { type Backend, type BackendTx, type EventInsert, type EventRow } from "./backend.ts";
 import { WriteGuard } from "./write-guard.ts";
-import { buildSeqMap, rowToMeta, scanRows } from "./log.ts";
+import { buildSeqMap, normalizeSurfaceReplaceProvenance, rowToMeta, scanRows } from "./log.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   eventDimensions,
@@ -310,6 +310,11 @@ export class SessionPersistenceRdb
     // The confirmed head is the last PRESERVED seq (a torn tail is removed by
     // the caller's commitRepair, which re-confirms the head after repair).
     this.writeGuard.confirmHead(id, log.events.at(-1)?.seq ?? -1);
+    // 全量读取时使 replace 的 provenance 覆盖其 range（rewind 复用上游 seq
+    // 空间后，保留的 checkpoint replace 可能引用已删除的行 → 读取时引用被
+    // 剪，shadowed 校验失败 → 会话无法加载；这里把 range 内所有事件 seq 并入
+    // provenance，见 {@link normalizeSurfaceReplaceProvenance}）。
+    normalizeSurfaceReplaceProvenance(log.events);
     return {
       meta: log.meta,
       events: log.events,

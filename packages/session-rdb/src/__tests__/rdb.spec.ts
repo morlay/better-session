@@ -18,6 +18,8 @@ import type {
 import SessionPersistenceSqlite, { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "../index.ts";
 import {
   buildSeqMap,
+  normalizeSurfaceReplaceProvenance,
+  remapProvenance,
   remapShadowedRange,
   remapSurfaceOp,
   rowToEvent,
@@ -468,7 +470,7 @@ describe("rowToEvent", () => {
     expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 0, end: 1 });
   });
 
-  it("keeps an unmapped sourceEventSeqs entry verbatim (tolerated like a scan hole)", () => {
+  it("drops unmapped sourceEventSeqs entries (never mixes upstream with dense seqs)", () => {
     const row: EventRow = {
       fSequence: 1,
       fOriginalSeq: 1,
@@ -479,7 +481,116 @@ describe("rowToEvent", () => {
       fSurfaceOp: null,
     };
     const event = rowToEvent(row, new Map<number, number>([[1, 1]]));
-    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([9]);
+    // upstream 9 has no persisted row → the reference is pruned, and an empty
+    // provenance list is omitted entirely (matching the write path's null).
+    expect((event as SurfaceEvent).sourceEventSeqs).toBeUndefined();
+  });
+
+  it("normalizes remapped sourceEventSeqs: prunes, sorts, and de-duplicates", () => {
+    // A checkpoint user/message after a rewind: references span the reused
+    // upstream space — [8, 2, 8, 9, 15] where 15 has no row, 2→20, 8→30, 9→31.
+    const row: EventRow = {
+      fSequence: 40,
+      fOriginalSeq: 40,
+      fKind: "user/message",
+      fCreatedAt: 1,
+      fData: JSON.stringify({
+        content: [{ type: "text", text: "checkpoint" }],
+        source: { kind: "user" },
+      }),
+      fSourceEventSeqs: JSON.stringify([8, 2, 8, 9, 15]),
+      fSurfaceOp: JSON.stringify("append"),
+    };
+    const map = new Map<number, number>([
+      [2, 20],
+      [8, 30],
+      [9, 31],
+    ]);
+    const event = rowToEvent(row, map);
+    // 15 unmapped → dropped; 8 dup → one; sorted → [20, 30, 31].
+    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([20, 30, 31]);
+  });
+
+  it("remapProvenance prunes unresolvable refs, sorts, and de-duplicates", () => {
+    const remap = (seq: number): number | undefined => (seq % 2 === 0 ? seq * 10 : undefined);
+    expect(remapProvenance([5, 2, 4, 2, 6], remap)).toEqual([20, 40, 60]);
+    expect(remapProvenance([1, 3], remap)).toEqual([]);
+    expect(remapProvenance([], remap)).toEqual([]);
+  });
+
+  it("normalizeSurfaceReplaceProvenance merges the dense range's surface nodes into a replace's provenance", () => {
+    // checkpoint user/message (seq 40) replaces dense range [7..9]; its stored
+    // provenance covers only [7, 8] and the range's surface node (user/message
+    // @ 8) is already cited — but after a rewind reused the upstream space the
+    // shadowed validation requires EVERY surface node in the range to be
+    // cited, so a missing one must be merged. turn/start / turn/end are not
+    // surface nodes and must stay out of the provenance.
+    const events: SessionEvent[] = [
+      { type: "turn/start", seq: 7, time: 1, data: { turn: 1 } },
+      {
+        type: "user/message",
+        seq: 8,
+        time: 2,
+        data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      { type: "turn/end", seq: 9, time: 3, data: { turn: 1, reason: { kind: "completed" } } },
+      {
+        type: "user/message",
+        seq: 40,
+        time: 4,
+        data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
+        surfaceOp: { op: "replace", start: 7, end: 9 },
+        sourceEventSeqs: [7, 8],
+      } as SessionEvent,
+    ];
+    normalizeSurfaceReplaceProvenance(events);
+    const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
+    // surface node @ 8 already cited; nothing new to merge.
+    expect(checkpoint.sourceEventSeqs).toEqual([7, 8]);
+    // Non-replace events are untouched.
+    expect(events[1]).toMatchObject({ seq: 8, surfaceOp: "append" });
+  });
+
+  it("normalizeSurfaceReplaceProvenance merges a missing surface node from the range", () => {
+    const events: SessionEvent[] = [
+      {
+        type: "user/message",
+        seq: 10,
+        time: 1,
+        data: { content: [{ type: "text", text: "old" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "assistant/message",
+        seq: 11,
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: {
+            id: "a",
+            role: "assistant",
+            content: [{ type: "text", text: "old" }],
+            source: { kind: "model", provider: "m", model: "m" },
+          },
+        },
+        surfaceOp: "append",
+      } as SessionEvent,
+      { type: "turn/end", seq: 12, time: 3, data: { turn: 1, reason: { kind: "completed" } } },
+      {
+        type: "user/message",
+        seq: 20,
+        time: 4,
+        data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
+        surfaceOp: { op: "replace", start: 10, end: 12 },
+        sourceEventSeqs: [10],
+      } as SessionEvent,
+    ];
+    normalizeSurfaceReplaceProvenance(events);
+    const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
+    // assistant/message @ 11 is a surface node in the range and was missing.
+    expect(checkpoint.sourceEventSeqs).toEqual([10, 11]);
   });
 
   it("remaps a positional replace surfaceOp through the upstream→persisted seq map", () => {

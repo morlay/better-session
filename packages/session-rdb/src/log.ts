@@ -156,12 +156,21 @@ export function remapShadowedRange(
 export function rowToEvent(row: EventRow, seqMap?: ReadonlyMap<number, number>): SessionEvent {
   // Surface-metadata fields are conditional on the event type in the type
   // system; spread them so each variant gets only the fields it declares.
+  // `sourceEventSeqs` must never mix coordinates: an unmappable reference is
+  // dropped (not kept verbatim), and the survivors are sorted/de-duplicated —
+  // see {@link remapProvenance}. A fully pruned list is omitted entirely (the
+  // event carries no provenance), matching the write path's null storage.
   const remap = (seq: number) => seqMap?.get(seq) ?? seq;
+  // No map means the log was never delta-filtered: stored seqs are already
+  // dense, so identity. With a map, an entry without a persisted row is
+  // unresolvable and must be dropped (never kept as an upstream value).
+  const strictRemap = (seq: number) => (seqMap === undefined ? seq : seqMap.get(seq));
   const surfaceFields = {
     ...(row.fSourceEventSeqs !== null
-      ? {
-          sourceEventSeqs: (JSON.parse(row.fSourceEventSeqs) as number[]).map(remap),
-        }
+      ? (() => {
+          const refs = remapProvenance(JSON.parse(row.fSourceEventSeqs) as number[], strictRemap);
+          return refs.length > 0 ? { sourceEventSeqs: refs } : {};
+        })()
       : {}),
     ...(row.fSurfaceOp !== null
       ? {
@@ -214,6 +223,87 @@ export function buildSeqMap(
     if (!map.has(row.fOriginalSeq)) map.set(row.fOriginalSeq, row.fSequence);
   }
   return map;
+}
+
+/**
+ * Normalize a stored provenance list into the persisted seq space.
+ *
+ * `sourceEventSeqs` references events by UPSTREAM seq; on read each entry is
+ * remapped to the DENSE persisted seq through the upstream→persisted map. An
+ * entry whose event never got a persisted row (a dropped delta) or no longer
+ * has one cannot be remapped. Keeping such an entry verbatim would mix
+ * upstream and dense coordinates in one list — after rewind re-uses the
+ * upstream seq space, a stale reference can even collide with a live dense
+ * seq — which the upstream Session seed validation rejects (duplicates /
+ * non-monotonic / "must reference earlier events"). Unmappable entries are
+ * dropped. Because the upstream space is reused, the remapped entries can
+ * also arrive out of order or duplicated; the result is sorted and
+ * de-duplicated so it is strictly increasing, as the upstream provenance
+ * contract requires. The output's SET (the only thing surface-replace
+ * shadowing checks) is unchanged by normalization.
+ * @param refs - the event's `sourceEventSeqs` (upstream seqs).
+ * @param remap - upstream→persisted seq mapping; undefined for an entry
+ *   whose event has no persisted row.
+ * @returns the normalized, strictly increasing persisted seqs (possibly empty).
+ */
+export function remapProvenance(
+  refs: readonly number[],
+  remap: (seq: number) => number | undefined,
+): number[] {
+  const mapped: number[] = [];
+  for (const ref of refs) {
+    const dense = remap(ref);
+    if (dense !== undefined) mapped.push(dense);
+  }
+  mapped.sort((a, b) => a - b);
+  const result: number[] = [];
+  for (const seq of mapped) {
+    if (result.length === 0 || result[result.length - 1] !== seq) result.push(seq);
+  }
+  return result;
+}
+
+/**
+ * The event types that produce model-visible surface nodes (mirror of the
+ * upstream `SURFACE_EVENT_TYPES`); only these can appear in a replace's
+ * shadowed range, so only their seqs may be merged into provenance.
+ */
+const SURFACE_EVENT_TYPES = new Set(["user/message", "assistant/message", "tool/result"]);
+
+/**
+ * Make a surface `replace` event's provenance cover its replacement range.
+ *
+ * The upstream Session seed validation requires a replace's `sourceEventSeqs`
+ * to include every surface node it shadows (`assertProvenance`'s shadowed
+ * check). Rewind re-uses the upstream seq space: a replace that survives a
+ * truncation (e.g. a checkpoint `user/message` before the new boundary) has
+ * its range remapped onto DENSE seqs, while its provenance references were
+ * written in upstream seqs — references to rows rewind deleted are dropped on
+ * read, so the surviving provenance no longer covers the range's dense nodes.
+ * Merging every persisted SURFACE node seq inside the (dense) range into the
+ * provenance makes the log loadable again; extra references are legal
+ * provenance and never affect the fold (the fold consumes only the surfaceOp
+ * range). Only events the map could resolve exist in the dense range, so the
+ * merged list is strictly increasing after sort/dedup.
+ * @param events - a session's dense event list (contiguous seqs), read in
+ *   full; mutated in place.
+ */
+export function normalizeSurfaceReplaceProvenance(events: SessionEvent[]): void {
+  for (const event of events) {
+    const raw = event as SessionEvent & { surfaceOp?: unknown; sourceEventSeqs?: number[] };
+    const op = raw.surfaceOp;
+    if (typeof op !== "object" || op === null || (op as { op?: string }).op !== "replace") {
+      continue;
+    }
+    const { start, end } = op as { start: number; end: number };
+    const refs = new Set(raw.sourceEventSeqs ?? []);
+    for (const candidate of events) {
+      if (candidate.seq >= start && candidate.seq <= end && SURFACE_EVENT_TYPES.has(candidate.type)) {
+        refs.add(candidate.seq);
+      }
+    }
+    raw.sourceEventSeqs = [...refs].sort((a, b) => a - b);
+  }
 }
 
 /**
