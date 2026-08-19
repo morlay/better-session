@@ -17,3 +17,5 @@ packages/
 - 工具链（tsdown / typescript / vitest / oxlint）在根；各包只声明自身运行时依赖
 - 核心设计：`SessionBranchProvider` 是额外的 provider 抽象（与上游
   `PersistenceBackend` 平行）；rdb 同时实现两者并自动注册 `ctx.sessionBranch`
+- **发布走 CI**：严禁本地私自 `pnpm publish`（包括用 `--registry` 指向
+  GitHub Packages 的发布）。版本 bump 提交后由 CI 发布；本地只构建验证。
