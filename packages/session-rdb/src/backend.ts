@@ -134,7 +134,9 @@ export interface Backend {
   /** Fetch a session's row, or undefined if absent. */
   getSession(id: SessionId): Promise<SessionRow | undefined>;
   /** Lightweight two-column upstream→persisted seq map source. */
-  getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number; fKind: string }>>;
+  getSeqMapRows(
+    id: SessionId,
+  ): Promise<Array<{ fSequence: number; fOriginalSeq: number; fKind: string }>>;
   /** Joined event rows for one session, dense seq ascending (optionally from a seq). */
   getEventRows(id: SessionId, fromSequence?: number): Promise<EventRow[]>;
   /** All materialized sessions' rows. */

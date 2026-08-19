@@ -10,7 +10,7 @@ export const AssistantNodeView = memo(function AssistantNodeView({
   node,
   useTurnData,
   openFile,
-  loadImage,
+  renderMessageImages,
   fileMentions,
   t,
 }: ChatNodeViewProps<"assistant-step">) {
@@ -32,7 +32,7 @@ export const AssistantNodeView = memo(function AssistantNodeView({
       blocks={data.blocks}
       streaming={data.status === "running"}
       interrupted={data.status === "interrupted"}
-      loadImage={loadImage}
+      renderMessageImages={renderMessageImages}
       mentions={mentions}
       t={t}
     />

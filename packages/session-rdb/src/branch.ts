@@ -430,10 +430,7 @@ export class SessionBranchRdb extends SessionBranch {
    * 对齐。返回实际变更的事件数。
    */
   cleanseSession(sessionId: SessionId, signal?: AbortSignal): Promise<{ changed: number }> {
-    return (this.ctx.sessionPersistence as SessionPersistenceRdb).cleanseSession(
-      sessionId,
-      signal,
-    );
+    return (this.ctx.sessionPersistence as SessionPersistenceRdb).cleanseSession(sessionId, signal);
   }
 
   /**

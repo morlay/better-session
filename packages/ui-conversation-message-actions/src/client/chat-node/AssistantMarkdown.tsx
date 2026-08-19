@@ -9,14 +9,15 @@
 // their branch action is enabled only when the node is also the completed
 // turn's transcript tail. Think / tool-head-only nodes stay chrome-free.
 
-import { memo, useMemo } from "react";
+import { Fragment, memo, useMemo } from "react";
 import type { ReactNode } from "react";
 import type { AssistantBlock } from "@deepseek-ai/dsh-client-runtime/client";
 import { JsonBlock, MarkdownText } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { MarkdownFileMentions } from "@deepseek-ai/dsh-client-ui-primitives";
-import { ImageGallery, type ImageLoader } from "@deepseek-ai/dsh-client-ui-attachment";
-import type { ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-conversation/client";
-import { messageImageLabels } from "./image-labels.ts";
+import type {
+  ChatViewSlotProps,
+  RenderMessageImages,
+} from "@deepseek-ai/dsh-client-ui-conversation/client";
 import { ReasoningRow } from "./ReasoningRow.tsx";
 import css from "./AssistantMarkdown.module.css";
 
@@ -25,8 +26,8 @@ export interface AssistantMarkdownProps {
   streaming: boolean;
   /** Frozen partial of an aborted turn: rendered with a stopped marker. */
   interrupted?: boolean | undefined;
-  /** Session-authorized durable image loader. */
-  loadImage?: ImageLoader;
+  /** Render a consecutive image group through the attachment slot. */
+  renderMessageImages: RenderMessageImages;
   /** Resolved prose file mentions for this Assistant's closing turn. */
   mentions?: MarkdownFileMentions | undefined;
   /** The owning view's locale seat, passed down as a plain prop. */
@@ -38,11 +39,10 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
   blocks,
   streaming,
   interrupted,
-  loadImage,
+  renderMessageImages,
   mentions,
   t,
 }: AssistantMarkdownProps) {
-  const imageLoader = loadImage ?? (() => Promise.reject(new Error(t("image.serviceUnavailable"))));
   // Stable per locale revision (t identity changes on switch): a fresh object
   // per render would rebuild MarkdownText's component table every chunk.
   const codeLabels = useMemo(
@@ -92,13 +92,12 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
           i += 1;
         }
         rendered.push(
-          <ImageGallery
-            key={start}
-            images={group}
-            load={imageLoader}
-            align="start"
-            labels={messageImageLabels(t)}
-          />,
+          <Fragment key={start}>
+            {renderMessageImages({
+              images: group.map(({ attachment }) => ({ attachment })),
+              align: "start",
+            })}
+          </Fragment>,
         );
         break;
       }

@@ -263,7 +263,9 @@ export class SqliteBackend implements Backend {
       | undefined;
   }
 
-  async getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number; fKind: string }>> {
+  async getSeqMapRows(
+    id: SessionId,
+  ): Promise<Array<{ fSequence: number; fOriginalSeq: number; fKind: string }>> {
     return this.eventRows().where(eq(tSessionEvents.fSessionId, id)).all();
   }
 
@@ -462,7 +464,9 @@ export class SqliteBackend implements Backend {
     this.db
       .update(tEvents)
       .set({
-        ...(fields.fSourceEventSeqs === undefined ? {} : { fSourceEventSeqs: fields.fSourceEventSeqs }),
+        ...(fields.fSourceEventSeqs === undefined
+          ? {}
+          : { fSourceEventSeqs: fields.fSourceEventSeqs }),
         ...(fields.fSurfaceOp === undefined ? {} : { fSurfaceOp: fields.fSurfaceOp }),
         ...(fields.fData === undefined ? {} : { fData: fields.fData }),
       })

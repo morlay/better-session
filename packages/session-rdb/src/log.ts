@@ -356,7 +356,11 @@ export function normalizeSurfaceReplaceProvenance(events: SessionEvent[]): void 
     const { start, end } = op as { start: number; end: number };
     const refs = new Set(raw.sourceEventSeqs ?? []);
     for (const candidate of events) {
-      if (candidate.seq >= start && candidate.seq <= end && SURFACE_EVENT_TYPES.has(candidate.type)) {
+      if (
+        candidate.seq >= start &&
+        candidate.seq <= end &&
+        SURFACE_EVENT_TYPES.has(candidate.type)
+      ) {
         refs.add(candidate.seq);
       }
     }

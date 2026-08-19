@@ -2189,25 +2189,19 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     const persistence = b.ctx.sessionPersistence as SessionPersistenceSqlite;
     const backendApi = persistence.internals().backend;
     // 存储是上游坐标:replace [1,5] 与 sourceEventSeqs [1,5] 原样落库。
-    const rowBefore = (await backendApi.getEventRows(m.id)).find(
-      (r) => r.fSequence === 8,
-    )!;
+    const rowBefore = (await backendApi.getEventRows(m.id)).find((r) => r.fSequence === 8)!;
     expect(rowBefore.fSourceEventSeqs).toBe("[1,5]");
 
     // 读取时启发式已给出稠密视图。
     const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const replacement = loaded.events.find(
-      (e) => e.type === "assistant/message" && e.seq === 8,
-    )!;
+    const replacement = loaded.events.find((e) => e.type === "assistant/message" && e.seq === 8)!;
     expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
 
     // 清洗:重写为稠密坐标。
     const { changed } = await persistence.cleanseSession(m.id);
     expect(changed).toBeGreaterThan(0);
 
-    const rowAfter = (await backendApi.getEventRows(m.id)).find(
-      (r) => r.fSequence === 8,
-    )!;
+    const rowAfter = (await backendApi.getEventRows(m.id)).find((r) => r.fSequence === 8)!;
     expect(rowAfter.fSourceEventSeqs).toBe("[1,3]");
     expect(rowAfter.fSurfaceOp).toBe(JSON.stringify({ op: "replace", start: 1, end: 3 }));
 

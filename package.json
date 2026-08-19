@@ -10,7 +10,7 @@
   },
   "type": "module",
   "devDependencies": {
-    "@deepseek-ai/dsh": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh": "^0.1.0-rc.8",
     "@tsdown/css": "^0.22.14",
     "@types/node": "^26.2.0",
     "oxfmt": "^0.63.0",
@@ -19,16 +19,5 @@
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
-  },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "^11.0.0",
-      "onFail": "ignore"
-    },
-    "runtime": {
-      "name": "node",
-      "version": "26.x"
-    }
   }
 }
