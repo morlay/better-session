@@ -518,6 +518,75 @@ export class SessionPersistenceRdb
     this.writeGuard.confirmHead(meta.id, row?.fHeadSequence ?? -1);
   }
 
+  /**
+   * 一次性清洗一个 session 的 surface/provenance 坐标到稠密空间并写回。
+   *
+   * 旧数据（rewind 前的代码写入）的 `sourceEventSeqs`、`surfaceOp` replace
+   * range 与 compaction `shadowedRange` 是上游坐标，读取时每次都要做坐标
+   * 解析对齐；清洗用与读取完全相同的解析（稠密优先 + 上游映射 + 剪枝 +
+   * replace provenance 补全）把它们重写为稠密坐标，之后读取无需再对齐
+   * （对已清洗数据解析恒为恒等）。torn tail 片段不参与（读取路径也不会
+   * 保留它们）。返回实际变更的事件数。
+   */
+  async cleanseSession(id: SessionId, signal?: AbortSignal): Promise<{ changed: number }> {
+    signal?.throwIfAborted();
+    await this.ready;
+    signal?.throwIfAborted();
+    const eventRows = await this.backend.getEventRows(id);
+    if (eventRows.length === 0) return { changed: 0 };
+    const seqMap = buildSeqMap(eventRows);
+    const denseTypeMap = new Map(eventRows.map((r) => [r.fSequence, r.fKind]));
+    const { preserved } = scanRows(eventRows, 0, seqMap, denseTypeMap);
+    normalizeSurfaceReplaceProvenance(preserved);
+    const bySeq = new Map(preserved.map((event) => [event.seq, event]));
+    const updates: Array<{
+      fSequence: number;
+      fSourceEventSeqs?: string | null;
+      fSurfaceOp?: string | null;
+      fData?: string;
+    }> = [];
+    for (const row of eventRows) {
+      const event = bySeq.get(row.fSequence);
+      if (event === undefined) continue; // torn tail fragment
+      const surface = event as SessionEvent & { sourceEventSeqs?: number[]; surfaceOp?: unknown };
+      const newSeqs =
+        surface.sourceEventSeqs === undefined ? null : JSON.stringify(surface.sourceEventSeqs);
+      const newOp = surface.surfaceOp === undefined ? null : JSON.stringify(surface.surfaceOp);
+      const fields: {
+        fSourceEventSeqs?: string | null;
+        fSurfaceOp?: string | null;
+        fData?: string;
+      } = {};
+      if (newSeqs !== row.fSourceEventSeqs) fields.fSourceEventSeqs = newSeqs;
+      if (newOp !== row.fSurfaceOp) fields.fSurfaceOp = newOp;
+      // fData 只在 compaction 计量事件的 shadowedRange 变化时重写（避免
+      // JSON 重序列化带来的无关变更）。
+      if (row.fKind === "compaction/summary" || row.fKind === "compaction/prune") {
+        const storedData = JSON.parse(row.fData) as { shadowedRange?: unknown };
+        const newData = event.data as unknown as { shadowedRange?: unknown };
+        if (JSON.stringify(storedData.shadowedRange) !== JSON.stringify(newData.shadowedRange)) {
+          fields.fData = JSON.stringify(event.data);
+        }
+      }
+      if (Object.keys(fields).length > 0) {
+        updates.push({ fSequence: row.fSequence, ...fields });
+      }
+    }
+    if (updates.length === 0) return { changed: 0 };
+    await this.backend.transaction(async (tx) => {
+      for (const update of updates) {
+        await tx.updateEventFields(id, update.fSequence, {
+          ...(update.fSourceEventSeqs === undefined
+            ? {}
+            : { fSourceEventSeqs: update.fSourceEventSeqs }),
+          ...(update.fSurfaceOp === undefined ? {} : { fSurfaceOp: update.fSurfaceOp }),
+          ...(update.fData === undefined ? {} : { fData: update.fData }),
+        });
+      }
+    });
+    return { changed: updates.length };
+  }
+
   /** List all materialized sessions' metadata (every row is a materialized session). */
   async list(signal?: AbortSignal): Promise<SessionHeader[]> {
     signal?.throwIfAborted();

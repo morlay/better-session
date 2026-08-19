@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { PgAsyncDatabase, PgAsyncTransaction, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import {
@@ -174,6 +174,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
       deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(tx, id, fromSequence),
       getPrevBridge: (id, sequence) => this.getPrevBridge(tx, id, sequence),
       getLastBridge: (id) => this.getLastBridge(tx, id),
+      updateEventFields: (id, sequence, fields) => this.updateEventFields(tx, id, sequence, fields),
     };
   }
 
@@ -315,5 +316,30 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
       })
       .from(pgSessionEvents)
       .innerJoin(pgEvents, eq(pgSessionEvents.fEventId, pgEvents.fEventId));
+  }
+
+  private async updateEventFields(
+    exec: PgAsyncDatabase<THKT>,
+    id: SessionId,
+    sequence: number,
+    fields: {
+      fSourceEventSeqs?: string | null;
+      fSurfaceOp?: string | null;
+      fData?: string;
+    },
+  ): Promise<void> {
+    const eventIds = exec
+      .select({ fEventId: pgSessionEvents.fEventId })
+      .from(pgSessionEvents)
+      .where(and(eq(pgSessionEvents.fSessionId, id), eq(pgSessionEvents.fSequence, sequence)));
+    await exec
+      .update(pgEvents)
+      .set({
+        ...(fields.fSourceEventSeqs === undefined ? {} : { fSourceEventSeqs: fields.fSourceEventSeqs }),
+        ...(fields.fSurfaceOp === undefined ? {} : { fSurfaceOp: fields.fSurfaceOp }),
+        ...(fields.fData === undefined ? {} : { fData: fields.fData }),
+      })
+      .where(inArray(pgEvents.fEventId, eventIds))
+      .execute();
   }
 }

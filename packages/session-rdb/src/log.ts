@@ -177,28 +177,10 @@ export function rowToEvent(
   // dropped, and the survivors are sorted/de-duplicated — see
   // {@link remapProvenance}. A fully pruned list is omitted entirely (the
   // event carries no provenance), matching the write path's null storage.
-  const earlier = (seq: number): boolean => seq < row.fSequence;
-  const noMap = seqMap === undefined && denseTypeMap === undefined;
-  const denseCandidate = (seq: number): boolean => {
-    const kind = denseTypeMap?.get(seq);
-    return (
-      kind !== undefined && earlier(seq) && (SURFACE_EVENT_TYPES.has(kind) || !seqMap?.has(seq))
-    );
-  };
-  const remap = (seq: number): number => {
-    if (noMap) return seq;
-    if (denseCandidate(seq)) return seq;
-    const dense = seqMap?.get(seq);
-    if (dense !== undefined && earlier(dense)) return dense;
-    return seq;
-  };
-  const strictRemap = (seq: number): number | undefined => {
-    if (noMap) return seq;
-    if (denseCandidate(seq)) return seq;
-    const dense = seqMap?.get(seq);
-    if (dense !== undefined && earlier(dense)) return dense;
-    return undefined;
-  };
+  const remap = (seq: number): number =>
+    resolveProvenanceSeq(seq, row.fSequence, seqMap, denseTypeMap) ?? seq;
+  const strictRemap = (seq: number): number | undefined =>
+    resolveProvenanceSeq(seq, row.fSequence, seqMap, denseTypeMap);
   const surfaceFields = {
     ...(row.fSourceEventSeqs !== null
       ? (() => {
@@ -230,6 +212,48 @@ export function rowToEvent(
     data,
     ...surfaceFields,
   } as SessionEvent;
+}
+
+/**
+ * Resolve one cited seq onto the DENSE persisted seq space.
+ *
+ * "The stored f_sequence wins, when it is a valid earlier reference": after
+ * resume the upstream live log IS the dense log, so events written since
+ * (checkpoint replaces, provenance) cite DENSE seqs. A cited seq that exists
+ * in the dense space, precedes `eventSeq`, and is either a SURFACE node or has
+ * no upstream counterpart is kept as-is. A seq outside the dense space (or a
+ * dense seq that is a non-surface event with an upstream counterpart — an
+ * upstream-cited seq that happens to collide with a later dense seq) is
+ * treated as an UPSTREAM reference and remapped through the upstream→persisted
+ * map, again only when the result precedes `eventSeq`. Anything else is
+ * unresolvable (`undefined`): provenance entries are dropped rather than kept
+ * verbatim, because after rewind re-uses the upstream space an upstream value
+ * would mix coordinates and fail the Session seed validation.
+ * @param seq - the cited seq (upstream or dense).
+ * @param eventSeq - the citing event's dense seq.
+ * @param seqMap - upstream→persisted seq map (optional).
+ * @param denseTypeMap - every persisted f_sequence → event type (optional;
+ *   always passed together with `seqMap`).
+ * @returns the dense seq to cite, or undefined when unresolvable.
+ */
+export function resolveProvenanceSeq(
+  seq: number,
+  eventSeq: number,
+  seqMap?: ReadonlyMap<number, number>,
+  denseTypeMap?: ReadonlyMap<number, string>,
+): number | undefined {
+  if (seqMap === undefined && denseTypeMap === undefined) return seq;
+  const kind = denseTypeMap?.get(seq);
+  if (
+    kind !== undefined &&
+    seq < eventSeq &&
+    (SURFACE_EVENT_TYPES.has(kind) || !seqMap?.has(seq))
+  ) {
+    return seq;
+  }
+  const dense = seqMap?.get(seq);
+  if (dense !== undefined && dense < eventSeq) return dense;
+  return undefined;
 }
 
 /**

@@ -2112,6 +2112,113 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     expect(consumed).toBe(1);
     await b.dispose();
   });
+
+  it("cleanseSession rewrites upstream-coordinate provenance into dense space", async () => {
+    // append 时事件 seq 是上游坐标,replace 的 sourceEventSeqs 引用上游 seq
+    // (delta 被过滤后稠密重编号)——存储即「旧数据」样式。清洗把它一次性
+    // 重写为稠密坐标,之后读取无需再对齐。
+    const path = await freshDbPath();
+    const b = await backend(path);
+    const m = meta("cleanse-me");
+    await b.ctx.sessionPersistence.create(m);
+    const log = [
+      { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+      {
+        type: "user/message",
+        seq: 1,
+        time: 2,
+        data: createUserMessage({
+          content: [{ type: "text", text: "hi" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      },
+      { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+      {
+        type: "assistant/chunk",
+        seq: 3,
+        time: 4,
+        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
+      },
+      {
+        type: "assistant/chunk",
+        seq: 4,
+        time: 5,
+        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
+      },
+      {
+        type: "assistant/message",
+        seq: 5,
+        time: 6,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        surfaceOp: "append",
+      },
+      { type: "step/end", seq: 6, time: 7, data: { turn: 1, step: 1 } },
+      { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
+      { type: "turn/start", seq: 8, time: 9, data: { turn: 2 } },
+      { type: "step/start", seq: 9, time: 10, data: { turn: 2, step: 1 } },
+      {
+        type: "assistant/message",
+        seq: 10,
+        time: 11,
+        data: {
+          turn: 2,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "compacted" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        surfaceOp: { op: "replace", start: 1, end: 5 },
+        sourceEventSeqs: [1, 5],
+      },
+      { type: "step/end", seq: 11, time: 12, data: { turn: 2, step: 1 } },
+      { type: "turn/end", seq: 12, time: 13, data: { turn: 2, reason: { kind: "completed" } } },
+    ] as unknown as SessionEvent[];
+    await b.ctx.sessionPersistence.append(m.id, log);
+
+    const persistence = b.ctx.sessionPersistence as SessionPersistenceSqlite;
+    const backendApi = persistence.internals().backend;
+    // 存储是上游坐标:replace [1,5] 与 sourceEventSeqs [1,5] 原样落库。
+    const rowBefore = (await backendApi.getEventRows(m.id)).find(
+      (r) => r.fSequence === 8,
+    )!;
+    expect(rowBefore.fSourceEventSeqs).toBe("[1,5]");
+
+    // 读取时启发式已给出稠密视图。
+    const loaded = await b.ctx.sessionPersistence.load(m.id);
+    const replacement = loaded.events.find(
+      (e) => e.type === "assistant/message" && e.seq === 8,
+    )!;
+    expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
+
+    // 清洗:重写为稠密坐标。
+    const { changed } = await persistence.cleanseSession(m.id);
+    expect(changed).toBeGreaterThan(0);
+
+    const rowAfter = (await backendApi.getEventRows(m.id)).find(
+      (r) => r.fSequence === 8,
+    )!;
+    expect(rowAfter.fSourceEventSeqs).toBe("[1,3]");
+    expect(rowAfter.fSurfaceOp).toBe(JSON.stringify({ op: "replace", start: 1, end: 3 }));
+
+    // 清洗后仍可正常加载,且无需启发式即得稠密视图。
+    const reloaded = await b.ctx.sessionPersistence.load(m.id);
+    const replacementAfter = reloaded.events.find(
+      (e) => e.type === "assistant/message" && e.seq === 8,
+    )!;
+    expect((replacementAfter as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
+    await b.dispose();
+  });
 });
 
 describe("SessionPersistenceSqlite: edge cases", () => {

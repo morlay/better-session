@@ -424,6 +424,19 @@ export class SessionBranchRdb extends SessionBranch {
   }
 
   /**
+   * 清洗一个 session 的 surface/provenance 坐标到稠密空间（持久化层透传）。
+   * 旧数据（rewind 前写入）的 sourceEventSeqs / surfaceOp / shadowedRange
+   * 是上游坐标,读取时每次都要对齐;清洗一次性写回稠密坐标,之后读取无需
+   * 对齐。返回实际变更的事件数。
+   */
+  cleanseSession(sessionId: SessionId, signal?: AbortSignal): Promise<{ changed: number }> {
+    return (this.ctx.sessionPersistence as SessionPersistenceRdb).cleanseSession(
+      sessionId,
+      signal,
+    );
+  }
+
+  /**
    * 同步 live 会话的 coordinator 内存 cursor，跳过 ignorable 占位事件。
    * 编排层在 rewind 后把 ignorable 版本效果 push 进 live log（不发布、不
    * 进缓冲）——它占用一个上游 seq，但 coordinator 的 cursor（rewind 设到

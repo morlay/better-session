@@ -105,6 +105,20 @@ export interface BackendTx {
   ): Promise<{ fEventId: string; fSequence: number } | undefined>;
   /** The highest bridge row (the physical tail anchor), if any. */
   getLastBridge(id: SessionId): Promise<{ fEventId: string; fSequence: number } | undefined>;
+  /**
+   * Update an event's mutable columns in place (used by the per-session
+   * provenance cleanse, which rewrites surface/provenance JSON into the dense
+   * seq space). Undefined fields are left untouched; null clears the column.
+   */
+  updateEventFields(
+    id: SessionId,
+    sequence: number,
+    fields: {
+      fSourceEventSeqs?: string | null;
+      fSurfaceOp?: string | null;
+      fData?: string;
+    },
+  ): Promise<void>;
 }
 
 /**

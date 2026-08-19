@@ -14,7 +14,7 @@ import { statSync } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import {
@@ -333,6 +333,7 @@ export class SqliteBackend implements Backend {
     deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(id, fromSequence),
     getPrevBridge: (id, sequence) => this.getPrevBridge(id, sequence),
     getLastBridge: (id) => this.getLastBridge(id),
+    updateEventFields: (id, sequence, fields) => this.updateEventFields(id, sequence, fields),
   };
 
   // --- row primitives (transaction-internal or standalone) ---
@@ -443,5 +444,29 @@ export class SqliteBackend implements Backend {
       })
       .from(tSessionEvents)
       .innerJoin(tEvents, eq(tSessionEvents.fEventId, tEvents.fEventId));
+  }
+
+  private async updateEventFields(
+    id: SessionId,
+    sequence: number,
+    fields: {
+      fSourceEventSeqs?: string | null;
+      fSurfaceOp?: string | null;
+      fData?: string;
+    },
+  ): Promise<void> {
+    const eventIds = this.db
+      .select({ fEventId: tSessionEvents.fEventId })
+      .from(tSessionEvents)
+      .where(and(eq(tSessionEvents.fSessionId, id), eq(tSessionEvents.fSequence, sequence)));
+    this.db
+      .update(tEvents)
+      .set({
+        ...(fields.fSourceEventSeqs === undefined ? {} : { fSourceEventSeqs: fields.fSourceEventSeqs }),
+        ...(fields.fSurfaceOp === undefined ? {} : { fSurfaceOp: fields.fSurfaceOp }),
+        ...(fields.fData === undefined ? {} : { fData: fields.fData }),
+      })
+      .where(inArray(tEvents.fEventId, eventIds))
+      .run();
   }
 }
