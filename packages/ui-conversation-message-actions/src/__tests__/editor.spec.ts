@@ -577,4 +577,91 @@ describe("SessionEditor rewind/retry/fork", () => {
       await dispose();
     }
   });
+
+  it("cleanseSession rewrites legacy provenance coordinates so the session reloads", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // append 时事件 seq 是上游坐标（delta 被过滤后稠密重编号），replace 的
+      // sourceEventSeqs/surfaceOp 原样落库为上游坐标——历史加载失败的数据样式。
+      const compacted: SessionEvent[] = [
+        { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+        {
+          type: "user/message",
+          seq: 1,
+          time: 2,
+          data: {
+            id: "cleanse-user",
+            role: "user",
+            content: [{ type: "text", text: "hi" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+        {
+          type: "assistant/chunk",
+          seq: 3,
+          time: 4,
+          data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
+        },
+        {
+          type: "assistant/chunk",
+          seq: 4,
+          time: 5,
+          data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
+        },
+        {
+          type: "assistant/message",
+          seq: 5,
+          time: 6,
+          data: {
+            turn: 1,
+            step: 1,
+            message: {
+              id: "turn1-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: 6, time: 7, data: { turn: 1, step: 1 } },
+        { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
+        { type: "turn/start", seq: 8, time: 9, data: { turn: 2 } },
+        { type: "step/start", seq: 9, time: 10, data: { turn: 2, step: 1 } },
+        {
+          type: "assistant/message",
+          seq: 10,
+          time: 11,
+          data: {
+            turn: 2,
+            step: 1,
+            message: {
+              id: "compacted",
+              role: "assistant",
+              content: [{ type: "text", text: "compacted" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: { op: "replace", start: 1, end: 5 },
+          sourceEventSeqs: [1, 5],
+        } as SessionEvent,
+        { type: "step/end", seq: 11, time: 12, data: { turn: 2, step: 1 } },
+        { type: "turn/end", seq: 12, time: 13, data: { turn: 2, reason: { kind: "completed" } } },
+      ];
+      await createPersisted(ctx, "cleanse-me", compacted);
+
+      // 清洗：坐标重写为稠密空间。
+      const { changed } = await editor.cleanseSession(SessionIdBrand("cleanse-me"));
+      expect(changed).toBeGreaterThan(0);
+
+      // 清洗后会话可完整加载。
+      const after = await ctx.sessionPersistence.load(SessionIdBrand("cleanse-me"));
+      expect(after.events.at(-1)?.type).toBe("turn/end");
+      expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    } finally {
+      await dispose();
+    }
+  });
 });

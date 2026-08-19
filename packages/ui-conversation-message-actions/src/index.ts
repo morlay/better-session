@@ -544,6 +544,19 @@ export class SessionEditor extends Service {
     return this.ctx.sessionBranch.rewind(id, toBoundary, signal);
   }
 
+  /**
+   * 清洗一个会话的 surface/provenance 坐标为稠密空间（透传 sessionBranch）。
+   * 历史加载失败（坐标混叠导致 seed 校验失败）时调用,清洗后重新加载即可。
+   * `cleanseSession` 是 rdb 实现层新增的服务面（契约层 `SessionBranch`
+   * 没有此方法）,经运行时访问。
+   */
+  cleanseSession(sessionId: SessionId, signal?: AbortSignal): Promise<{ changed: number }> {
+    const branch = this.ctx.sessionBranch as unknown as {
+      cleanseSession(id: SessionId, signal?: AbortSignal): Promise<{ changed: number }>;
+    };
+    return branch.cleanseSession(sessionId, signal);
+  }
+
   /** 完整版本树投影（透传 provider 组合）。 */
   timeline(sessionId: SessionId, signal?: AbortSignal): Promise<BranchTimeline> {
     return this.ctx.sessionBranch.timeline(sessionId, signal);
@@ -833,8 +846,10 @@ function decodeOperation(value: unknown): SessionEditorOperation {
           ? {}
           : { childSessionId: sessionIdOf(record["childSessionId"]) }),
       };
+    case "cleanse":
+      return { action: "cleanse", sessionId };
     default:
-      throw new TypeError("action 必须是 edit、reroll、retry、rewind 或 fork。");
+      throw new TypeError("action 必须是 edit、reroll、retry、rewind、fork 或 cleanse。");
   }
 }
 
@@ -917,6 +932,10 @@ async function runOperation(
         ),
         queuedTurns: 0,
       };
+    case "cleanse": {
+      const { changed } = await editor.cleanseSession(operation.sessionId);
+      return { sessionId: operation.sessionId, queuedTurns: 0, changed };
+    }
   }
 }
 

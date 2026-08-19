@@ -41,9 +41,9 @@ dev *args: build setup-dsh
 
 setup-dsh:
     rm -rf {{ join(DSH_HOME, "profiles/web") }}
-    pnpm exec dsh plugin --profile web add ./packages/better-session
+    pnpm exec dsh plugin --profile web add @morlay/better-session@link:{{ join(justfile_directory(), "./packages/better-session") }}
     pnpm --dir {{ join(DSH_HOME, "profiles/web") }} add -w \
-        link:{{ join(justfile_directory(), "packages/session-branch") }} \
-        link:{{ join(justfile_directory(), "packages/session-rdb") }} \
-        link:{{ join(justfile_directory(), "packages/ui-conversation-message-actions") }}
+        @morlay/session-branch@link:{{ join(justfile_directory(), "packages/session-branch") }} \
+        @morlay/session-rdb@link:{{ join(justfile_directory(), "packages/session-rdb") }} \
+        @morlay/ui-conversation-message-actions@link:{{ join(justfile_directory(), "packages/ui-conversation-message-actions") }}
     pnpm --dir {{ join(DSH_HOME, "profiles/web") }} install --ignore-scripts --no-frozen-lockfile

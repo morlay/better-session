@@ -25,8 +25,10 @@ import {
 export interface SessionEditorState {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
-  pending: VersionOperation | null;
+  pending: VersionOperation | "cleanse" | null;
   timeline: SessionEditorTimeline | null;
+  /** 会话历史加载失败（openState === "error"）——据此显示「清洗会话」入口。 */
+  sessionOpenError: boolean;
 }
 
 /** 业务 face；渲染层绑定到保留的 source compartment。 */
@@ -42,6 +44,8 @@ export interface SessionEditorFace {
   retry(turn: number, cascade: "truncate" | "preserve"): Promise<boolean>;
   reroll(): Promise<boolean>;
   rewind(toBoundary: number): Promise<boolean>;
+  /** 清洗当前会话的 provenance 坐标为稠密空间（修复历史加载失败）。 */
+  cleanse(): Promise<boolean>;
   openVersion(sessionId: string): Promise<void>;
 }
 
@@ -63,6 +67,7 @@ export class SessionEditorController {
     error: null,
     pending: null,
     timeline: null,
+    sessionOpenError: false,
   });
 
   readonly face: SessionEditorFace;
@@ -105,6 +110,7 @@ export class SessionEditorController {
       reroll: () => this.mutate({ action: "reroll", sessionId: this.sessionId }),
       rewind: (toBoundary) =>
         this.mutate({ action: "rewind", sessionId: this.sessionId, toBoundary }),
+      cleanse: () => this.mutate({ action: "cleanse", sessionId: this.sessionId }),
       openVersion: (sessionId) => this.openWhenListed(sessionId as SessionId),
     };
     this.observe();
@@ -124,7 +130,16 @@ export class SessionEditorController {
     this.sessionSource = source;
     this.sessionRevision =
       source === undefined ? undefined : conversationRevision(source.getSnapshot());
-    this.sessionSourceDispose = source?.subscribe(() => this.invalidate());
+    // 历史加载失败标记：会话 snapshot 的 openState === "error" 时显示清洗入口。
+    this.store.update((state) => {
+      state.sessionOpenError = source?.getSnapshot().openState === "error";
+    });
+    this.sessionSourceDispose = source?.subscribe(() => {
+      this.store.update((state) => {
+        state.sessionOpenError = source.getSnapshot().openState === "error";
+      });
+      this.invalidate();
+    });
   }
 
   private invalidate(): void {

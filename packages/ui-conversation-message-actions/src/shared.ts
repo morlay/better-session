@@ -52,13 +52,20 @@ export interface ForkOperation {
   childSessionId?: SessionId;
 }
 
+/** 清洗一个会话的 surface/provenance 坐标为稠密空间（修复历史加载失败）。 */
+export interface CleanseOperation {
+  action: "cleanse";
+  sessionId: SessionId;
+}
+
 /** HTTP 接受的判别联合。 */
 export type SessionEditorOperation =
   | EditOperation
   | RerollOperation
   | RetryOperation
   | RewindOperation
-  | ForkOperation;
+  | ForkOperation
+  | CleanseOperation;
 
 /** 操作响应（分支式返回新版本 id；rewind 返回原 id）。 */
 export interface SessionEditorOperationResult {
@@ -66,6 +73,8 @@ export interface SessionEditorOperationResult {
   queuedTurns: number;
   /** 操作后会话是否仍有 live owner（客户端据此决定是否重载页面）。 */
   live?: boolean;
+  /** cleanse 操作实际重写的事件数。 */
+  changed?: number;
 }
 
 /** 可编辑文本块（编辑面枚举）。 */
