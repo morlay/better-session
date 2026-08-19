@@ -144,27 +144,61 @@ export function remapShadowedRange(
  * Reconstruct a {@link SessionEvent} from a joined row. The emitted event
  * carries the DENSE persisted seq (`row.fSequence`); `sourceEventSeqs` entries,
  * a positional `replace` {@link SurfaceOp}'s range, and the compact metering
- * events' `shadowedRange` are remapped from upstream seqs to persisted seqs
- * through `seqMap` when the log was delta-filtered (an entry missing from the
- * map is kept verbatim — tolerated like a scan hole, not corruption).
+ * events' `shadowedRange` are resolved onto persisted seqs through `seqMap`
+ * when the log was delta-filtered.
+ *
+ * Coordinate resolution is "the stored f_sequence wins, when it is a valid
+ * earlier reference": after resume the upstream live log IS the dense log,
+ * so events written since (checkpoint replaces, provenance) cite DENSE seqs.
+ * A cited seq that exists in the dense space, precedes this event, and is
+ * either a SURFACE node or has no upstream counterpart is kept as-is. A seq
+ * outside the dense space (or a dense seq that is a non-surface event with an
+ * upstream counterpart — an upstream-cited seq that happens to collide with a
+ * later dense seq) is treated as an UPSTREAM reference and remapped through
+ * the upstream→persisted map, again only when the result precedes this event.
+ * Anything else is unresolvable and dropped (never kept verbatim — after
+ * rewind re-uses the upstream space, keeping an upstream value would mix
+ * coordinates and fail the Session seed validation).
  * @param row - the joined `t_session_events` + `t_events` row.
- * @param seqMap - upstream→persisted seq map, present only when delta filtering
- *   re-numbered the log (optional).
+ * @param seqMap - upstream→persisted seq map (optional).
+ * @param denseTypeMap - every persisted f_sequence → event type for the
+ *   session (optional; always passed together with `seqMap`).
  * @returns the reconstructed event; throws when a JSON column fails to parse
  *   ({@link scanRows} treats that as a hole, not corruption, in the tail).
  */
-export function rowToEvent(row: EventRow, seqMap?: ReadonlyMap<number, number>): SessionEvent {
+export function rowToEvent(
+  row: EventRow,
+  seqMap?: ReadonlyMap<number, number>,
+  denseTypeMap?: ReadonlyMap<number, string>,
+): SessionEvent {
   // Surface-metadata fields are conditional on the event type in the type
   // system; spread them so each variant gets only the fields it declares.
-  // `sourceEventSeqs` must never mix coordinates: an unmappable reference is
-  // dropped (not kept verbatim), and the survivors are sorted/de-duplicated —
-  // see {@link remapProvenance}. A fully pruned list is omitted entirely (the
+  // `sourceEventSeqs` must never mix coordinates: an unresolvable reference is
+  // dropped, and the survivors are sorted/de-duplicated — see
+  // {@link remapProvenance}. A fully pruned list is omitted entirely (the
   // event carries no provenance), matching the write path's null storage.
-  const remap = (seq: number) => seqMap?.get(seq) ?? seq;
-  // No map means the log was never delta-filtered: stored seqs are already
-  // dense, so identity. With a map, an entry without a persisted row is
-  // unresolvable and must be dropped (never kept as an upstream value).
-  const strictRemap = (seq: number) => (seqMap === undefined ? seq : seqMap.get(seq));
+  const earlier = (seq: number): boolean => seq < row.fSequence;
+  const noMap = seqMap === undefined && denseTypeMap === undefined;
+  const denseCandidate = (seq: number): boolean => {
+    const kind = denseTypeMap?.get(seq);
+    return (
+      kind !== undefined && earlier(seq) && (SURFACE_EVENT_TYPES.has(kind) || !seqMap?.has(seq))
+    );
+  };
+  const remap = (seq: number): number => {
+    if (noMap) return seq;
+    if (denseCandidate(seq)) return seq;
+    const dense = seqMap?.get(seq);
+    if (dense !== undefined && earlier(dense)) return dense;
+    return seq;
+  };
+  const strictRemap = (seq: number): number | undefined => {
+    if (noMap) return seq;
+    if (denseCandidate(seq)) return seq;
+    const dense = seqMap?.get(seq);
+    if (dense !== undefined && earlier(dense)) return dense;
+    return undefined;
+  };
   const surfaceFields = {
     ...(row.fSourceEventSeqs !== null
       ? (() => {
@@ -343,6 +377,8 @@ export function pruneSourceEventSeqs(
  * @param base - the persisted seq the first row is expected to carry; `0` for
  *   a whole log, the requested `fromSeq` for a suffix read (`loadStoredFrom`).
  * @param seqMap - upstream→persisted seq map forwarded to {@link rowToEvent}.
+ * @param denseTypeMap - every persisted f_sequence → type, forwarded to
+ *   {@link rowToEvent} (kept together with `seqMap`).
  * @returns the preserved event prefix, plus `tornFrom` — the persisted seq the
  *   physical delete starts at — when a torn tail exists.
  */
@@ -350,6 +386,7 @@ export function scanRows(
   rows: readonly EventRow[],
   base = 0,
   seqMap?: ReadonlyMap<number, number>,
+  denseTypeMap?: ReadonlyMap<number, string>,
 ): { preserved: SessionEvent[]; tornFrom?: number } {
   // Pass 1: parse each row's data; a row whose data is not valid JSON is a hole.
   // (The seq/type COLUMNS are always present even when `data` is corrupt.)
@@ -359,7 +396,7 @@ export function scanRows(
   }
   const parsed: Parsed[] = rows.map((row) => {
     try {
-      return { ok: true, event: rowToEvent(row, seqMap) };
+      return { ok: true, event: rowToEvent(row, seqMap, denseTypeMap) };
     } catch {
       return { ok: false };
     }

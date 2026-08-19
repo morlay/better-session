@@ -139,7 +139,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     )[0] as SessionRow | undefined;
   }
 
-  async getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number }>> {
+  async getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number; fKind: string }>> {
     return this.eventRows(this.db).where(eq(pgSessionEvents.fSessionId, id)).execute();
   }
 

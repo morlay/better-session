@@ -263,7 +263,7 @@ export class SqliteBackend implements Backend {
       | undefined;
   }
 
-  async getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number }>> {
+  async getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number; fKind: string }>> {
     return this.eventRows().where(eq(tSessionEvents.fSessionId, id)).all();
   }
 

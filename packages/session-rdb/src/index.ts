@@ -377,19 +377,23 @@ export class SessionPersistenceRdb
     const meta = rowToMeta(row);
     let eventRows: EventRow[];
     let seqMap: ReadonlyMap<number, number> | undefined;
+    let denseTypeMap: ReadonlyMap<number, string> | undefined;
     if (options.fromSeq === undefined) {
       // Whole-log read: build the seq map from the same rows (no extra query).
       eventRows = await this.backend.getEventRows(id);
       seqMap = buildSeqMap(eventRows);
+      denseTypeMap = new Map(eventRows.map((r) => [r.fSequence, r.fKind]));
     } else {
       // Suffix read: rows are only the suffix, but provenance remapping needs
-      // every row's upstream seq, so a lightweight two-column map is read
-      // alongside — the query still scales with the suffix, not the log.
+      // every row's upstream seq and dense type, so a lightweight two-column
+      // map is read alongside — the query still scales with the suffix.
       eventRows = await this.backend.getEventRows(id, options.fromSeq);
-      seqMap = buildSeqMap(await this.backend.getSeqMapRows(id));
+      const seqRows = await this.backend.getSeqMapRows(id);
+      seqMap = buildSeqMap(seqRows);
+      denseTypeMap = new Map(seqRows.map((r) => [r.fSequence, r.fKind]));
     }
     signal?.throwIfAborted();
-    const { preserved, tornFrom } = scanRows(eventRows, options.fromSeq ?? 0, seqMap);
+    const { preserved, tornFrom } = scanRows(eventRows, options.fromSeq ?? 0, seqMap, denseTypeMap);
     return {
       meta,
       events: preserved,

@@ -486,6 +486,69 @@ describe("rowToEvent", () => {
     expect((event as SurfaceEvent).sourceEventSeqs).toBeUndefined();
   });
 
+  it("keeps resume-era DENSE sourceEventSeqs and a dense replace range (f_sequence wins)", () => {
+    // 新代码时代:上游 resume 后 live log == 稠密 log,checkpoint 引用稠密 seq
+    // (4564/4565 compaction、2107/2101/2114 surface 节点),replace range 也是
+    // 稠密。读取时这些值必须原样保留,不能按「上游→稠密」重映射。
+    const row: EventRow = {
+      fSequence: 4566,
+      fOriginalSeq: 4566,
+      fKind: "user/message",
+      fCreatedAt: 1,
+      fData: JSON.stringify({
+        content: [{ type: "text", text: "checkpoint" }],
+        source: { kind: "user" },
+      }),
+      fSourceEventSeqs: JSON.stringify([4564, 4565, 2107, 2101, 2114]),
+      fSurfaceOp: JSON.stringify({ op: "replace", start: 2107, end: 4556 }),
+    };
+    const seqMap = new Map<number, number>([
+      [4564, 4564], // compaction/start self-map
+      [4565, 4565], // compaction/summary self-map
+      [2196, 98], // unrelated upstream collision, not cited here
+    ]);
+    const denseTypeMap = new Map<number, string>([
+      [4564, "compaction/start"],
+      [4565, "compaction/summary"],
+      [2107, "user/message"],
+      [2101, "assistant/message"],
+      [2114, "user/message"],
+      [4556, "tool/result"],
+    ]);
+    const event = rowToEvent(row, seqMap, denseTypeMap);
+    // 4564/4565: dense 非 surface 但上游 self-map(映射回自身)→ 仍为原值。
+    // 2107/2101/2114: dense surface → 原值保留。
+    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([2101, 2107, 2114, 4564, 4565]);
+    expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 2107, end: 4556 });
+  });
+
+  it("remaps an upstream seq that collides with a non-surface dense seq", () => {
+    // 旧数据:replace end=5 是「上游 seq 5」(assistant/message),稠密 5 恰好是
+    // turn/end(非 surface)——启发式必须走上游映射(5 → 3),否则 end 指向
+    // 非节点导致 "end seq not found in surface"。
+    const row: EventRow = {
+      fSequence: 10,
+      fOriginalSeq: 12,
+      fKind: "assistant/message",
+      fCreatedAt: 1,
+      fData: JSON.stringify({ turn: 2, step: 1, content: [] }),
+      fSourceEventSeqs: JSON.stringify([1, 5]),
+      fSurfaceOp: JSON.stringify({ op: "replace", start: 1, end: 5 }),
+    };
+    const seqMap = new Map<number, number>([
+      [1, 1],
+      [5, 3],
+    ]);
+    const denseTypeMap = new Map<number, string>([
+      [1, "user/message"],
+      [3, "assistant/message"],
+      [5, "turn/end"],
+    ]);
+    const event = rowToEvent(row, seqMap, denseTypeMap);
+    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
+    expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
+  });
+
   it("normalizes remapped sourceEventSeqs: prunes, sorts, and de-duplicates", () => {
     // A checkpoint user/message after a rewind: references span the reused
     // upstream space — [8, 2, 8, 9, 15] where 15 has no row, 2→20, 8→30, 9→31.
