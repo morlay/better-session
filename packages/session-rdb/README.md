@@ -13,7 +13,7 @@ add` 把参数原样转发给 pnpm，版本号按发布版本调整）。registr
 否则依赖（`@deepseek-ai/*` 等）也会被指到 GitHub Packages 而解析失败：
 
 ```sh
-dsh plugin --profile=web add "@morlay/session-rdb@^0.0.1" --config.@morlay:registry=https://npm.pkg.github.com/
+dsh plugin --profile=web add "@morlay/session-rdb"
 ```
 
 GitHub Packages 的 registry 要求认证（公开包也一样）：profile 的 `.npmrc`

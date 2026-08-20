@@ -12,7 +12,7 @@ DeepSeek Harness 的**分支式会话编辑** monorepo：在不修改上游
 一个 bundle 包装齐全部依赖组件：
 
 ```sh
-dsh plugin --profile web add "@morlay/better-session" --config.@morlay:registry=https://npm.pkg.github.com/
+dsh plugin --profile web add "@morlay/better-session"
 ```
 
 安装 `@morlay/better-session` 会自动带上子包（`@morlay/session-branch`、
