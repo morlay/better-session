@@ -1,6 +1,6 @@
 {
   "name": "@morlay/session-rdb",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "RDB durable session backend for DeepSeek Harness: implements both session-persistence and session-branch (rewind / retry / fork) providers.",
   "keywords": [
     "branch",

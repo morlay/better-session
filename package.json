@@ -1,6 +1,6 @@
 {
   "name": "better-session",
-  "version": "0.0.0",
+  "version": "0.0.10",
   "private": true,
   "description": "Monorepo of cordis plugins for the DeepSeek Harness — durable RDB session persistence plus a provider abstraction for rewind / retry / fork.",
   "license": "MIT",
