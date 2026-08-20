@@ -15,6 +15,9 @@ view *args:
 dep *args:
     pnpm install {{ args }}
 
+update:
+    pnpm dlx taze -w -r latest
+
 clean:
     rm -f pnpm-lock.yaml;
     find . \
