@@ -28,8 +28,8 @@ fmt:
 lint:
     pnpm exec oxlint .
 
-build:
-    pnpm -r run prepare
+build *args:
+    @pnpm exec turbo run prepare {{ args }}
 
 test:
     pnpm exec vitest run

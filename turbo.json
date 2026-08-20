@@ -1,0 +1,10 @@
+{
+  "$schema": "https://turborepo.org/schema.json",
+  "tasks": {
+    "prepare": {
+      "dependsOn": ["^prepare"],
+      "inputs": ["src/*", "package.json"],
+      "outputs": ["lib/*"]
+    }
+  }
+}

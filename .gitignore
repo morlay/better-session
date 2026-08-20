@@ -6,3 +6,4 @@ node_modules/
 .dsh-store/
 .pnpm-store/
 .scratch/
+.turbo/

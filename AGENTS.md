@@ -4,7 +4,7 @@
 
 - 技术栈见 [mise.toml](./mise.toml)
 - 可用命令见 [justfile](./justfile)
-- **monorepo**（nub workspaces）：`packages/` 下三个包
+- **monorepo**（pnpm workspaces）：`packages/` 下三个包
 
 ```
 packages/
