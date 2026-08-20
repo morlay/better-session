@@ -578,6 +578,151 @@ describe("SessionEditor rewind/retry/fork", () => {
     }
   });
 
+  it("edits a user message in an open turn (rewind to the message, drop and replay)", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合：
+      // turn/start + user/message（seq 12）+ step/start + assistant/message（seq 14）。
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        {
+          type: "user/message",
+          seq: 13,
+          time: 13,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/start", seq: 14, time: 14, data: { turn: 3, step: 1 } },
+        {
+          type: "assistant/message",
+          seq: 15,
+          time: 15,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+      ];
+      await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
+
+      // 编辑未闭合轮 3 的 user 消息（eventSeq 13）→ rewind 到该消息
+      // （exclusive drop 它及其后），重放编辑版。
+      const result = await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("src"),
+        eventSeq: 13,
+        blockIndex: 0,
+        text: "go on (edited)",
+        cascade: "truncate",
+      });
+      expect(result.sessionId).toBe(SessionIdBrand("src"));
+      expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
+
+      // 真实落盘行：截断前缀（0..12，含 turn/start 12）；版本效果 ignorable
+      // 不落库；无 agents 服务 → 重放输入不落盘（退化为已 durable 的就地
+      // 版本，可随时继续输入）。
+      const backend = (
+        ctx.sessionPersistence as unknown as {
+          internals(): {
+            backend: {
+              getEventRows(id: SessionIdBrand): Promise<Array<{ fSequence: number; fKind: string }>>;
+            };
+          };
+        }
+      ).internals().backend;
+      const rows = await backend.getEventRows(SessionIdBrand("src"));
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(rows[12]?.fKind).toBe("turn/start");
+      // 被 drop 的旧 user/message（seq 13）与轮 3 partial assistant（seq 15）
+      // 不在 log 中（轮 1/2 的 assistant/message 保留）。
+      expect(rows.some((r) => r.fKind === "user/message" && r.fSequence === 13)).toBe(false);
+      expect(rows.some((r) => r.fKind === "assistant/message" && r.fSequence === 15)).toBe(false);
+      expect(rows.some((r) => r.fKind === "assistant/message" && r.fSequence === 3)).toBe(true);
+
+      // 截断后继续 append 成功：版本效果（ignorable）占 seq 13 推进 cursor，
+      // 后续输入从 seq 14 续接（落盘时 ignorable 被过滤、稠密重编号连续）。
+      const continuation: SessionEvent[] = oneTurnLog().map(
+        (event) =>
+          ({
+            ...event,
+            seq: event.seq + 14,
+            time: event.time + 300,
+            data: { ...event.data, turn: 3 },
+          }) as SessionEvent,
+      );
+      await ctx.sessionPersistence.append(SessionIdBrand("src"), continuation);
+      const continued = await ctx.sessionPersistence.load(SessionIdBrand("src"));
+      expect(continued.events.at(-1)?.type).toBe("turn/end");
+      expect(continued.events).toHaveLength(19);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("rejects editing an assistant message in an open turn", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        {
+          type: "user/message",
+          seq: 13,
+          time: 13,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/start", seq: 14, time: 14, data: { turn: 3, step: 1 } },
+        {
+          type: "assistant/message",
+          seq: 15,
+          time: 15,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+      ];
+      await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
+
+      await expect(
+        editor.edit({
+          action: "edit",
+          sessionId: SessionIdBrand("src"),
+          eventSeq: 15,
+          blockIndex: 0,
+          text: "edited",
+          cascade: "truncate",
+        }),
+      ).rejects.toThrow(/未闭合轮次的助手消息不可编辑/);
+    } finally {
+      await dispose();
+    }
+  });
+
   it("cleanseSession rewrites legacy provenance coordinates so the session reloads", async () => {
     const { ctx, editor, dispose } = await harness();
     try {

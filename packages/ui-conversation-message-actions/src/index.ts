@@ -112,14 +112,17 @@ export interface EditorAgentRegistry {
 interface ClosedTurn {
   turn: number;
   startSeq: number;
-  endSeq: number;
+  /** 闭合轮次的 `turn/end` seq；未闭合轮次为 undefined。 */
+  endSeq?: number;
+  /** 是否已闭合（有 `turn/end`）。未闭合轮次的 user 消息仍可编辑。 */
+  closed: boolean;
   user?: SessionEvent<"user/message">;
   assistants: SessionEvent<"assistant/message">[];
 }
 
 function closedTurns(events: readonly SessionEvent[]): ClosedTurn[] {
   const result: ClosedTurn[] = [];
-  let current: Omit<ClosedTurn, "endSeq"> | undefined;
+  let current: Omit<ClosedTurn, "endSeq" | "closed"> | undefined;
   for (const event of events) {
     if (event.type === "turn/start") {
       current = { turn: event.data.turn, startSeq: event.seq, assistants: [] };
@@ -139,10 +142,13 @@ function closedTurns(events: readonly SessionEvent[]): ClosedTurn[] {
       continue;
     }
     if (event.type === "turn/end" && event.data.turn === current.turn) {
-      result.push({ ...current, endSeq: event.seq });
+      result.push({ ...current, endSeq: event.seq, closed: true });
       current = undefined;
     }
   }
+  // 未闭合轮次（log 尾部没有 turn/end）也保留：其 user 消息已 append 落定，
+  // 编辑时 rewind 到该消息（exclusive drop）重放即可。
+  if (current !== undefined) result.push({ ...current, closed: false });
   return result;
 }
 
@@ -201,6 +207,8 @@ function editableMessages(turns: readonly ClosedTurn[]): EditableMessageBlock[] 
         });
       }
     }
+    // 未闭合轮次的助手消息是流式 partial，不可编辑（服务端拒绝）。
+    if (!turn.closed) continue;
     for (const event of turn.assistants) {
       for (const [blockIndex, block] of event.data.message.content.entries()) {
         if (!isTextualBlock(block)) continue;
@@ -221,7 +229,9 @@ function editableMessages(turns: readonly ClosedTurn[]): EditableMessageBlock[] 
 
 function retryableTurns(turns: readonly ClosedTurn[]): RetryableTurn[] {
   return turns.flatMap((turn): RetryableTurn[] =>
-    turn.user === undefined
+    // 未闭合轮次不可重试（无已落定回复可重生成；UI 的 retry 按钮也要求
+    // turn 已闭合）。
+    turn.user === undefined || !turn.closed
       ? []
       : [
           {
@@ -265,6 +275,12 @@ function assistantReplacement(
 interface OperationPlan {
   /** 目标轮 startSeq（`before` 锚定用；派生点 = 该轮之前最后一个 turn/end）。 */
   anchorSeq: number;
+  /**
+   * 未闭合轮次 user 编辑：rewind 边界 = 该 user 消息 seq（exclusive——drop
+   * 该消息及其后，由编辑版重放替换）。闭合轮次编辑不设置（boundary 走
+   * 前一轮 turn/end 的 inclusive 语义）。
+   */
+  rewindBoundary?: number;
   version: SessionBranchVersionEvent;
   /** 助手块编辑：以编辑后内容构造的完整手工闭合回合。 */
   manualTurn?: { turn: number; user: UserMessage; assistant: AssistantMessage };
@@ -285,7 +301,9 @@ function pairVersionEffect(
 
 function editPlan(operation: EditOperation, turns: readonly ClosedTurn[]): OperationPlan {
   const turnIndex = turns.findIndex(
-    (turn) => operation.eventSeq > turn.startSeq && operation.eventSeq < turn.endSeq,
+    (turn) =>
+      operation.eventSeq > turn.startSeq &&
+      (turn.endSeq === undefined || operation.eventSeq < turn.endSeq),
   );
   const turn = turns[turnIndex];
   if (turn === undefined)
@@ -308,6 +326,9 @@ function editPlan(operation: EditOperation, turns: readonly ClosedTurn[]): Opera
     const later = operation.cascade === "preserve" ? downstreamUsers(turns, turnIndex + 1) : [];
     return {
       anchorSeq: turn.startSeq,
+      // 未闭合轮次：rewind 到该 user 消息（exclusive drop 该消息及其后），
+      // 由编辑版重放替换；闭合轮次走前一轮 turn/end 的 inclusive 语义。
+      ...(turn.closed ? {} : { rewindBoundary: event.seq }),
       version: pairVersionEffect(operation.sessionId, {
         operation: "edit",
         cascade: operation.cascade,
@@ -322,6 +343,9 @@ function editPlan(operation: EditOperation, turns: readonly ClosedTurn[]): Opera
     };
   }
 
+  // 未闭合轮次的助手消息是流式 partial，没有最终内容可编辑。
+  if (!turn.closed)
+    throw new SessionBranchError("未闭合轮次的助手消息不可编辑。", "INVALID_BOUNDARY");
   const before = event.data.message.content[operation.blockIndex];
   if (!isTextualBlock(before))
     throw new SessionBranchError("所选助手消息块不是文本或思考。", "INVALID_BOUNDARY");
@@ -373,7 +397,8 @@ function retryPlan(operation: RetryOperation, turns: readonly ClosedTurn[]): Ope
 function rerollPlan(operation: RerollOperation, turns: readonly ClosedTurn[]): OperationPlan {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
-    if (turn?.user === undefined) continue;
+    // 未闭合轮次没有已落定的助手回复可重生成。
+    if (turn?.user === undefined || !turn.closed) continue;
     const target = turn.assistants.findLast((event) =>
       event.data.message.content.some(isTextualBlock),
     );
@@ -620,8 +645,16 @@ export class SessionEditor extends Service {
     // 就地编辑：不创建新会话、不改变 session id。先 rewind 截断原会话到
     // 目标轮之前的闭合边界（抛弃后续事件），再把版本效果与重放输入
     // append 回同一会话，最后（可选）驱动 agent 重放排队输入。
+    // 未闭合轮次 user 编辑：rewind 边界 = 该 user 消息 seq（exclusive drop
+    // 该消息及其后，由编辑版重放替换）；闭合轮次编辑走前一轮 turn/end 的
+    // inclusive 语义。
     const turnIndex = turns.findIndex((turn) => turn.startSeq === plan.anchorSeq);
-    const boundary = turnIndex <= 0 ? -1 : turns[turnIndex - 1]!.endSeq;
+    const boundary =
+      plan.rewindBoundary !== undefined
+        ? plan.rewindBoundary
+        : turnIndex <= 0
+          ? -1
+          : turns[turnIndex - 1]!.endSeq!;
     const live = this.ctx.sessions.get(operation.sessionId);
     await this.ctx.sessionBranch.rewind(operation.sessionId, boundary, signal);
     if (seedSuffix.length > 0) {
@@ -633,11 +666,14 @@ export class SessionEditor extends Service {
         this.ctx.sessionBranch.syncLiveCursor(operation.sessionId);
         await this.ctx.sessions.flush(live);
       } else {
+        // rewind 后保留的事件数：turn/end inclusive = boundary + 1；
+        // user/message exclusive = boundary（该消息被 drop，由编辑版替换）。
+        const keepLength = boundary + (plan.rewindBoundary === undefined ? 1 : 0);
         const renumbered = seedSuffix.map(
           (event, index) =>
             ({
               ...event,
-              seq: boundary + 1 + index,
+              seq: keepLength + index,
             }) as SessionEvent,
         );
         await this.ctx.sessionPersistence.append(operation.sessionId, renumbered);
@@ -660,14 +696,24 @@ export class SessionEditor extends Service {
     };
   }
 
-  /** 读取会话事件：live 优先，否则走持久化 inspect。 */
+  /** 读取会话事件：live 优先，否则走持久化原始读取（不含合成 closers）。 */
   private async readEvents(
     sessionId: SessionId,
     signal?: AbortSignal,
   ): Promise<readonly SessionEvent[]> {
     const live = this.ctx.sessions.get(sessionId);
     if (live !== undefined) return live.events;
-    return (await this.ctx.sessionPersistence.inspect(sessionId, signal)).events;
+    // cold：读原始事件（`loadStored`，scanRows 只做 torn-tail 切割、不补
+    // closers）。`inspect` 会经 coordinator 的 `prepareCore` 给未闭合 log
+    // 补合成 step/end + turn/end——未闭合轮次被掩盖成闭合，编辑未闭合轮次
+    // 的 user 消息会走错边界。
+    const branch = this.ctx.sessionBranch as unknown as {
+      readRawEvents(
+        id: SessionId,
+        signal?: AbortSignal,
+      ): Promise<{ meta: unknown; events: readonly SessionEvent[] }>;
+    };
+    return (await branch.readRawEvents(sessionId, signal)).events;
   }
 
   /**

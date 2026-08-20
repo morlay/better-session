@@ -48,6 +48,24 @@ async function harness(): Promise<{
       const state = withCoordinator.coordinator?.states?.get(id);
       if (state !== undefined) state.cursor = cursor;
     },
+    setCoordinatorState: (id, cursor, meta) => {
+      const withCoordinator = persistence as unknown as {
+        coordinator?: {
+          states?: Map<
+            SessionId,
+            { cursor: number; meta: SessionHeader; materialized: boolean } | undefined
+          >;
+        };
+      };
+      const states = withCoordinator.coordinator?.states;
+      if (states === undefined) return;
+      const state = states.get(id);
+      if (state !== undefined) {
+        state.cursor = cursor;
+      } else {
+        states.set(id, { meta, cursor, materialized: true });
+      }
+    },
   });
   return { ctx, persistence, provider, dispose: () => fiber.dispose() };
 }
@@ -401,6 +419,92 @@ describe("rewind", () => {
       expect(snapshot.header.id).toBe("s1");
       const after = await persistence.load(SessionId("s1"));
       expect(after.events).toHaveLength(0);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("rewinds to a user/message boundary (exclusive: drops the message and its tail)", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合：
+      // turn/start + user/message（seq 12）+ step/start + assistant/message（seq 14）。
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        {
+          type: "user/message",
+          seq: 13,
+          time: 13,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/start", seq: 14, time: 14, data: { turn: 3, step: 1 } },
+        {
+          type: "assistant/message",
+          seq: 15,
+          time: 15,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+      ];
+      await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
+
+      // rewind 到轮 3 的 user/message（seq 13）：exclusive——该消息及其后
+      // （step/start、assistant/message）全部 drop，保留 seq 0..12。
+      const snapshot = await provider.rewind(SessionId("s1"), 13);
+      expect(snapshot.header.id).toBe("s1");
+
+      // 真实流程：rewind 后立即 append 编辑版重放（完整闭合轮，seq 13 起）。
+      const continuation: SessionEvent[] = oneTurnLog().map(
+        (event) =>
+          ({
+            ...event,
+            seq: event.seq + 13,
+            time: event.time + 300,
+            data: { ...event.data, turn: 3 },
+          }) as SessionEvent,
+      );
+      await persistence.append(SessionId("s1"), continuation);
+      const after = await persistence.load(SessionId("s1"));
+      // 截断前缀（0..12，含 turn/start 12）+ 重放闭合轮（13..18）。
+      expect(after.events.map((e) => e.seq)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+      ]);
+      expect(after.events[12]?.type).toBe("turn/start");
+      expect(after.events[13]?.type).toBe("turn/start");
+      expect(after.events[14]?.type).toBe("user/message");
+      expect(after.events.at(-1)?.type).toBe("turn/end");
+      // 被 drop 的旧 user/message 不在 log 中。
+      expect(after.events.some((e) => e.type === "user/message" && e.data.id === "turn3-user")).toBe(
+        false,
+      );
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("rejects a boundary that is neither turn/end nor user/message", async () => {
+    const { ctx, provider, dispose } = await harness();
+    try {
+      await createPersisted(ctx, "s1", twoTurnLog());
+      // seq 4 是 step/end——不是合法 rewind 边界。
+      await expect(provider.rewind(SessionId("s1"), 4)).rejects.toThrow(
+        /not a turn\/end or user\/message/,
+      );
     } finally {
       await dispose();
     }

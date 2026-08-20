@@ -116,6 +116,14 @@ export interface LiveSessionHooks {
    * 的 live entry 冲突。
    */
   setCoordinatorCursor(id: SessionId, cursor: number): void;
+  /**
+   * 截断后同步 coordinator 的 ownerless 状态（cold 分支）：把 `states` 条目
+   * 的 `cursor` 对齐到新尾部。与 {@link setCoordinatorCursor} 的区别是
+   * **不要求条目已存在**——cold 会话可能从未被 adopt（无 states 条目），
+   * 此时创建 ownerless 条目（meta 来自截断后快照），使下一次 append 走
+   * 标准路径而非 `adopt`（adopt 会经 `prepareCore` 补 closers 撤销截断）。
+   */
+  setCoordinatorState(id: SessionId, cursor: number, meta: SessionHeader): void;
 }
 
 /** agent 的最小 live 形态：持有同一会话 + 可重置请求头日志标记。 */
@@ -180,6 +188,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       getAgent: () => undefined,
       flush: async () => true,
       setCoordinatorCursor: () => {},
+      setCoordinatorState: () => {},
     },
   ) {}
 
@@ -189,9 +198,29 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     mode: BranchAnchorMode = "after",
     signal?: AbortSignal,
   ): Promise<BranchBoundary> {
-    const inspection = await this.persistence.inspect(id, signal);
-    const boundary = locateTurnEnd(inspection.events, atSeq, mode);
-    return { seq: boundary, events: inspection.events.slice(0, boundary + 1) };
+    const { events } = await this.readRawEvents(id, signal);
+    const boundary = locateTurnEnd(events, atSeq, mode);
+    return { seq: boundary, events: events.slice(0, boundary + 1) };
+  }
+
+  /**
+   * 读取会话的**原始**事件（不含 coordinator 补记的合成 closers）。
+   *
+   * `persistence.inspect` 走 coordinator 的 `prepareCore`，会给未闭合 log
+   * 补 `interruptedTurnClosers`（合成 step/end + turn/end）——对普通读取
+   * （客户端历史）这是正确的逻辑视图，但对分支编排是误导：未闭合轮次被
+   * closers 掩盖成闭合，编辑未闭合轮次的 user 消息会走错边界。这里用
+   * `loadStored`（backend hook，scanRows 只做 torn-tail 切割、不补 closers）
+   * 读原始事件，使未闭合状态真实可见。
+   */
+  async readRawEvents(
+    id: SessionId,
+    signal?: AbortSignal,
+  ): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }> {
+    const stored = await this.persistence.loadStored(id, signal);
+    if (stored === undefined)
+      throw new SessionBranchError(`session "${id}" not found`, "SESSION_NOT_FOUND");
+    return { meta: stored.meta, events: stored.events };
   }
 
   async forkFrom(
@@ -244,11 +273,17 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     }
     const live = this.live.getSession(id);
     // live 会话先把 write-behind 缓冲全部落盘（RDB = live 内存全量），保证
-    // 后续 inspect（live 时读内存）与后端事务（读 RDB head）基于同一视图。
+    // 后续读取与后端事务（读 RDB head）基于同一视图。
     if (live !== undefined) await this.live.flush(live);
-    // 边界校验：toBoundary 是已存在事件且为 turn/end。
-    const inspection = await this.persistence.inspect(id, signal);
-    const boundaryEvent = inspection.events[toBoundary];
+    // 边界校验：toBoundary 是已存在事件且为 turn/end 或 user/message。
+    // 用**原始**事件（loadStored，不补 closers）——`inspect` 会经 coordinator
+    // 的 `prepareCore` 给未闭合 log 补合成 step/end + turn/end，把 user/message
+    // 边界掩盖成 turn/end，导致 exclusive 语义丢失。
+    const raw = live === undefined ? await this.readRawEvents(id, signal) : undefined;
+    const inspection = live === undefined ? undefined : await this.persistence.inspect(id, signal);
+    const events = live === undefined ? raw!.events : inspection!.events;
+    const meta = live === undefined ? raw!.meta : inspection!.meta;
+    const boundaryEvent = events[toBoundary];
     if (toBoundary === -1) {
       // 空前缀：允许回退到「任何轮次之前」= 清空整个 log 的前置（head 归 -1）。
       // 与 commitRepair 的「head 回退到初始状态」语义一致。
@@ -257,12 +292,20 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
         `rewind boundary ${toBoundary} does not exist in session "${id}"`,
         "INVALID_BOUNDARY",
       );
-    } else if (boundaryEvent.type !== "turn/end") {
+    } else if (boundaryEvent.type !== "turn/end" && boundaryEvent.type !== "user/message") {
       throw new SessionBranchError(
-        `rewind boundary ${toBoundary} is not a turn/end (${boundaryEvent.type})`,
+        `rewind boundary ${toBoundary} is not a turn/end or user/message (${boundaryEvent.type})`,
         "INVALID_BOUNDARY",
       );
     }
+    // 保留前缀长度（上游坐标）：turn/end 保留到该事件（inclusive）；user/message
+    // drop 该消息及其后（exclusive）——编辑重放语义，边界消息由编辑版替换。
+    const keepLength =
+      toBoundary === -1
+        ? 0
+        : boundaryEvent!.type === "turn/end"
+          ? toBoundary + 1
+          : toBoundary;
 
     const internals = this.persistence.internals();
     // —— 坐标换算：上游 seq（live log / 编排层 boundary）→ RDB 稠密 seq ——
@@ -275,8 +318,8 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     // head 永远大于稠密 head）。cold 视图本身已是稠密 seq，直接使用。
     const denseBoundary =
       live === undefined
-        ? toBoundary
-        : inspection.events.slice(0, toBoundary + 1).filter(isPersistedEvent).length - 1;
+        ? keepLength - 1
+        : events.slice(0, keepLength).filter(isPersistedEvent).length - 1;
     await internals.backend.transaction(async (tx) => {
       signal?.throwIfAborted();
       const head = await tx.getHead(id);
@@ -308,7 +351,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       // 尾部）；重置 agent 的请求头标记（截断可能删掉最后一条
       // request/header，让 agent 下次补记）。不调用 `load`——live 时 load
       // 会先 flush 把旧内存写回，撤销本次截断。
-      truncateLiveSession(live, toBoundary + 1);
+      truncateLiveSession(live, keepLength);
       const agent = this.live.getAgent(id);
       if (agent !== undefined) {
         agent.requestHeaderLogged = false;
@@ -320,12 +363,22 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
         const phase = (agent as unknown as { phase?: { lastTurn?: number } }).phase;
         if (phase !== undefined) phase.lastTurn = lastTurn;
       }
-      this.live.setCoordinatorCursor(id, toBoundary + 1);
+      this.live.setCoordinatorCursor(id, keepLength);
     } else {
-      // cold 分支：同步 coordinator 状态。load 经 revision 变化重新 adopt，
-      // state.cursor 与新尾部一致；截断到闭合 turn/end 后 log 平衡，load 的
-      // repair 为 no-op。
-      await this.persistence.load(id);
+      // cold 分支：同步 coordinator 状态。
+      // - turn/end 边界：截断后 log 平衡（停在闭合轮次末尾），load 的
+      //   repair 为 no-op，经 revision 变化重新 adopt 使 state.cursor 与
+      //   新尾部一致；
+      // - user/message 边界：截断后 log 停在 turn/start（不平衡），load 的
+      //   `prepareCore` 会用 `interruptedTurnClosers` 补 closers 并 commitRepair
+      //   落盘——把被 drop 的 user/message 的 seq 位置占掉，撤销截断语义。
+      //   因此直接同步 ownerless states 条目（cursor = keepLength），下一次
+      //   append 走标准路径而非 adopt。
+      if (boundaryEvent?.type === "user/message") {
+        this.live.setCoordinatorState(id, keepLength, meta);
+      } else {
+        await this.persistence.load(id);
+      }
     }
 
     const row = await internals.backend.getSession(id);
@@ -335,21 +388,15 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
         header: {
           version: SESSION_FORMAT_VERSION,
           id,
-          createdAt: inspection.meta.createdAt,
-          ...(inspection.meta.cwd !== undefined ? { cwd: inspection.meta.cwd } : {}),
-          ...(inspection.meta.parentSession !== undefined
-            ? { parentSession: inspection.meta.parentSession }
+          createdAt: meta.createdAt,
+          ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+          ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
+          ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
+          ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
+          ...(meta.delegationDepth !== undefined
+            ? { delegationDepth: meta.delegationDepth }
             : {}),
-          ...(inspection.meta.seedLength !== undefined
-            ? { seedLength: inspection.meta.seedLength }
-            : {}),
-          ...(inspection.meta.origin !== undefined ? { origin: inspection.meta.origin } : {}),
-          ...(inspection.meta.delegationDepth !== undefined
-            ? { delegationDepth: inspection.meta.delegationDepth }
-            : {}),
-          ...(inspection.meta.agentPreset !== undefined
-            ? { agentPreset: inspection.meta.agentPreset }
-            : {}),
+          ...(meta.agentPreset !== undefined ? { agentPreset: meta.agentPreset } : {}),
         },
         revision:
           (await internals.readStoredRevision(id)) ??
@@ -395,6 +442,25 @@ export class SessionBranchRdb extends SessionBranch {
         const state = persistence.coordinator?.states?.get(id);
         if (state !== undefined) state.cursor = cursor;
       },
+      setCoordinatorState: (id, cursor, meta) => {
+        // cold 分支（user/message 边界）：states 条目可能不存在（会话从未
+        // 被 adopt）。存在则仅对齐 cursor；不存在则创建 ownerless 条目
+        // （meta 来自截断后快照），使下一次 append 走标准路径而非 adopt
+        // （adopt 会经 prepareCore 补 closers 撤销截断）。
+        const persistence = this.ctx.sessionPersistence as unknown as {
+          coordinator?: {
+            states?: Map<SessionId, { cursor: number; meta: SessionHeader; materialized: boolean } | undefined>;
+          };
+        };
+        const states = persistence.coordinator?.states;
+        if (states === undefined) return;
+        const state = states.get(id);
+        if (state !== undefined) {
+          state.cursor = cursor;
+        } else {
+          states.set(id, { meta, cursor, materialized: true });
+        }
+      },
     },
   );
 
@@ -405,6 +471,17 @@ export class SessionBranchRdb extends SessionBranch {
     signal?: AbortSignal,
   ): Promise<BranchBoundary> {
     return this.provider.readBranchPrefix(id, atSeq, mode, signal);
+  }
+
+  /**
+   * 读取会话的**原始**事件（不含 coordinator 补记的合成 closers）。
+   * 编排层用它识别未闭合轮次（inspect 会把未闭合 log 补成闭合）。
+   */
+  readRawEvents(
+    id: SessionId,
+    signal?: AbortSignal,
+  ): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }> {
+    return this.provider.readRawEvents(id, signal);
   }
 
   forkFrom(

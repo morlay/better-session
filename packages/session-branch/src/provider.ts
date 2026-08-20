@@ -75,12 +75,19 @@ export interface SessionBranchProvider {
   ): Promise<SessionId>;
 
   /**
-   * 显式授权的截断式回退：截断事件 log 至 `toBoundary`（含该事件，保留其前
-   * 历史）。`toBoundary` 必须是非负整数、事件存在、且为闭合 `turn/end`
-   * 边界；否则拒绝（`INVALID_BOUNDARY` / `OPEN_TURN` / `SESSION_NOT_FOUND`）。
+   * 显式授权的截断式回退：截断事件 log 至 `toBoundary`。`toBoundary` 必须是
+   * 非负整数、事件存在、且为 `turn/end` 或 `user/message`；否则拒绝
+   * （`INVALID_BOUNDARY` / `SESSION_NOT_FOUND`）。
+   *
+   * 边界语义按类型区分：
+   * - `turn/end`：**保留到该事件**（inclusive）——轮次完整闭合，后续轮次
+   *   被截断；
+   * - `user/message`：**drop 该消息及其后**（exclusive）——编辑重放语义：
+   *   该消息会被编辑后的版本替换，因此边界消息本身不保留。
+   *
    * 返回截断后的快照（header + revision）。
    * @param id - 持久化会话。
-   * @param toBoundary - 截断点 seq（inclusive，`turn/end`）。
+   * @param toBoundary - 截断点 seq（`turn/end` inclusive / `user/message` exclusive）。
    * @param signal - 中断时事务整体回滚（不部分截断）。
    */
   rewind(
