@@ -8,7 +8,7 @@
  * 方法 → `cleanse`)。
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 import { Button, IconRefreshOutline16 } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { SessionEditorState } from "./controller.ts";
 
@@ -27,7 +27,7 @@ export interface CleanseSessionActionProps {
 export function CleanseSessionAction({
   useSessionEditor,
   cleanse,
-}: CleanseSessionActionProps): JSX.Element | null {
+}: CleanseSessionActionProps): ReactElement | null {
   const openError = useSessionEditor((s) => s.sessionOpenError);
   const cleansing = useSessionEditor((s) => s.pending === "cleanse");
   const [busy, setBusy] = useState(false);

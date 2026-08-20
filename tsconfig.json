@@ -18,4 +18,5 @@
     "moduleDetection": "force",
     "skipLibCheck": true,
   },
+  "exclude": ["**/lib", "**/node_modules"],
 }
