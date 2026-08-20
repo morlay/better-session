@@ -31,6 +31,9 @@ fmt:
 lint:
     pnpm exec oxlint .
 
+publish:
+    pnpm exec -r tsx {{ justfile_directory() }}/scripts/publish-if-need.mts
+
 build *args:
     @pnpm exec turbo run prepare {{ args }}
 
