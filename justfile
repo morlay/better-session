@@ -16,14 +16,12 @@ dep *args:
     pnpm install {{ args }}
 
 update:
-    pnpm dlx taze -w -r latest
+    pnpm dlx taze latest -w -r 
+    pnpm dlx taze newest -w -r --include /@deepseek-ai\/.+/
 
 clean:
     rm -f pnpm-lock.yaml;
-    find . \
-        -type d \
-        -name "node_modules" \
-        -prune -print -exec rm -rf '{}' \;
+    pnpm clean
 
 fmt:
     pnpm exec oxfmt .
