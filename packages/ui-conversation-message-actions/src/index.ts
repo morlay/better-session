@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 import {
   SESSION_BRANCH_VERSION_SCHEMA,
   SessionBranchError,
+  balanceRewindPrefix,
   type BranchBoundary,
   type BranchTimeline,
   type EditableBlockKind,
@@ -668,7 +669,12 @@ export class SessionEditor extends Service {
       } else {
         // rewind 后保留的事件数：turn/end inclusive = boundary + 1；
         // user/message exclusive = boundary（该消息被 drop，由编辑版替换）。
-        const keepLength = boundary + (plan.rewindBoundary === undefined ? 1 : 0);
+        // 与 rdb rewind 一致地平衡化：exclusive 截断可能残留未配对的
+        // step/start（真实 agent-loop 的 step/start 在 user/message 之前），
+        // 续写 seq 必须从平衡后的保留前缀续接，否则落盘 log 对 token meter
+        // 重放非法（孤儿 step/start 使后续 step/start 报错）。
+        const rawKeepLength = boundary + (plan.rewindBoundary === undefined ? 1 : 0);
+        const keepLength = balanceRewindPrefix(events.slice(0, rawKeepLength)).length;
         const renumbered = seedSuffix.map(
           (event, index) =>
             ({

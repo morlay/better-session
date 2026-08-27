@@ -6,8 +6,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import { Context } from "@deepseek-ai/cordis";
-import type { SessionEvent, SessionHeader } from "@deepseek-ai/dsh-session";
-import { SessionId as SessionIdBrand, SessionStore } from "@deepseek-ai/dsh-session";
+import {
+  Session,
+  SessionId as SessionIdBrand,
+  SessionStore,
+  type SessionEvent,
+  type SessionHeader,
+} from "@deepseek-ai/dsh-session";
+import { TokenMeter } from "@deepseek-ai/dsh-token-meter";
 import { type BranchTimeline } from "@morlay/session-branch";
 import SessionPersistenceSqlite from "../../../session-rdb/src/index.ts";
 import { EmptySettings } from "../../../session-rdb/src/__tests__/testing/helpers.ts";
@@ -723,6 +729,80 @@ describe("SessionEditor rewind/retry/fork", () => {
     }
   });
 
+  it("edits a user message in an open turn on a live session in real agent-loop order (memory log balanced)", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合，真实
+      // agent-loop 顺序：turn/start → step/start → user/message → ...
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        { type: "step/start", seq: 13, time: 13, data: { turn: 3, step: 1 } },
+        {
+          type: "user/message",
+          seq: 14,
+          time: 14,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        {
+          type: "assistant/message",
+          seq: 15,
+          time: 15,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: 16, time: 16, data: { turn: 3, step: 1 } },
+      ];
+      ctx.sessions.create(SessionIdBrand("live"), {
+        meta: meta("live"),
+        seed: [...twoTurnLog(), ...openTail],
+      });
+      const live = ctx.sessions.get(SessionIdBrand("live"))!;
+      await ctx.sessions.flush(live);
+
+      // 编辑未闭合轮 3 的 user 消息（eventSeq 14）→ rewind 到该消息
+      // （exclusive drop 它及其后）。真实顺序下 step/start（13）在
+      // user/message 之前，会残留为孤儿——修复前 live 内存 log 对 token
+      // meter 重放非法。
+      const result = await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("live"),
+        eventSeq: 14,
+        blockIndex: 0,
+        text: "go on (edited)",
+        cascade: "truncate",
+      });
+      expect(result.sessionId).toBe(SessionIdBrand("live"));
+      expect(result.queuedTurns).toBe(0);
+
+      // live 内存 log：截断前缀（0..12，孤儿 step/start 13 被剔除）+
+      // ignorable 版本效果（13）。
+      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      expect(live.events[12]?.type).toBe("turn/start");
+      expect(live.events[13]?.type).toBe("session-branch/version");
+      expect(live.events.some((e) => e.type === "step/start" && e.data.turn === 3)).toBe(false);
+      // 内存 log 对 token meter 重放合法。
+      const meter = new TokenMeter(ctx);
+      expect(() => meter.measure(live)).not.toThrow();
+    } finally {
+      await dispose();
+    }
+  });
+
   it("cleanseSession rewrites legacy provenance coordinates so the session reloads", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
@@ -805,6 +885,109 @@ describe("SessionEditor rewind/retry/fork", () => {
       const after = await ctx.sessionPersistence.load(SessionIdBrand("cleanse-me"));
       expect(after.events.at(-1)?.type).toBe("turn/end");
       expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("edits a user message in an open turn in real agent-loop order (orphan step/start dropped, token-meter replay safe)", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // 真实 agent-loop 的 append 顺序：turn/start → step/start → user/message
+      // → assistant/chunk（delta，落盘被过滤）→ assistant/message → step/end
+      // （无 turn/end）。轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 未闭合。
+      const chunk = (seq: number, text: string): SessionEvent => ({
+        type: "assistant/chunk",
+        seq,
+        time: seq,
+        data: { turn: 3, step: 1, chunk: { type: "text-delta", index: 0, text } },
+      });
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        { type: "step/start", seq: 13, time: 13, data: { turn: 3, step: 1 } },
+        {
+          type: "user/message",
+          seq: 14,
+          time: 14,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        chunk(15, "a"),
+        chunk(16, "b"),
+        {
+          type: "assistant/message",
+          seq: 17,
+          time: 17,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: 18, time: 18, data: { turn: 3, step: 1 } },
+      ];
+      await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
+
+      // 编辑未闭合轮 3 的 user 消息（eventSeq 14）→ rewind 到该消息
+      // （exclusive drop 它及其后）。真实顺序下 step/start（13）在
+      // user/message 之前，会残留为孤儿——修复前续写落盘后 token meter
+      // 重放报 "step/start ... arrived before turn ... ended"。
+      const result = await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("src"),
+        eventSeq: 14,
+        blockIndex: 0,
+        text: "go on (edited)",
+        cascade: "truncate",
+      });
+      expect(result.sessionId).toBe(SessionIdBrand("src"));
+      expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
+
+      // 真实落盘行：截断前缀（0..12，含 turn/start 12，孤儿 step/start 13
+      // 被剔除）；版本效果 ignorable 不落库。
+      const backend = (
+        ctx.sessionPersistence as unknown as {
+          internals(): {
+            backend: {
+              getEventRows(id: SessionIdBrand): Promise<Array<{ fSequence: number; fKind: string }>>;
+            };
+          };
+        }
+      ).internals().backend;
+      const rows = await backend.getEventRows(SessionIdBrand("src"));
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(rows[12]?.fKind).toBe("turn/start");
+      expect(rows.some((r) => r.fKind === "step/start" && r.fSequence === 13)).toBe(false);
+
+      // 截断后继续 append 成功：版本效果（ignorable）占 seq 13 推进 cursor，
+      // 后续输入从 seq 14 续接（落盘时 ignorable 被过滤、稠密重编号连续）。
+      const continuation: SessionEvent[] = oneTurnLog().map(
+        (event) =>
+          ({
+            ...event,
+            seq: event.seq + 14,
+            time: event.time + 300,
+            data: { ...event.data, turn: 3 },
+          }) as SessionEvent,
+      );
+      await ctx.sessionPersistence.append(SessionIdBrand("src"), continuation);
+      const continued = await ctx.sessionPersistence.load(SessionIdBrand("src"));
+      expect(continued.events.at(-1)?.type).toBe("turn/end");
+      // 完整 log 对 token meter 重放合法（无孤儿 step/start）。
+      const meter = new TokenMeter(ctx);
+      const replayed = Session.create(SessionIdBrand("src"), [...continued.events]);
+      expect(() => meter.measure(replayed)).not.toThrow();
     } finally {
       await dispose();
     }

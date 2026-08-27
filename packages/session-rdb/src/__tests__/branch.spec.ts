@@ -8,11 +8,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import { Context } from "@deepseek-ai/cordis";
 import {
+  Session,
   SessionId,
   SessionStore,
   type SessionEvent,
   type SessionHeader,
 } from "@deepseek-ai/dsh-session";
+import { TokenMeter } from "@deepseek-ai/dsh-token-meter";
 import { SessionBranchError } from "@morlay/session-branch";
 import SessionPersistenceSqlite, { SessionBranchRdbProvider, locateTurnEnd } from "../index.ts";
 import { EmptySettings } from "./testing/helpers.ts";
@@ -505,6 +507,149 @@ describe("rewind", () => {
       await expect(provider.rewind(SessionId("s1"), 4)).rejects.toThrow(
         /not a turn\/end or user\/message/,
       );
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("rewinds to a user/message boundary in real agent-loop order (orphan step/start dropped)", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      // 真实 agent-loop 的 append 顺序：turn/start → step/start → user/message
+      // → assistant/chunk（delta，落盘被过滤）→ assistant/message → step/end
+      // （无 turn/end）。轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 未闭合。
+      const chunk = (seq: number, text: string): SessionEvent => ({
+        type: "assistant/chunk",
+        seq,
+        time: seq,
+        data: { turn: 3, step: 1, chunk: { type: "text-delta", index: 0, text } },
+      });
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        { type: "step/start", seq: 13, time: 13, data: { turn: 3, step: 1 } },
+        {
+          type: "user/message",
+          seq: 14,
+          time: 14,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        chunk(15, "a"),
+        chunk(16, "b"),
+        {
+          type: "assistant/message",
+          seq: 17,
+          time: 17,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: 18, time: 18, data: { turn: 3, step: 1 } },
+      ];
+      await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
+
+      // rewind 到轮 3 的 user/message（seq 14）：exclusive——该消息及其后
+      // drop。真实顺序下 step/start（13）在 user/message 之前，会残留为
+      // 孤儿（其 step/end 在 drop 区）——修复前 token meter 重放报
+      // "step/start ... arrived before turn ... ended"。
+      await provider.rewind(SessionId("s1"), 14);
+
+      // 平衡化：孤儿 step/start 被剔除，保留前缀以 turn/start（12）结尾。
+      const backend = (
+        persistence as unknown as {
+          internals(): {
+            backend: {
+              getEventRows(id: SessionId): Promise<Array<{ fSequence: number; fKind: string }>>;
+            };
+          };
+        }
+      ).internals().backend;
+      const rows = await backend.getEventRows(SessionId("s1"));
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(rows.at(-1)?.fKind).toBe("turn/start");
+      expect(rows.some((r) => r.fKind === "step/start" && r.fSequence === 13)).toBe(false);
+
+      // 续写重放轮（完整闭合轮，seq 13 起）后，完整 log 对 token meter 合法。
+      const continuation: SessionEvent[] = oneTurnLog().map(
+        (event) =>
+          ({
+            ...event,
+            seq: event.seq + 13,
+            time: event.time + 300,
+            data: { ...event.data, turn: 3 },
+          }) as SessionEvent,
+      );
+      await persistence.append(SessionId("s1"), continuation);
+      const continued = await persistence.load(SessionId("s1"));
+      expect(continued.events.at(-1)?.type).toBe("turn/end");
+      const meter = new TokenMeter(ctx);
+      const replayed = Session.create(SessionId("s1"), [...continued.events]);
+      expect(() => meter.measure(replayed)).not.toThrow();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("loads a rewind-to-user-message session without an orphan step/start (token-meter replay safe)", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      // 真实 agent-loop 顺序的未闭合轮 3（step/start 在 user/message 之前）。
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        { type: "step/start", seq: 13, time: 13, data: { turn: 3, step: 1 } },
+        {
+          type: "user/message",
+          seq: 14,
+          time: 14,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        {
+          type: "assistant/message",
+          seq: 15,
+          time: 15,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: 16, time: 16, data: { turn: 3, step: 1 } },
+      ];
+      await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
+      await provider.rewind(SessionId("s1"), 14);
+
+      // 用户 resume 场景：rewind 后直接 load（coordinator 补合成 turn/end，
+      // 但不会补孤儿 step/start 的配对——平衡化已把它剔除）。
+      const after = await persistence.load(SessionId("s1"));
+      expect(after.events.some((e) => e.type === "step/start" && e.data.turn === 3)).toBe(false);
+      const meter = new TokenMeter(ctx);
+      const session = Session.create(SessionId("s1"), [...after.events]);
+      expect(() => meter.measure(session)).not.toThrow();
     } finally {
       await dispose();
     }

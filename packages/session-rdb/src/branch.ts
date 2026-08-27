@@ -34,6 +34,7 @@ import type { SessionPersistenceSnapshot } from "@deepseek-ai/dsh-session-persis
 import {
   SessionBranch,
   SessionBranchError,
+  balanceRewindPrefix,
   buildTimeline,
   type BranchAnchorMode,
   type BranchBoundary,
@@ -300,12 +301,17 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     }
     // 保留前缀长度（上游坐标）：turn/end 保留到该事件（inclusive）；user/message
     // drop 该消息及其后（exclusive）——编辑重放语义，边界消息由编辑版替换。
-    const keepLength =
+    // 随后平衡化：真实 agent-loop 的 step/start 在 user/message 之前，exclusive
+    // 截断会残留未配对的 step/start（其 step/end 在 drop 区）——token meter
+    // 重放要求 step/start 配对，因此从尾部剔除孤儿 step/start（见
+    // balanceRewindPrefix）。
+    const rawKeepLength =
       toBoundary === -1
         ? 0
         : boundaryEvent!.type === "turn/end"
           ? toBoundary + 1
           : toBoundary;
+    const keepLength = balanceRewindPrefix(events.slice(0, rawKeepLength)).length;
 
     const internals = this.persistence.internals();
     // —— 坐标换算：上游 seq（live log / 编排层 boundary）→ RDB 稠密 seq ——
