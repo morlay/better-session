@@ -4,16 +4,19 @@ import { basename, dirname, resolve as resolvePath, sep } from "node:path";
 import { defineConfig } from "tsdown";
 import { transform } from "lightningcss";
 
-/** 平台模块表：shell 预置在 __ModuleLoader__ 里的 specifier，bundle 必须 external。 */
+/** 平台模块表：shell 预置在 __ModuleLoader__ 里的 specifier，bundle 必须 external。
+ * 对齐新版 @deepseek-ai/dsh-client-web 的 PLATFORM_MODULES（dsh-client-runtime
+ * 已拆分，旧表项失效；client-store / ui-slots / ui-primitives 成为平台项）。
+ */
 const CLIENT_EXTERNALS = [
   "react",
   "react/jsx-runtime",
   "react-dom",
   "react-dom/client",
   "@deepseek-ai/cordis",
+  "@deepseek-ai/dsh-client-store",
   "@deepseek-ai/dsh-client-ui-slots",
-  "@deepseek-ai/dsh-client-web-react",
-  "@deepseek-ai/dsh-client-runtime/client",
+  "@deepseek-ai/dsh-client-ui-primitives",
 ];
 
 const PLUGIN_ID = "@morlay/ui-conversation-message-actions";
@@ -47,9 +50,6 @@ export default defineConfig([
     dts: true,
     sourcemap: true,
     platform: "node",
-    deps: {
-      neverBundle: true,
-    },
   },
   {
     // Browser 半：client bundle（lib/client.js），经 __ModuleLoader__.load 手递。
@@ -64,17 +64,19 @@ export default defineConfig([
     format: "cjs",
     platform: "browser",
     dts: false,
-    sourcemap: true,
+    sourcemap: false,
     clean: false,
-    external: [...CLIENT_EXTERNALS, /^@deepseek-ai\//],
     // 单文件策略：第三方依赖（shiki/katex 等）全内联；**@deepseek-ai/\* 一律
     // external** —— 平台模块走 seed 词（CLIENT_EXTERNALS），独立插件（如
     // ui-conversation，chat-node 经 `…/client` 子路径引用）由各自的 client
     // bundle 注册 factory（boot 的 inject 顺序保证先加载；client-modules 的
     // require 会 strip `/client` 后缀解析）。内联 @deepseek-ai 会把另一个
     // 插件的 `__ModuleLoader__.load` 嵌进来，导致 duplicate factory。
-    noExternal: (id: string) =>
-      CLIENT_EXTERNALS.includes(id) || id.startsWith("@deepseek-ai/") ? undefined : true,
+    deps: {
+      neverBundle: [...CLIENT_EXTERNALS, /^@deepseek-ai\//],
+      alwaysBundle: (id: string) =>
+        CLIENT_EXTERNALS.includes(id) || id.startsWith("@deepseek-ai/") ? false : true,
+    },
     define: {
       "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "production"),
     },

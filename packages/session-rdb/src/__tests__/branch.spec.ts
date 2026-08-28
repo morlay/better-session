@@ -15,6 +15,7 @@ import {
   type SessionHeader,
 } from "@deepseek-ai/dsh-session";
 import { TokenMeter } from "@deepseek-ai/dsh-token-meter";
+import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
 import { SessionBranchError } from "@morlay/session-branch";
 import SessionPersistenceSqlite, { SessionBranchRdbProvider, locateTurnEnd } from "../index.ts";
 import { EmptySettings } from "./testing/helpers.ts";
@@ -35,6 +36,7 @@ async function harness(): Promise<{
   const ctx = new Context();
   await ctx.plugin(EmptySettings);
   await ctx.plugin(SessionStore);
+  new SessionProjectionRegistry(ctx);
   const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path: ":memory:" });
   const persistence = ctx.sessionPersistence as SessionPersistenceSqlite;
   const provider = new SessionBranchRdbProvider(persistence, {
@@ -210,7 +212,9 @@ describe("forkFrom", () => {
           },
           inverse: { kind: "restore-version", sessionId: SessionId("src") },
         },
-      } as SessionEvent;
+        // `ignorable` 是下游信封扩展（上游 SessionEvent 无此字段），
+        // 结构化构造版本效果事件信封。
+      } as unknown as SessionEvent;
       await provider.forkFrom(SessionId("src"), {
         atSeq: 6,
         anchorMode: "before",
@@ -491,9 +495,9 @@ describe("rewind", () => {
       expect(after.events[14]?.type).toBe("user/message");
       expect(after.events.at(-1)?.type).toBe("turn/end");
       // 被 drop 的旧 user/message 不在 log 中。
-      expect(after.events.some((e) => e.type === "user/message" && e.data.id === "turn3-user")).toBe(
-        false,
-      );
+      expect(
+        after.events.some((e) => e.type === "user/message" && e.data.id === "turn3-user"),
+      ).toBe(false);
     } finally {
       await dispose();
     }

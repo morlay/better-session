@@ -5,9 +5,6 @@ export default defineConfig({
   format: ["esm"],
   outDir: "lib",
   dts: true,
-  sourcemap: true,
+  sourcemap: false,
   platform: "node",
-  deps: {
-    neverBundle: true,
-  },
 });

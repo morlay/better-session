@@ -1,13 +1,22 @@
-# 依赖安装用 pnpm（workspace 语义），pnpm 只做运行器（pnpm exec）。
-# example/ 是独立的 profile bundle 包（版本号依赖，不进 workspace）。
 packages:
+  - apps/*
   - packages/*
+  - vendor/deepseek-harness/vendor/*
+  - vendor/deepseek-harness/packages/*/*
+  - vendor/deepseek-harness/native/landlock-run
+  - vendor/deepseek-harness/native/landlock-run/packages/*
+  - vendor/deepseek-harness/apps/*
+
+linkWorkspacePackages: true
+autoInstallPeers: true
 
 allowBuilds:
   "@deepseek-ai/dsh-subprocess-local": true
+  '@deepseek-ai/dsh-subprocess-local@file:vendor/deepseek-harness/packages/subprocess/subprocess-local': true
   "@google/genai": true
   esbuild: true
   koffi: true
+  lefthook: true
   node-pty: true
   protobufjs: true
 

@@ -3,16 +3,15 @@
  * 精简版：HTTP 拉取 timeline + 执行操作 + 会话导航（openWhenListed）。
  */
 
+import type { Context as ClientContext } from "@deepseek-ai/cordis";
 import type {
-  ClientContext,
-  ConversationSnapshot,
   ISessions,
-  ObservableSnapshot,
   SessionFace,
-  SessionId,
-  SnapshotStore,
-} from "@deepseek-ai/dsh-client-runtime/client";
-import { createSnapshotStore } from "@deepseek-ai/dsh-client-runtime/client";
+  SessionSnapshot,
+} from "@deepseek-ai/dsh-api-session-controller/client";
+import type { ObservableSnapshot, SnapshotStore } from "@deepseek-ai/dsh-client-store";
+import { createSnapshotStore } from "@deepseek-ai/dsh-client-store";
+import type { SessionId } from "@deepseek-ai/dsh-session";
 import {
   SESSION_EDITOR_PATH,
   type EditableMessageBlock,
@@ -53,11 +52,10 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function conversationRevision(snapshot: ConversationSnapshot): string {
-  const turnEnds = [...snapshot.turnEnds.entries()]
-    .map(([turn, seq]) => `${String(turn)}:${String(seq)}`)
-    .join(",");
-  return [snapshot.openState, snapshot.removed, snapshot.hasMore, turnEnds].join("|");
+function conversationRevision(snapshot: SessionSnapshot): string {
+  // 新版 SessionSnapshot 已无 turnEnds（会话级事件窗口不再暴露轮次边界）；
+  // 用生命周期字段作为会话变化指纹即可。
+  return [snapshot.openState, snapshot.removed, snapshot.hasMore].join("|");
 }
 
 /** 一个会话共享一个稳定 controller（header + timeline 两个入口复用）。 */

@@ -860,7 +860,7 @@ export function runCoordinatorContract(
           } as unknown as SessionEvent,
         ]);
         await expect(ctx.sessionPersistence.inspect(requiredId)).rejects.toThrow(
-          /unknown to this harness and not marked ignorable/,
+          /unknown to this harness/,
         );
 
         for (const type of ["user/message", "assistant/message"] as const) {

@@ -5,22 +5,6 @@ RDB（SQLite / PostgreSQL）持久会话后端（`ctx.sessionPersistence`）：�
 支持配置选择 SQLite 或 PostgreSQL 后端。设计细节（表结构、delta 过滤、并发写、
 方言差异、仓库结构）见 [docs/design.md](docs/design.md)。
 
-## 安装
-
-包发布在 GitHub Packages，按包名安装到 dsh profile（示例：web；`dsh plugin
-add` 把参数原样转发给 pnpm，版本号按发布版本调整）。registry 必须限定在
-`@morlay` scope（`--config.@morlay:registry=…`），不要用全局 `--registry`，
-否则依赖（`@deepseek-ai/*` 等）也会被指到 GitHub Packages 而解析失败：
-
-```sh
-dsh plugin --profile=web add "@morlay/session-rdb"
-```
-
-GitHub Packages 的 registry 要求认证（公开包也一样）：profile 的 `.npmrc`
-需为 `npm.pkg.github.com` 配置访问 token（如
-`//npm.pkg.github.com/:_authToken=<token>`），详见
-[GitHub 文档](https://docs.github.com/packages/working-with-a-github-packages-registry/working-with-the-npm-registry)。
-
 ## 配置
 
 配置写在 `${DSH_HOME}/settings.yaml`，settings namespace 为插件短名

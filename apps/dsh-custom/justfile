@@ -1,0 +1,5 @@
+dev *args:
+    dsh-web-desktopify dev . {{ args }}
+
+bundle *args:
+    dsh-web-desktopify bundle . {{ args }}

@@ -1,0 +1,15 @@
+
+sync: && patch
+    @if [ -d deepseek-harness ]; then rm -rf deepseek-harness; fi
+    git clone --depth=1 -b dsh-v{{ env("DEEPSEEK_HARNESS_VERSION") }} https://github.com/deepseek-ai/deepseek-harness.git deepseek-harness
+
+[working-directory("deepseek-harness")]
+patch:
+    rm -rf apps/cli/tests/profiles/acp/cordis.yml
+    rm -rf packages/subagent/subagent-codex packages/subagent/subagent-claude-code
+    sed -i '' '/subagent-claude-code/d; /subagent-codex/d' tsconfig.host.json
+
+[working-directory("deepseek-harness")]
+build:
+    pnpm run build
+    rm -rf node_modules

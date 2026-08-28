@@ -14,6 +14,7 @@ import {
   type SessionHeader,
 } from "@deepseek-ai/dsh-session";
 import { TokenMeter } from "@deepseek-ai/dsh-token-meter";
+import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
 import { type BranchTimeline } from "@morlay/session-branch";
 import SessionPersistenceSqlite from "../../../session-rdb/src/index.ts";
 import { EmptySettings } from "../../../session-rdb/src/__tests__/testing/helpers.ts";
@@ -34,6 +35,7 @@ async function harness(): Promise<{
   const ctx = new Context();
   await ctx.plugin(EmptySettings);
   await ctx.plugin(SessionStore);
+  new SessionProjectionRegistry(ctx);
   const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path: ":memory:" });
   await ctx.plugin(SessionEditor);
   return { ctx, editor: ctx.sessionEditor, dispose: () => fiber.dispose() };
@@ -643,7 +645,9 @@ describe("SessionEditor rewind/retry/fork", () => {
         ctx.sessionPersistence as unknown as {
           internals(): {
             backend: {
-              getEventRows(id: SessionIdBrand): Promise<Array<{ fSequence: number; fKind: string }>>;
+              getEventRows(
+                id: SessionIdBrand,
+              ): Promise<Array<{ fSequence: number; fKind: string }>>;
             };
           };
         }
@@ -960,7 +964,9 @@ describe("SessionEditor rewind/retry/fork", () => {
         ctx.sessionPersistence as unknown as {
           internals(): {
             backend: {
-              getEventRows(id: SessionIdBrand): Promise<Array<{ fSequence: number; fKind: string }>>;
+              getEventRows(
+                id: SessionIdBrand,
+              ): Promise<Array<{ fSequence: number; fKind: string }>>;
             };
           };
         }

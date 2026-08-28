@@ -1,20 +1,3 @@
-/**
- * 编排层 `SessionEditor`：在 `@morlay/session-branch` 的 provider 抽象之上
- * 组装 rewind / retry / fork 的**完整功能**（参考 `dsh-message-edit` 的
- * 产品语义：edit / reroll / retry + 级联策略 + 版本树）。
- *
- * 分层边界：
- * - 数据层（forkFrom / rewind / readBranchPrefix）由 `ctx.sessionBranch`
- *   （provider 实现，如 `@morlay/session-rdb`）提供；
- * - 本服务只做**编排**：闭合轮次扫描、版本效果事件构造、派生 seed 组装、
- *   rewind 命令透传、版本树投影；
- * - agent 驱动（重放用户输入 / 创建子 agent）是**可选增强**：`agents`
- *   服务以 duck-typed 接口使用（不硬依赖 `@deepseek-ai/dsh-agent`），
- *   缺失时退化为「创建持久化版本」——版本已 durable，之后可随时 resume。
- *
- * @module @morlay/ui-conversation-message-actions
- */
-
 import { Service, type Context } from "@deepseek-ai/cordis";
 import type { AssistantMessage, ContentBlock, UserMessage } from "@deepseek-ai/dsh-llm";
 import type {
@@ -469,7 +452,10 @@ function appendManualTurn(
     },
   );
   appendLogSeedEvent(events, "step/end", { turn, step: 1 });
-  appendLogSeedEvent(events, "turn/end", { turn, reason: { kind: "completed" } });
+  appendLogSeedEvent(events, "turn/end", {
+    turn,
+    reason: { kind: "completed" },
+  });
 }
 
 /**
@@ -484,7 +470,11 @@ function appendManualTurn(
  */
 function appendSeedSuffixLive(session: Session, seedSuffix: readonly SessionEvent[]): void {
   for (const event of seedSuffix) {
-    if (event.ignorable === true) {
+    // 版本效果事件由本项目构造并打 ignorable 标记（上游 SessionEvent 类型
+    // 无此字段，故 duck-type 读取）。它由本项目在拼接 seed 时经
+    // appendLogSeedEvent 显式补齐，运行时存在；此处只判「是否为版本效果」。
+    const ignorable = (event as { ignorable?: boolean }).ignorable === true;
+    if (ignorable) {
       const s = session as unknown as {
         log: SessionEvent[];
         eventsSnapshot?: unknown;
@@ -1015,7 +1005,9 @@ async function handleRoute(
     response.end();
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    respondJson(response, error instanceof TypeError ? 400 : 409, { error: message });
+    respondJson(response, error instanceof TypeError ? 400 : 409, {
+      error: message,
+    });
   }
 }
 

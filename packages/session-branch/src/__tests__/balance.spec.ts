@@ -21,7 +21,12 @@ function turnStart(seq: number, turn: number): SessionEvent {
 }
 
 function turnEnd(seq: number, turn: number): SessionEvent {
-  return { type: "turn/end", seq, time: seq, data: { turn, reason: { kind: "completed" } } } as SessionEvent;
+  return {
+    type: "turn/end",
+    seq,
+    time: seq,
+    data: { turn, reason: { kind: "completed" } },
+  } as SessionEvent;
 }
 
 describe("balanceRewindPrefix", () => {

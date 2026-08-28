@@ -306,11 +306,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     // 重放要求 step/start 配对，因此从尾部剔除孤儿 step/start（见
     // balanceRewindPrefix）。
     const rawKeepLength =
-      toBoundary === -1
-        ? 0
-        : boundaryEvent!.type === "turn/end"
-          ? toBoundary + 1
-          : toBoundary;
+      toBoundary === -1 ? 0 : boundaryEvent!.type === "turn/end" ? toBoundary + 1 : toBoundary;
     const keepLength = balanceRewindPrefix(events.slice(0, rawKeepLength)).length;
 
     const internals = this.persistence.internals();
@@ -399,9 +395,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
           ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
           ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
           ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
-          ...(meta.delegationDepth !== undefined
-            ? { delegationDepth: meta.delegationDepth }
-            : {}),
+          ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
           ...(meta.agentPreset !== undefined ? { agentPreset: meta.agentPreset } : {}),
         },
         revision:
@@ -455,7 +449,10 @@ export class SessionBranchRdb extends SessionBranch {
         // （adopt 会经 prepareCore 补 closers 撤销截断）。
         const persistence = this.ctx.sessionPersistence as unknown as {
           coordinator?: {
-            states?: Map<SessionId, { cursor: number; meta: SessionHeader; materialized: boolean } | undefined>;
+            states?: Map<
+              SessionId,
+              { cursor: number; meta: SessionHeader; materialized: boolean } | undefined
+            >;
           };
         };
         const states = persistence.coordinator?.states;
@@ -536,7 +533,12 @@ export class SessionBranchRdb extends SessionBranch {
     const state = persistence.coordinator?.states?.get(sessionId);
     if (state === undefined) return;
     let cursor = state.cursor;
-    while (live.events[cursor]?.ignorable === true) cursor += 1;
+    // ignorable 是下游信封扩展（上游 SessionEvent 无此字段），结构化读取。
+    while (
+      (live.events[cursor] as (SessionEvent & { ignorable?: unknown }) | undefined)?.ignorable ===
+      true
+    )
+      cursor += 1;
     state.cursor = cursor;
   }
 

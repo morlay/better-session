@@ -42,9 +42,3 @@ lineage）+ 每会话自有后缀（`seq >= seedLength` 的 `session-branch/vers
 
 > 版本效果事件携带 `ignorable: true`（对核心可跳过、**不进 canonical log**），
 > live 会话从内存 log 读到效果，cold 会话 timeline 只有 lineage 骨架。
-
-## 安装
-
-```sh
-nub install @morlay/session-branch   # peer: @deepseek-ai/cordis, dsh-session, dsh-session-persistence
-```

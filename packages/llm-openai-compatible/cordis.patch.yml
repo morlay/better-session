@@ -1,0 +1,24 @@
+- insert:
+    - id: llm-openai-compatible
+      name: "@morlay/dsh-llm-openai-compatible"
+      config:
+        providers:
+          ollama:
+            apiKeyEnv: OLLAMA_API_KEY
+            baseURL: https://ollama.com/v1
+            displayName: Ollama Cloud
+            temperature: 1 # 0..2
+            topP: 0.95
+            reasoning: high
+            defaultContextWindow: 1000000
+            defaultMaxTokens: 65535
+            models:
+              - id: deepseek-v4-flash:0731
+                name: "DeepSeek V4 Flash @ Ollama Cloud"
+                contextWindow: 1000000
+                maxTokens: 65535
+                inputModalities: [text]
+                reasoningEfforts:
+                  off:
+                  high: high
+                  max: max

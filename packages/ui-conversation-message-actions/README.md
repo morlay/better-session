@@ -77,11 +77,5 @@
 依赖 `ctx.sessionBranch`（需先装配 `@morlay/session-rdb` 等
 provider 实现）与 `ctx.sessions`（dsh-session）；`agents` 可选。
 
-## 测试
-
-```sh
-just test packages/ui-conversation-message-actions
-```
-
 端到端装配真实 rdb 后端，验证 retry / rewind / fork / timeline 闭环，
 以及 live 会话的 rewind（内存 log / coordinator cursor 同步）与 agent 重放。

@@ -1,25 +1,16 @@
-// MessageItem: simple chat nodes — user and consumed-steering bubbles
-// (right-aligned, with clock + copy IconActions; branch lives only under
-// assistant answers), pending steering (copy only), context injection,
-// compaction marker, retry disclosure, and unknown-surface JSON rows.
+// MessageItem: the user / admitted-steering chat node renderer.
+// 新版 `dsh-client-ui-chat` 已内置全部 chat-node 渲染器；本项目仅**替换**
+// `user`/`steering` 两个 key（keyed slot reuse 即替换），在消息动作行上提供
+// edit / retry（新版无此能力）。其余 key 由新版内置渲染器处理。
 
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useState } from "react";
 import type { ReactNode } from "react";
 import type { InjectFace } from "@deepseek-ai/dsh-client-ui-slots";
 import { Button, Modal } from "@deepseek-ai/dsh-client-ui-primitives";
-import type {
-  ModelRetryNode,
-  TurnErrorNode,
-  UserMessageNode,
-} from "@deepseek-ai/dsh-client-runtime/client";
-import { JsonBlock, MessageText, StateDot } from "@deepseek-ai/dsh-client-ui-primitives";
-import type {
-  ChatNodeViewProps,
-  ChatViewSlotProps,
-  RenderMessageImages,
-} from "@deepseek-ai/dsh-client-ui-conversation/client";
-import { CompactionItem } from "./CompactionItem.tsx";
-import { ContextInjectionRow } from "./ContextInjectionRow.tsx";
+import type { UserMessageNode } from "@deepseek-ai/dsh-client-ui-chat/client";
+import { JsonBlock, MessageText } from "@deepseek-ai/dsh-client-ui-primitives";
+import type { ChatNodeViewProps, ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-chat/client";
+import type { RenderMessageImages } from "@deepseek-ai/dsh-client-ui-conversation/client";
 import { MessageIconActions } from "./MessageIconActions.tsx";
 import { MessageEditDialog } from "./MessageEditDialog.tsx";
 import css from "./MessageItem.module.css";
@@ -44,113 +35,6 @@ function contentParts(content: readonly unknown[]): {
     } else rest.push(block);
   }
   return { text: texts.join(""), images, rest };
-}
-
-function retrySeconds(milliseconds: number): number {
-  return Math.max(1, Math.ceil(milliseconds / 1_000));
-}
-
-interface RetryCountdown {
-  deadline: number;
-  seconds: number;
-}
-
-function ModelRetryItem({
-  node,
-  active,
-  t,
-}: {
-  node: ModelRetryNode;
-  active: boolean;
-  t: ChatViewSlotProps["t"];
-}) {
-  // Anchor the host-scheduled delay to this browser's first render of the
-  // retry node. Host event time and Date.now() may belong to different clocks.
-  const deadline = useMemo(() => Date.now() + node.delayMs, [node.delayMs, node.seq]);
-  const scheduledSeconds = retrySeconds(node.delayMs);
-  const maximum = node.mode === "normal" ? node.maxRetries : "∞";
-  const [countdown, setCountdown] = useState<RetryCountdown>(() => ({
-    deadline,
-    seconds: retrySeconds(deadline - Date.now()),
-  }));
-  const remainingSeconds =
-    countdown.deadline === deadline ? countdown.seconds : retrySeconds(deadline - Date.now());
-
-  useEffect(() => {
-    if (!active) return;
-    const updateCountdown = (): number => {
-      const next = retrySeconds(deadline - Date.now());
-      setCountdown((current) =>
-        current.deadline === deadline && current.seconds === next
-          ? current
-          : { deadline, seconds: next },
-      );
-      return next;
-    };
-    if (updateCountdown() === 1) return;
-    const timer = window.setInterval(() => {
-      if (updateCountdown() === 1) window.clearInterval(timer);
-    }, 250);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [active, deadline]);
-
-  const label = active
-    ? t("message.retry.active")
-    : node.retryState === "cancelled"
-      ? t("message.retry.cancelled")
-      : node.retryState === "started"
-        ? t("message.retry.started")
-        : t("message.retry.scheduled");
-  const seconds = active ? remainingSeconds : scheduledSeconds;
-
-  return (
-    <details className={css.retryRow} data-active={active || undefined}>
-      <summary className={css.retrySummary}>
-        <span className={css.retryText} role="status">
-          {t("message.retry.status", { label, retry: node.retry, maximum, seconds })}
-        </span>
-      </summary>
-      <div className={css.retryDetails}>
-        <div>
-          <span className={css.retryDetailLabel}>{t("message.retry.delay")}</span>
-          {Math.round(node.delayMs)}ms
-        </div>
-        <div>
-          <span className={css.retryDetailLabel}>{t("message.retry.failure")}</span>
-          {node.failure.message}
-        </div>
-      </div>
-    </details>
-  );
-}
-
-/** Persistent, turn-positioned feedback for a terminal failure. */
-function TurnErrorItem({ node, t }: { node: TurnErrorNode; t: ChatViewSlotProps["t"] }) {
-  return (
-    <div className={css.turnErrorRow} role="status">
-      <StateDot state="error" className={css.turnErrorDot} />
-      <div className={css.turnErrorCopy}>
-        <span className={css.turnErrorTitle}>{t("message.turnError")}</span>
-        <span className={css.turnErrorMessage}>{node.message}</span>
-      </div>
-      {node.code !== undefined && <code className={css.turnErrorCode}>{node.code}</code>}
-    </div>
-  );
-}
-
-/** Persistent, turn-positioned notice for a turn ended at the output-token cap. */
-function TurnMaxTokensItem({ t }: { t: ChatViewSlotProps["t"] }) {
-  return (
-    <div className={css.turnErrorRow} role="status">
-      <StateDot state="warning" className={css.turnErrorDot} />
-      <div className={css.turnErrorCopy}>
-        <span className={css.maxTokensTitle}>{t("message.maxTokens")}</span>
-        <span className={css.turnErrorMessage}>{t("message.maxTokens.hint")}</span>
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -193,22 +77,19 @@ function UserStyleBubble({
   content,
   renderMessageImages,
   actions,
-  pending = false,
   t,
 }: {
   content: readonly unknown[];
   renderMessageImages: RenderMessageImages;
   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
   actions?: (text: string) => ReactNode;
-  /** Whether this is the Host-authoritative pre-admission steering projection. */
-  pending?: boolean;
   t: ChatViewSlotProps["t"];
 }): ReactNode {
   const { text, images, rest } = contentParts(content);
   const truncated = (total: number): string => t("json.truncated", { total });
   const showBubble = text !== "" || rest.length > 0;
   return (
-    <div className={css.userRow} data-pending-steering={pending || undefined} data-time-hover-root>
+    <div className={css.userRow} data-time-hover-root>
       <div className={css.userStack}>
         {renderMessageImages({ images, align: "end" })}
         {showBubble && (
@@ -227,34 +108,6 @@ function UserStyleBubble({
       </div>
       {actions?.(text)}
     </div>
-  );
-}
-
-/**
- * Render one Host-authoritative pending steering item with the same visual
- * language as its eventual durable transcript node.
- * @param props - Pending message content and conversation translator.
- * @returns the pending steering bubble.
- */
-export function PendingSteeringBubble({
-  content,
-  renderMessageImages,
-  t,
-}: {
-  content: readonly unknown[];
-  renderMessageImages: RenderMessageImages;
-  t: ChatViewSlotProps["t"];
-}): ReactNode {
-  return (
-    <UserStyleBubble
-      content={content}
-      renderMessageImages={renderMessageImages}
-      pending
-      t={t}
-      actions={(text) => (
-        <MessageIconActions text={text} clock="start" className={css.actions} t={t} />
-      )}
-    />
   );
 }
 
@@ -352,73 +205,5 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
         )}
       />
     </>
-  );
-});
-
-/** Injected-context keyed Chat renderer. */
-export const ContextMessageNodeView = memo(function ContextMessageNodeView({
-  node,
-  t,
-}: ChatNodeViewProps<"context">) {
-  const data = node.data;
-  return (
-    <ContextInjectionRow
-      content={data.content}
-      source={data.source}
-      provenance={data.provenance}
-      form={data.form}
-      t={t}
-    />
-  );
-});
-
-/** Automatic compaction keyed Chat renderer. */
-export const CompactionNodeView = memo(function CompactionNodeView({
-  node,
-  t,
-}: ChatNodeViewProps<"compaction">) {
-  return <CompactionItem node={node.data} t={t} />;
-});
-
-/** Correlated retry-chain keyed Chat renderer. */
-export const RetryNodeView = memo(function RetryNodeView({
-  node,
-  t,
-}: ChatNodeViewProps<"model-retry">) {
-  const data = node.data;
-  return (
-    <ModelRetryItem node={data.current} active={data.current.retryState === "scheduled"} t={t} />
-  );
-});
-
-/** Terminal turn-error keyed Chat renderer. */
-export const TurnErrorNodeView = memo(function TurnErrorNodeView({
-  node,
-  t,
-}: ChatNodeViewProps<"turn-error">) {
-  return <TurnErrorItem node={node.data} t={t} />;
-});
-
-/** Max-tokens turn-end notice keyed Chat renderer. */
-export const TurnMaxTokensNodeView = memo(function TurnMaxTokensNodeView({
-  t,
-}: ChatNodeViewProps<"turn-max-tokens">) {
-  return <TurnMaxTokensItem t={t} />;
-});
-
-/** Explicit unknown-surface keyed Chat renderer. */
-export const UnknownNodeView = memo(function UnknownNodeView({
-  node,
-  t,
-}: ChatNodeViewProps<"unknown">) {
-  const data = node.data;
-  return (
-    <div className={css.contextRow}>
-      <JsonBlock
-        label={t("message.unknownSurface", { type: data.type })}
-        payload={data.data}
-        truncatedLabel={(total) => t("json.truncated", { total })}
-      />
-    </div>
   );
 });

@@ -22,7 +22,7 @@ import type {
   SurfaceEventType,
   SurfaceIntent,
 } from "@deepseek-ai/dsh-session";
-import { CallId, MessageId, createMessage, freezeMessage } from "@deepseek-ai/dsh-llm";
+import { ToolCallId, MessageId, createMessage, freezeMessage } from "@deepseek-ai/dsh-llm";
 import type { SessionPersistence } from "@deepseek-ai/dsh-session-persistence";
 
 /** A backend under test plus its teardown. */
@@ -239,7 +239,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
               message: createMessage({
                 role: "assistant",
                 content: [
-                  { type: "tool-call", id: CallId("call-x"), name: "bash", arguments: "{}" },
+                  { type: "tool-call", id: ToolCallId("call-x"), name: "bash", arguments: "{}" },
                 ],
                 source: {
                   kind: "model",
@@ -273,8 +273,8 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         const synthetic = loaded.events.find((e) => e.type === "tool/result");
         expect(synthetic?.type === "tool/result" && synthetic.data).toMatchObject({
           message: {
-            source: { kind: "tool", callId: CallId("call-x") },
-            content: [{ type: "tool-result", toolCallId: CallId("call-x"), isError: true }],
+            source: { kind: "tool", callId: ToolCallId("call-x") },
+            content: [{ type: "tool-result", toolCallId: ToolCallId("call-x"), isError: true }],
           },
           error: { code: TOOL_NOT_STARTED },
         });
@@ -284,7 +284,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         const callId =
           call?.type === "assistant/message" &&
           call.data.message.content.find((b) => b.type === "tool-call");
-        expect(callId && callId.type === "tool-call" && callId.id).toBe(CallId("call-x"));
+        expect(callId && callId.type === "tool-call" && callId.id).toBe(ToolCallId("call-x"));
       } finally {
         await dispose();
       }
@@ -308,7 +308,12 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
               message: createMessage({
                 role: "assistant",
                 content: [
-                  { type: "tool-call", id: CallId("call-risk"), name: "write", arguments: "{}" },
+                  {
+                    type: "tool-call",
+                    id: ToolCallId("call-risk"),
+                    name: "write",
+                    arguments: "{}",
+                  },
                 ],
                 source: {
                   kind: "model",
@@ -323,7 +328,13 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
             type: "tool/call",
             seq: 3,
             time: 4,
-            data: { turn: 1, step: 1, callId: CallId("call-risk"), name: "write", arguments: "{}" },
+            data: {
+              turn: 1,
+              step: 1,
+              callId: ToolCallId("call-risk"),
+              name: "write",
+              arguments: "{}",
+            },
           },
         ]);
 
@@ -351,7 +362,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
           .find((message) => message.content.some((block) => block.type === "tool-result"));
         expect(resumedResult?.content[0]).toMatchObject({
           type: "tool-result",
-          toolCallId: CallId("call-risk"),
+          toolCallId: ToolCallId("call-risk"),
           isError: true,
         });
       } finally {

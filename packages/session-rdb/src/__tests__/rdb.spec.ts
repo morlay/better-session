@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { CallId, createMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
+import { ToolCallId, createMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { EmptySettings } from "./testing/helpers.ts";
 import { Context } from "@deepseek-ai/cordis";
@@ -223,13 +223,13 @@ describe("eventDimensions", () => {
       type: "tool/call",
       seq: 4,
       time: 5,
-      data: { turn: 1, step: 1, callId: CallId("call-1"), name: "read", arguments: "{}" },
+      data: { turn: 1, step: 1, callId: ToolCallId("call-1"), name: "read", arguments: "{}" },
     });
     expect(dims).toEqual({ role: "function", name: "read", actionId: "call-1" });
   });
 
   it("extracts the call id from tool/result and classifies todo/write as state", () => {
-    const callId = CallId("call-2");
+    const callId = ToolCallId("call-2");
     const result = eventDimensions({
       type: "tool/result",
       seq: 5,
@@ -269,7 +269,9 @@ describe("isEphemeralType / EPHEMERAL_EVENT_TYPES", () => {
 });
 
 describe("isPersistedEvent", () => {
-  const ev = (extra: Partial<SessionEvent> = {}): SessionEvent =>
+  // `ignorable` 是下游信封扩展（上游 SessionEvent 无此字段），测试里
+  // 结构化构造：用 `Partial<SessionEvent & { ignorable?: unknown }>` 表达。
+  const ev = (extra: Partial<SessionEvent & { ignorable?: unknown }> = {}): SessionEvent =>
     ({ type: "plugin/x", seq: 0, time: 1, data: null, ...extra }) as SessionEvent;
 
   it("drops ephemeral types and ignorable events, keeps everything else", () => {

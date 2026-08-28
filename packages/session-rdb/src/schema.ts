@@ -124,9 +124,15 @@ export function isEphemeralType(type: string): boolean {
  * carried as an ignorable seed event: it stays in the LIVE log but is NOT
  * persisted here — the branch provider persists it in its own version table
  * (`t_branch_versions`), keeping canonical-log semantics intact.
+ *
+ * `ignorable` is a downstream envelope extension (upstream `SessionEvent` has
+ * no such field), so it is read structurally from the event record.
  */
 export function isPersistedEvent(event: SessionEvent): boolean {
-  return !isEphemeralType(event.type) && event.ignorable !== true;
+  return (
+    !isEphemeralType(event.type) &&
+    (event as SessionEvent & { ignorable?: unknown }).ignorable !== true
+  );
 }
 
 /**

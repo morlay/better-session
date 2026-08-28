@@ -2,81 +2,30 @@
 
 DeepSeek Harness 的**分支式会话编辑** monorepo：在不修改上游
 `@deepseek-ai/*` 代码的前提下，为会话提供 **就地编辑 / 重试 / 分支**
-（rewind / retry / fork）闭环——GUI 里直接编辑用户消息、重试任意回合，
-重写**同一会话**（session id 不变），只有分支才派生新 id。
+（rewind / retry / fork）闭环。本文件只是索引，详细内容见各项目文档。
 
-## 快速开始
+## 项目
 
-### 1. 安装（发布后）
+| 项目                                        | 职责                                                                                       | 文档                                                            |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `packages/better-session/`                  | profile 聚合 bundle（安装 / 使用 / 配置）                                                   | [README](packages/better-session/README.md)                     |
+| `packages/session-branch/`                  | 契约层：`SessionBranchProvider` 抽象 + `SessionBranch` 服务 + 版本树投影                    | [README](packages/session-branch/README.md)                     |
+| `packages/session-rdb/`                     | 实现层：RDB 持久化（`PersistenceBackend`）+ 分支 provider（`SessionBranchProvider`）双服务  | [README](packages/session-rdb/README.md) · [design](packages/session-rdb/docs/design.md) |
+| `packages/ui-conversation-message-actions/` | 编排层 + UI：edit / retry / fork 编排 + `conversation.chat.node` 渲染替换                   | [README](packages/ui-conversation-message-actions/README.md)    |
+| `packages/llm-openai-compatible/`           | LLM 适配层：OpenAI-compatible 多 provider 路由（可选组件）                                  | [README](packages/llm-openai-compatible/README.md)              |
+| `apps/dsh-custom/`                          | 本地 GUI 应用壳（dsh-web-desktopify）                                                       | `just custom::dev` / `just custom::bundle`                      |
+| `vendor/`                                   | 上游 deepseek-harness side workspace（更新流程）                                            | [README](vendor/README.md)                                      |
 
-一个 bundle 包装齐全部依赖组件：
+## 文档
 
-```sh
-dsh plugin --profile web add "@morlay/better-session"
-```
+| 文档                                                  | 内容                       |
+| ----------------------------------------------------- | -------------------------- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)          | 整体架构（布局 / 分层 / 核心设计 / 装配） |
+| [docs/CODING_GUIDELINE.md](docs/CODING_GUIDELINE.md)  | 项目约定（命令 / 代码 / 测试 / 发布）     |
+| [AGENTS.md](AGENTS.md)                                | agent 工作指引（索引）     |
 
-安装 `@morlay/better-session` 会自动带上子包（`@morlay/session-branch`、
-`@morlay/session-rdb`、`@morlay/ui-conversation-message-actions`），并由
-bundle 的 patch 自动装配：
+## 快速入口
 
-- `ctx.sessionPersistence` ← RDB（SQLite / PostgreSQL）持久化后端
-- `ctx.sessionBranch` ← rewind / fork 数据层
-- `ctx.sessionEditor` ← edit / retry / fork 编排（HTTP：`/session-editor`）
-- `conversation.chat.node` ← 渲染替换（user 消息行内编辑 / 重试按钮）
-
-### 2. 使用
-
-装配后即可在 GUI 会话中：
-
-- **编辑** user 消息 → 就地重写并重放（重新生成回复）
-- **重试** 任意闭合回合 → 就地重放该回合输入（带确认弹窗）
-- **分支**（fork）→ 从任意闭合边界派生**新会话**
-
-也可以直接调用服务：
-
-```ts
-// 编排层（host）
-await ctx.sessionEditor.retry({ action: "retry", sessionId, turn: 2, cascade: "truncate" });
-// 数据层
-await ctx.sessionBranch.rewind(sessionId, 5);
-await ctx.sessionBranch.forkFrom(sourceId, { atSeq: 6, childSessionId });
-```
-
-### 3. 配置（rdb）
-
-`$DSH_HOME/settings.yaml`：
-
-```yaml
-session-rdb:
-  type: sqlite # 或 postgres + connectionString
-  path: /abs/path/to/sessions.sqlite
-```
-
-## 本地开发（monorepo）
-
-```sh
-just dep      # 安装依赖
-just build    # 构建全部包（tsdown）
-just test     # vitest（含 PostgreSQL 契约测试，需 TEST_PG_URL）
-just lint     # oxlint
-just dev      # build + setup-dsh + 启动 web（dsh --profile web，DSH_HOME=.dsh-store）
-```
-
-## 包一览
-
-| 包                                        | 职责                                                                                       | 文档                                                         |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
-| `@morlay/session-branch`                  | 契约层：`SessionBranchProvider` 抽象 + `SessionBranch` 服务 + 版本树投影                   | [README](packages/session-branch/README.md)                  |
-| `@morlay/session-rdb`                     | 实现层：RDB 持久化（`PersistenceBackend`）+ 分支 provider（`SessionBranchProvider`）双服务 | [README](packages/session-rdb/README.md)                     |
-| `@morlay/ui-conversation-message-actions` | 编排层 + UI：edit / retry / fork 编排 + `conversation.chat.node` 渲染替换                  | [README](packages/ui-conversation-message-actions/README.md) |
-| `@morlay/better-session`                  | profile 聚合 bundle：装配以上全部 + 官方 web-app                                           | 本文件                                                       |
-
-## 设计要点
-
-- **不改上游代码**：全部在插件层实现。
-- **就地编辑**：edit / retry / reroll 用 `rewind` 截断 + `append` 重写同一
-  会话（session id 不变、版本树单根）；只有 `fork` 创建新 id。
-- **`rewind` 支持 live 会话**：GUI 打开中的会话也能就地编辑（截断 RDB 与
-  内存 log、同步 coordinator cursor、重置 agent 轮次游标）。
-- **`ignorable` 版本效果**：分支版本事件不进 canonical log，非 branch 读者
-  安全跳过。
+- 安装 / 使用 / 配置：[packages/better-session/README.md](packages/better-session/README.md)
+- 本地开发命令：[justfile](justfile)
+- 技术栈与上游版本：[mise.toml](mise.toml)

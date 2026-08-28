@@ -15,7 +15,9 @@ import type { SessionEventMap } from "@deepseek-ai/dsh-session";
 // 编译期诊断：module augmentation 后 `keyof SessionEventMap` 可见，但 dsh-session
 // 内已解析的 `SessionEventType` 别名（= keyof SessionEventMap）不会重求值——
 // 因此 `SessionEvent<"session-branch/version">` 泛型不可用，守卫/消费走结构化。
-type _BranchKeyCheck = "session-branch/version" extends keyof SessionEventMap ? true : false;
+type _BranchKeyCheck = "session-branch/version" extends keyof SessionEventMap
+  ? true
+  : false;
 export const _branchKeyVisible: _BranchKeyCheck = true as const;
 
 /** 版本效果事件的数据结构版本（独立于 session 的 SESSION_FORMAT_VERSION）。 */
@@ -28,7 +30,8 @@ export type CascadePolicy = "truncate" | "preserve";
 export type VersionOperation = "edit" | "reroll" | "retry" | "fork" | "rewind";
 
 /** 可编辑的模型可见块分类。 */
-export type EditableBlockKind = "user" | "assistant.reasoning" | "assistant.response";
+export type EditableBlockKind =
+  "user" | "assistant.reasoning" | "assistant.response";
 
 /** 一个版本效果的「正向」半边：记录做了什么、改了什么。 */
 export interface SessionBranchEffect {
@@ -181,6 +184,7 @@ export function isSessionBranchVersionEvent(
 ): event is SessionBranchVersionEventEnvelope {
   return (
     event.type === "session-branch/version" &&
-    (event.data as { schemaVersion?: unknown }).schemaVersion === SESSION_BRANCH_VERSION_SCHEMA
+    (event.data as { schemaVersion?: unknown }).schemaVersion ===
+      SESSION_BRANCH_VERSION_SCHEMA
   );
 }

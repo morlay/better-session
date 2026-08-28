@@ -1,0 +1,35 @@
+{
+  "name": "dsh-custom-next",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "icon.svg",
+    "cordis.patch.yml"
+  ],
+  "dependencies": {
+    "@deepseek-ai/dsh": "workspace:^",
+    "@morlay/better-session": "workspace:^",
+    "@morlay/dsh-llm-openai-compatible": "workspace:^"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@morlay/better-session",
+        "@morlay/dsh-llm-openai-compatible"
+      ]
+    },
+    "desktop": {
+      "id": "ai.deepseek.dsh.custom",
+      "window": {
+        "width": 1280,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600
+      },
+      "icon": "icon.svg",
+      "dshHome": "xdg"
+    }
+  }
+}

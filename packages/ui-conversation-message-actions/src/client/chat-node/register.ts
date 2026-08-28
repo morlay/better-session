@@ -1,87 +1,52 @@
 /**
  * Register this package's chat-node renderers behind the keyed
- * `conversation.chat.node` seat. Every key is re-registered at `priority: -1`
- * so the lowest priority wins and the upstream renderers are shadowed without
- * touching `@deepseek-ai/*`. The per-session editor face is injected so the
- * copied renderers can drive edit / retry directly.
+ * `conversation.chat.node` seat (新版 keyed slot). 新版把 `user`/`steering`
+ * 渲染器内置在 `dsh-client-ui-chat`；本项目仅**替换** `user`/`steering`，
+ * 通过注册时的自定义 inject face 注入 `SessionEditorFace`，在消息动作行上
+ * 提供 edit / retry（新版无此能力）。其余 key（context / assistant /
+ * compaction / retry-chain / turn-error / turn-max-tokens / unknown 等）由
+ * 新版内置渲染器继续处理，本项目不再重复注册。
  */
 
 import type { Context } from "@deepseek-ai/cordis";
-import type { SessionId } from "@deepseek-ai/dsh-client-runtime/client";
+import type { SessionId } from "@deepseek-ai/dsh-session";
 import "@deepseek-ai/dsh-client-ui-conversation/client";
-import { AssistantNodeView } from "./AssistantNodeView.tsx";
-import { CommandNodeView, ManualCompactionNodeView } from "./CommandNodeView.tsx";
-import {
-  CompactionNodeView,
-  ContextMessageNodeView,
-  RetryNodeView,
-  TurnErrorNodeView,
-  TurnMaxTokensNodeView,
-  UnknownNodeView,
-  UserMessageNodeView,
-} from "./MessageItem.tsx";
-import { TurnTailNodeView } from "./TurnTailNodeView.tsx";
+import "@deepseek-ai/dsh-client-ui-chat/client";
+import type {} from "@deepseek-ai/dsh-client-ui-renderer/client";
+import { UserMessageNodeView } from "./MessageItem.tsx";
 import type { SessionEditorController } from "../controller.ts";
 
 /** `conversation` 字典命名空间（与上游一致）。 */
 const NS = "conversation";
 
-/** 注册全部 chat-node key；priority -1 替换上游渲染。 */
+/**
+ * 注册本项目替换的 chat-node key（user / steering）。
+ * 新版 keyed slot 复用同一 key 即替换该节点的内置渲染器。注册时的 inject
+ * 返回项目 per-session 的 `SessionEditorFace`（含 edit / retry），组件经
+ * `InjectFace<SessionEditorFace>` 接收。
+ * @param ctx - client root context。
+ * @param controllerFor - 解析 per-session editor controller。
+ */
 export function registerChatNodeRenderers(
   ctx: Context,
   controllerFor: (sessionId: SessionId) => SessionEditorController,
 ): void {
-  const inject = (sessionId: SessionId) => controllerFor(sessionId).face;
+  const injectFace = (sessionId: SessionId) => controllerFor(sessionId).face;
 
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "user", locale: NS, priority: -1, inject },
-    UserMessageNodeView,
-  );
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "steering", locale: NS, priority: -1, inject },
-    UserMessageNodeView,
-  );
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "context", locale: NS, priority: -1, inject },
-    ContextMessageNodeView,
-  );
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "assistant-step", locale: NS, priority: -1, inject },
-    AssistantNodeView,
-  );
-  ctx.slots.register(
-    // command / turn-tail 的 children 由上游声明（commandview / turnTail /
-    // assistant-actions）；shadow 注册不重复声明，仅替换渲染器。
-    { name: "conversation.chat.node", key: "command", locale: NS, priority: -1, inject } as never,
-    CommandNodeView as never,
-  );
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "manual-compaction", locale: NS, priority: -1, inject },
-    ManualCompactionNodeView,
-  );
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "compaction", locale: NS, priority: -1, inject },
-    CompactionNodeView,
-  );
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "model-retry", locale: NS, priority: -1, inject },
-    RetryNodeView,
-  );
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "turn-error", locale: NS, priority: -1, inject },
-    TurnErrorNodeView,
-  );
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "turn-max-tokens", locale: NS, priority: -1, inject },
-    TurnMaxTokensNodeView,
-  );
-  ctx.slots.register(
-    // 见 command：turnTail / assistant-actions 的 children 由上游声明。
-    { name: "conversation.chat.node", key: "turn-tail", locale: NS, priority: -1, inject } as never,
-    TurnTailNodeView as never,
-  );
-  ctx.slots.register(
-    { name: "conversation.chat.node", key: "unknown", locale: NS, priority: -1, inject },
-    UnknownNodeView,
-  );
+  for (const key of ["user", "steering"] as const) {
+    ctx.slots.inject("conversation.chat.node", () =>
+      ctx.slots.register(
+        {
+          name: "conversation.chat.node",
+          key,
+          locale: NS,
+          // keyed slot 同 key 同 priority 会抛错；priority -1 让本项目
+          // 渲染器以最低优先级渲染，shadow 上游默认（priority 0）注册。
+          priority: -1,
+          inject: injectFace,
+        } as never,
+        UserMessageNodeView as never,
+      ),
+    );
+  }
 }

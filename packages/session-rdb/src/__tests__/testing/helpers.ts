@@ -3,9 +3,14 @@
  * 读取配置时回落到 entry config（与无 settings 服务的语义一致，但满足
  * `static inject: ['settings']` 的依赖要求）。
  */
+import { Context } from "@deepseek-ai/cordis";
 import { SettingsProvider, type SettingsNamespace } from "@deepseek-ai/dsh-settings";
 
 export class EmptySettings extends SettingsProvider {
+  constructor(ctx: Context) {
+    super(ctx);
+  }
+
   get writable(): boolean {
     return true;
   }

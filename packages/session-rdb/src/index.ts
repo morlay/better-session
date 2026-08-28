@@ -23,7 +23,7 @@
 
 import { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
-import { settingsNamespace, type SettingsProvider } from "@deepseek-ai/dsh-settings";
+import type { SettingsProvider } from "@deepseek-ai/dsh-settings";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
@@ -135,7 +135,7 @@ export type Config =
  *
  * Configuration resolution: `$DSH_HOME/settings.yaml` 的
  * `session-rdb` namespace（settings 服务）覆盖 cordis 层 entry
- * config，见 {@link installSettingsSection}。
+ * config，见 {@link SettingsProvider.register}。
  */
 export class SessionPersistenceRdb
   extends SessionPersistence
@@ -157,7 +157,7 @@ export class SessionPersistenceRdb
   ]);
 
   /** settings namespace：`$DSH_HOME/settings.yaml` 的 `session-rdb` section。 */
-  static readonly settingsNs = settingsNamespace("session-rdb");
+  static readonly settingsNs = "session-rdb";
 
   /**
    * Backend label for the coordinator's dispose diagnostics. Intentionally
@@ -262,8 +262,16 @@ export class SessionPersistenceRdb
     return this.coordinator.readFrom(id, fromSeq, signal);
   }
 
-  // One method serves both public `list` and the backend hook; delegating it to
-  // the coordinator would call this hook recursively.
+  /**
+   * Borrow one exact logical view while pinning its reusable prepared Session.
+   * Delegates to the coordinator (same semantics as the upstream sqlite backend).
+   */
+  override borrowSession(
+    id: SessionId,
+    signal?: AbortSignal,
+  ): Promise<import("@deepseek-ai/dsh-session-persistence").BorrowedSessionSource> {
+    return this.coordinator.borrowSession(id, signal);
+  }
 
   // --- PersistenceBackend hooks (the storage primitives) ---
 

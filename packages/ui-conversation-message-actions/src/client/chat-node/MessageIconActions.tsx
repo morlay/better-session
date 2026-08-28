@@ -11,7 +11,7 @@ import {
   Tooltip,
   writeClipboard,
 } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-conversation/client";
+import type { ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-chat/client";
 import {
   formatLatencySeconds,
   formatMessageClock,
@@ -126,7 +126,7 @@ export function MessageIconActions({
             <span className={css.runTimeDot} aria-hidden>
               ·
             </span>{" "}
-            {t("message.ttft", { seconds: formatLatencySeconds(ttftMs) })}
+            {t("stats.ttftAverage", { duration: formatLatencySeconds(ttftMs) })}
           </>
         )}
         {tokensPerSecond !== undefined && (

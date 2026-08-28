@@ -1,8 +1,8 @@
 {
   "$schema": "https://turborepo.org/schema.json",
   "tasks": {
-    "prepare": {
-      "dependsOn": ["^prepare"],
+    "build": {
+      "dependsOn": ["^build"],
       "inputs": ["src/*", "package.json"],
       "outputs": ["lib/*"]
     }
