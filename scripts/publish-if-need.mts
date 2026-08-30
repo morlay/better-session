@@ -33,13 +33,19 @@ const { name, version } = JSON.parse(readFileSync("package.json", "utf8")) as {
 // 只发布 @morlay/* 下的包：上游 @deepseek-ai/* 由 deepseek-harness 自己
 // 发布，apps/* 等其余 workspace 成员不发布。
 if (!name.startsWith("@morlay/")) {
-  console.log(`skip ${name}: only @morlay/* packages are published from this repo`);
+  console.log(
+    `skip ${name}: only @morlay/* packages are published from this repo`,
+  );
   process.exit(0);
 }
 
-const view = spawnSync("npm", ["view", `${name}@${version}`, "version", "--registry", REGISTRY], {
-  encoding: "utf8",
-});
+const view = spawnSync(
+  "npm",
+  ["view", `${name}@${version}`, "version", "--registry", REGISTRY],
+  {
+    encoding: "utf8",
+  },
+);
 if (view.status === 0) {
   console.log(`skip ${name}: ${version} already published`);
   process.exit(0);
@@ -50,7 +56,17 @@ if (!view.stderr.includes("E404")) {
 }
 
 console.log(`to publish: ${name}@${version}`);
-const publish = spawnSync("pnpm", ["publish", "--access=public", "--registry", REGISTRY], {
-  stdio: "inherit",
-});
+const publish = spawnSync(
+  "pnpm",
+  [
+    "publish",
+    "--access=public",
+    `--publish-branch=${process.env["GITHUB_REF_NAME"] ?? "main"}`,
+    "--registry",
+    REGISTRY,
+  ],
+  {
+    stdio: "inherit",
+  },
+);
 if (publish.status !== 0) process.exit(publish.status ?? 1);

@@ -1,6 +1,6 @@
 {
   "name": "@morlay/ui-conversation-message-actions",
-  "version": "0.0.11",
+  "version": "0.0.12-0",
   "description": "Rewind / retry / fork orchestration (host) plus conversation.chat.node renderer replacement (browser) — message edit / retry actions on user bubbles.",
   "keywords": [
     "conversation-chat-node",

@@ -7,7 +7,7 @@ sync: && patch
 patch:
     rm -rf apps/cli/tests/profiles/acp/cordis.yml
     rm -rf packages/subagent/subagent-codex packages/subagent/subagent-claude-code
-    sed -i '' '/subagent-claude-code/d; /subagent-codex/d' tsconfig.host.json
+    sd '^.*subagent-(?:claude-code|codex).*$' '' tsconfig.host.json
 
 [working-directory("deepseek-harness")]
 build:

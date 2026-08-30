@@ -12,7 +12,7 @@ autoInstallPeers: true
 
 allowBuilds:
   "@deepseek-ai/dsh-subprocess-local": true
-  '@deepseek-ai/dsh-subprocess-local@file:vendor/deepseek-harness/packages/subprocess/subprocess-local': true
+  "@deepseek-ai/dsh-subprocess-local@file:vendor/deepseek-harness/packages/subprocess/subprocess-local": true
   "@google/genai": true
   esbuild: true
   koffi: true

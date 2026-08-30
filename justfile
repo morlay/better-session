@@ -28,13 +28,18 @@ lint:
     pnpm exec oxlint .
 
 publish:
-    pnpm exec -r tsx {{ justfile_directory() }}/scripts/publish-if-need.mts
+    pnpm -r --filter './packages/*' exec tsx {{ justfile_directory() }}/scripts/publish-if-need.mts
 
 build *args:
     @pnpm -r --filter './packages/*' run build {{ args }}
 
 version *args:
     pnpm -r --filter './packages/*' version {{ args }}
-    
+
 test:
     pnpm exec vitest run
+
+prepare-vendor:
+    just vendor sync
+    just dep
+    just vendor build
