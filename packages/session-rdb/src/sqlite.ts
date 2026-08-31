@@ -27,6 +27,7 @@ import {
 import { createTablesSql } from "./adapters/index.ts";
 import { sqliteTableDefs } from "./entities/index.ts";
 import { sessionConflictRow, sessionInsertRow } from "./log.ts";
+import { migrateSqliteV1ToV2 } from "./migrate.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   SCHEMA_VERSION,
@@ -149,13 +150,16 @@ function configureDatabase(
           `session database at "${path}" has an unversioned schema or application identity`,
         );
       }
-      if (onDisk !== 0 && onDisk !== SCHEMA_VERSION) {
+      if (onDisk === 1) {
+        // 启动时自动迁移 v1 → v2（同一写锁事务内，失败整体回滚）。
+        migrateSqliteV1ToV2(db);
+      } else if (onDisk !== 0 && onDisk !== SCHEMA_VERSION) {
         throw new Error(
           `session database at "${path}" has schema version ${onDisk}, incompatible with this build (${SCHEMA_VERSION})`,
         );
       }
       if (
-        onDisk === SCHEMA_VERSION &&
+        (onDisk === SCHEMA_VERSION || onDisk === 1) &&
         applicationId !== SESSION_PERSISTENCE_SQLITE_APPLICATION_ID
       ) {
         throw new Error(

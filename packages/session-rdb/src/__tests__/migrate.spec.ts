@@ -11,6 +11,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { Context } from "@deepseek-ai/cordis";
+import { SessionId, SessionStore } from "@deepseek-ai/dsh-session";
+import SessionPersistenceSqlite from "../index.ts";
+import { EmptySettings } from "./testing/helpers.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -158,6 +162,33 @@ describe("migrate v1 → v2", () => {
     runMigration(path);
     // 第二次跑：已是 v2，直接返回。
     runMigration(path);
+    const db = new DatabaseSync(path, { readOnly: true });
+    const { user_version: version } = db.prepare("PRAGMA user_version").get() as {
+      user_version: number;
+    };
+    expect(version).toBe(2);
+    db.close();
+  });
+
+  it("auto-migrates a v1 database on backend open (startup path)", async () => {
+    const path = await freshDbPath();
+    createV1Database(path);
+
+    // 直接打开后端（openDatabase 的初始化事务内自动迁移 v1 → v2）。
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
+    try {
+      // 迁移后会话可正常读取（v2 形状）。
+      const loaded = await ctx.sessionPersistence.load(SessionId("s1"));
+      expect(loaded.events).toHaveLength(1);
+      expect(loaded.events[0]?.type).toBe("user/message");
+      expect(loaded.events[0]?.seq).toBe(0);
+    } finally {
+      await fiber.dispose();
+    }
+
     const db = new DatabaseSync(path, { readOnly: true });
     const { user_version: version } = db.prepare("PRAGMA user_version").get() as {
       user_version: number;
