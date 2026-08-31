@@ -28,33 +28,12 @@ import { createTablesSql, toPostgresSchema } from "./adapters/index.ts";
 import { postgresTableDefs } from "./entities/index.ts";
 import { sessionConflictRow, sessionInsertRow } from "./log.ts";
 
-/**
- * PostgreSQL drizzle tables derived from the single entity definitions in
- * `src/entities/` (type safety carried by the hand-written row interfaces in
- * `backend.ts`, same as the SQLite side).
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const pgTables: Record<string, any> = toPostgresSchema(postgresTableDefs);
-
-/** `t_persistence_state` — the singleton row holding the store identity. */
-export const pgPersistenceState = pgTables["t_persistence_state"];
-
-/** `t_schema_meta` — PG's schema-version / application-identity key-value store. */
-export const pgSchemaMeta = pgTables["t_schema_meta"];
-
-/** `t_sessions` — the out-of-log metadata plus the playpen-style head cursor. */
-export const pgSessions = pgTables["t_sessions"];
-
-/** `t_events` — the globally addressable persisted event entity. */
-export const pgEvents = pgTables["t_events"];
-
-/** `t_session_events` — the session↔event bridge. */
-export const pgSessionEvents = pgTables["t_session_events"];
-
 /** PostgreSQL 后端的打开参数。 */
 export interface PostgresBackendOptions {
   /** Revision 源限定前缀（不含 store id），如 `postgres:host:port:database`。 */
   identityBase: string;
+  /** PostgreSQL schema 持有会话表（默认 `public`）。 */
+  schema?: string;
   /** 关闭底层连接（生产 `pool.end()`；测试 `pglite.close()`）。 */
   close: () => Promise<void>;
 }
@@ -62,32 +41,42 @@ export interface PostgresBackendOptions {
 /**
  * PostgreSQL 存储后端。构造时注入 drizzle PG 实例；{@link open} 建表并做
  * schema 版本/应用身份校验（`t_schema_meta`，替代 SQLite 的 PRAGMA）。
+ * 表对象按配置的 schema 构建（`pgSchema(name).table`，显式限定，不依赖
+ * search_path）。
  */
 export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> implements Backend {
   readonly kind = "postgres" as const;
   storeIdentity!: string;
 
+  /** 按配置 schema 构建的 drizzle 表对象（默认 public）。 */
+  private readonly tables: Record<string, any>;
+
   constructor(
     private readonly db: PgAsyncDatabase<THKT>,
     private readonly options: PostgresBackendOptions,
-  ) {}
+  ) {
+    this.tables = toPostgresSchema(postgresTableDefs, this.options.schema ?? "public");
+  }
 
   async open(): Promise<void> {
     const storeId = await this.db.transaction(async (tx) => {
+      const schema = this.options.schema ?? "public";
       // 探测必须在建表之前：t_schema_meta 存在与否区分「全新库」与「已有库」。
-      // `to_regclass` 是数据库元数据查询，drizzle 没有对应 API。
+      // `to_regclass` 是数据库元数据查询，drizzle 没有对应 API。schema 限定
+      // 显式引用（不依赖 search_path）。
+      const qualifiedMeta = schema === "public" ? "t_schema_meta" : `"${schema}".t_schema_meta`;
       const probe = (await tx.execute(
-        sql`SELECT to_regclass('t_schema_meta') IS NOT NULL AS exists`,
+        sql`SELECT to_regclass(${qualifiedMeta}) IS NOT NULL AS exists`,
       )) as unknown as { rows: { exists: boolean }[] };
       const metaExists = probe.rows[0]?.exists === true;
       // DDL 由实体描述生成（一次一条：PG 的 extended query protocol 拒绝
       // 多语句字符串，且 DDL 事务性，逐条执行保持初始化原子）。
-      for (const statement of createTablesSql("postgres", postgresTableDefs)) {
+      for (const statement of createTablesSql("postgres", postgresTableDefs, schema)) {
         await tx.execute(sql.raw(statement));
       }
       if (!metaExists) {
         await tx
-          .insert(pgSchemaMeta)
+          .insert(this.tables["t_schema_meta"])
           .values([
             { fKey: "schema_version", fValue: String(SCHEMA_VERSION) },
             { fKey: "application_id", fValue: String(SESSION_PERSISTENCE_SQLITE_APPLICATION_ID) },
@@ -111,14 +100,14 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
         );
       }
       await tx
-        .insert(pgPersistenceState)
+        .insert(this.tables["t_persistence_state"])
         .values({ fSingleton: 1, fStoreId: randomUUID() })
         .onConflictDoNothing()
         .execute();
       const store = await tx
-        .select({ fStoreId: pgPersistenceState.fStoreId })
-        .from(pgPersistenceState)
-        .where(eq(pgPersistenceState.fSingleton, 1))
+        .select({ fStoreId: this.tables["t_persistence_state"].fStoreId })
+        .from(this.tables["t_persistence_state"])
+        .where(eq(this.tables["t_persistence_state"].fSingleton, 1))
         .execute();
       const storeId = store[0]?.fStoreId;
       if (storeId === undefined || storeId.length === 0) {
@@ -135,7 +124,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
 
   async getSession(id: SessionId): Promise<SessionRow | undefined> {
     return (
-      await this.db.select().from(pgSessions).where(eq(pgSessions.fSessionId, id)).execute()
+      await this.db.select().from(this.tables["t_sessions"]).where(eq(this.tables["t_sessions"].fSessionId, id)).execute()
     )[0] as SessionRow | undefined;
   }
 
@@ -143,24 +132,24 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     id: SessionId,
   ): Promise<Array<{ fSequence: number; fOriginalSeq: number }>> {
     return this.db
-      .select({ fSequence: pgSessionEvents.fSequence, fOriginalSeq: pgSessionEvents.fOriginalSeq })
-      .from(pgSessionEvents)
-      .where(eq(pgSessionEvents.fSessionId, id))
+      .select({ fSequence: this.tables["t_session_events"].fSequence, fOriginalSeq: this.tables["t_session_events"].fOriginalSeq })
+      .from(this.tables["t_session_events"])
+      .where(eq(this.tables["t_session_events"].fSessionId, id))
       .execute();
   }
 
   async getEventRows(id: SessionId, fromSequence?: number): Promise<EventRow[]> {
     const scoped =
       fromSequence === undefined
-        ? this.eventRows(this.db).where(eq(pgSessionEvents.fSessionId, id))
+        ? this.eventRows(this.db).where(eq(this.tables["t_session_events"].fSessionId, id))
         : this.eventRows(this.db).where(
-            and(eq(pgSessionEvents.fSessionId, id), gte(pgSessionEvents.fSequence, fromSequence)),
+            and(eq(this.tables["t_session_events"].fSessionId, id), gte(this.tables["t_session_events"].fSequence, fromSequence)),
           );
-    return scoped.orderBy(pgSessionEvents.fSequence).execute() as unknown as EventRow[];
+    return scoped.orderBy(this.tables["t_session_events"].fSequence).execute() as unknown as EventRow[];
   }
 
   async listSessions(): Promise<SessionRow[]> {
-    return this.db.select().from(pgSessions).execute() as unknown as Promise<SessionRow[]>;
+    return this.db.select().from(this.tables["t_sessions"]).execute() as unknown as Promise<SessionRow[]>;
   }
 
   async transaction<T>(fn: (tx: BackendTx) => Promise<T>): Promise<T> {
@@ -189,9 +178,9 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
 
   private async readMeta(exec: PgAsyncDatabase<THKT>, key: string): Promise<string | undefined> {
     const rows = await exec
-      .select({ fValue: pgSchemaMeta.fValue })
-      .from(pgSchemaMeta)
-      .where(eq(pgSchemaMeta.fKey, key))
+      .select({ fValue: this.tables["t_schema_meta"].fValue })
+      .from(this.tables["t_schema_meta"])
+      .where(eq(this.tables["t_schema_meta"].fKey, key))
       .execute();
     return rows[0]?.fValue;
   }
@@ -204,10 +193,10 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     incarnation: string,
   ): Promise<void> {
     await exec
-      .insert(pgSessions)
+      .insert(this.tables["t_sessions"])
       .values(sessionInsertRow(meta, incarnation))
       .onConflictDoUpdate({
-        target: pgSessions.fSessionId,
+        target: this.tables["t_sessions"].fSessionId,
         set: sessionConflictRow(meta),
       })
       .execute();
@@ -219,9 +208,9 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   ): Promise<Pick<SessionRow, "fHeadEventId" | "fHeadSequence">> {
     const head = (
       await exec
-        .select({ fHeadEventId: pgSessions.fHeadEventId, fHeadSequence: pgSessions.fHeadSequence })
-        .from(pgSessions)
-        .where(eq(pgSessions.fSessionId, id))
+        .select({ fHeadEventId: this.tables["t_sessions"].fHeadEventId, fHeadSequence: this.tables["t_sessions"].fHeadSequence })
+        .from(this.tables["t_sessions"])
+        .where(eq(this.tables["t_sessions"].fSessionId, id))
         .execute()
     )[0] as Pick<SessionRow, "fHeadEventId" | "fHeadSequence"> | undefined;
     /* v8 ignore next -- appendBatch/commitRepair always materialize the row before reading the head */
@@ -232,7 +221,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   private async insertEvents(exec: PgAsyncDatabase<THKT>, events: EventInsert[]): Promise<void> {
     if (events.length === 0) return;
     await exec
-      .insert(pgEvents)
+      .insert(this.tables["t_events"])
       .values(events.map((event) => ({ ...event })))
       .execute();
   }
@@ -249,7 +238,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   ): Promise<void> {
     if (rows.length === 0) return;
     await exec
-      .insert(pgSessionEvents)
+      .insert(this.tables["t_session_events"])
       .values(rows.map((row) => ({ ...row })))
       .execute();
   }
@@ -261,17 +250,17 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     headSequence: number,
   ): Promise<void> {
     await exec
-      .update(pgSessions)
+      .update(this.tables["t_sessions"])
       .set({ fHeadEventId: headEventId, fHeadSequence: headSequence })
-      .where(eq(pgSessions.fSessionId, id))
+      .where(eq(this.tables["t_sessions"].fSessionId, id))
       .execute();
   }
 
   private async bumpRevision(exec: PgAsyncDatabase<THKT>, id: SessionId): Promise<void> {
     await exec
-      .update(pgSessions)
-      .set({ fRevision: sql`${pgSessions.fRevision} + 1` })
-      .where(eq(pgSessions.fSessionId, id))
+      .update(this.tables["t_sessions"])
+      .set({ fRevision: sql`${this.tables["t_sessions"].fRevision} + 1` })
+      .where(eq(this.tables["t_sessions"].fSessionId, id))
       .execute();
   }
 
@@ -281,8 +270,8 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     fromSequence: number,
   ): Promise<void> {
     await exec
-      .delete(pgSessionEvents)
-      .where(and(eq(pgSessionEvents.fSessionId, id), gte(pgSessionEvents.fSequence, fromSequence)))
+      .delete(this.tables["t_session_events"])
+      .where(and(eq(this.tables["t_session_events"].fSessionId, id), gte(this.tables["t_session_events"].fSequence, fromSequence)))
       .execute();
   }
 
@@ -293,9 +282,9 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   ): Promise<{ fEventId: string; fSequence: number } | undefined> {
     return (
       await exec
-        .select({ fEventId: pgSessionEvents.fEventId, fSequence: pgSessionEvents.fSequence })
-        .from(pgSessionEvents)
-        .where(and(eq(pgSessionEvents.fSessionId, id), eq(pgSessionEvents.fSequence, sequence)))
+        .select({ fEventId: this.tables["t_session_events"].fEventId, fSequence: this.tables["t_session_events"].fSequence })
+        .from(this.tables["t_session_events"])
+        .where(and(eq(this.tables["t_session_events"].fSessionId, id), eq(this.tables["t_session_events"].fSequence, sequence)))
         .execute()
     )[0] as { fEventId: string; fSequence: number } | undefined;
   }
@@ -306,10 +295,10 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   ): Promise<{ fEventId: string; fSequence: number } | undefined> {
     return (
       await exec
-        .select({ fEventId: pgSessionEvents.fEventId, fSequence: pgSessionEvents.fSequence })
-        .from(pgSessionEvents)
-        .where(eq(pgSessionEvents.fSessionId, id))
-        .orderBy(desc(pgSessionEvents.fSequence))
+        .select({ fEventId: this.tables["t_session_events"].fEventId, fSequence: this.tables["t_session_events"].fSequence })
+        .from(this.tables["t_session_events"])
+        .where(eq(this.tables["t_session_events"].fSessionId, id))
+        .orderBy(desc(this.tables["t_session_events"].fSequence))
         .limit(1)
         .execute()
     )[0] as { fEventId: string; fSequence: number } | undefined;
@@ -319,20 +308,20 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   private eventRows(exec: PgAsyncDatabase<THKT>) {
     return exec
       .select({
-        fEventId: pgSessionEvents.fEventId,
-        fSequence: pgSessionEvents.fSequence,
-        fOriginalSeq: pgSessionEvents.fOriginalSeq,
-        fType: pgEvents.fType,
-        fKind: pgEvents.fKind,
-        fRole: pgEvents.fRole,
-        fName: pgEvents.fName,
-        fActionId: pgEvents.fActionId,
-        fCreatedAt: pgEvents.fCreatedAt,
-        fData: pgEvents.fData,
-        fSurfaceOp: pgSessionEvents.fSurfaceOp,
+        fEventId: this.tables["t_session_events"].fEventId,
+        fSequence: this.tables["t_session_events"].fSequence,
+        fOriginalSeq: this.tables["t_session_events"].fOriginalSeq,
+        fType: this.tables["t_events"].fType,
+        fKind: this.tables["t_events"].fKind,
+        fRole: this.tables["t_events"].fRole,
+        fName: this.tables["t_events"].fName,
+        fActionId: this.tables["t_events"].fActionId,
+        fCreatedAt: this.tables["t_events"].fCreatedAt,
+        fData: this.tables["t_events"].fData,
+        fSurfaceOp: this.tables["t_session_events"].fSurfaceOp,
       })
-      .from(pgSessionEvents)
-      .innerJoin(pgEvents, eq(pgSessionEvents.fEventId, pgEvents.fEventId));
+      .from(this.tables["t_session_events"])
+      .innerJoin(this.tables["t_events"], eq(this.tables["t_session_events"].fEventId, this.tables["t_events"].fEventId));
   }
 
   private async updateBridgeFields(
@@ -345,12 +334,12 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     },
   ): Promise<void> {
     await exec
-      .update(pgSessionEvents)
+      .update(this.tables["t_session_events"])
       .set({
         ...(fields.fSurfaceOp === undefined ? {} : { fSurfaceOp: fields.fSurfaceOp }),
         ...(fields.fOriginalSeq === undefined ? {} : { fOriginalSeq: fields.fOriginalSeq }),
       })
-      .where(and(eq(pgSessionEvents.fSessionId, id), eq(pgSessionEvents.fSequence, sequence)))
+      .where(and(eq(this.tables["t_session_events"].fSessionId, id), eq(this.tables["t_session_events"].fSequence, sequence)))
       .execute();
   }
 }

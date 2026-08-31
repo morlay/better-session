@@ -128,6 +128,12 @@ export type Config =
        * the backend creates its tables and identity on first open.
        */
       connectionString: string;
+      /**
+       * PostgreSQL schema to hold the session tables. Defaults to `public`.
+       * The schema must exist (or be creatable by the connecting role); the
+       * backend does not create it.
+       */
+      schema?: string;
     };
 
 /**
@@ -155,6 +161,7 @@ export class SessionPersistenceRdb
     z.object({
       type: z.const("postgres"),
       connectionString: z.string().required(),
+      schema: z.string().default("public"),
     }),
   ]);
 
@@ -666,8 +673,13 @@ function createBackend(config: Config): Backend {
     pool.options.host ?? "localhost",
     String(pool.options.port ?? 5432),
     pool.options.database ?? "",
+    config.schema ?? "public",
   ].join(":");
-  return new PostgresBackend(db, { identityBase, close: () => pool.end() });
+  return new PostgresBackend(db, {
+    identityBase,
+    schema: config.schema ?? "public",
+    close: () => pool.end(),
+  });
 }
 
 /**

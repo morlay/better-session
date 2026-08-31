@@ -46,31 +46,41 @@ function columnSql(dialect: Dialect, c: ColumnDef): string {
 }
 
 /** 一张表的 `CREATE TABLE IF NOT EXISTS`（表级约束内联在列清单末尾）。 */
-export function createTableSql(dialect: Dialect, def: TableDef): string {
+export function createTableSql(dialect: Dialect, def: TableDef, schema?: string): string {
   const parts = def.columns.map((c) => columnSql(dialect, c));
   for (const ck of def.checks ?? []) parts.push(`CHECK (${ck.expression})`);
   for (const u of def.uniques ?? []) {
     parts.push(`UNIQUE (${u.columns.map(quote).join(", ")})`);
   }
   const strict = dialect === "sqlite" ? " STRICT" : "";
-  return `CREATE TABLE IF NOT EXISTS ${quote(def.name)} (\n  ${parts.join(",\n  ")}\n)${strict}`;
+  const qualified = schema === undefined || schema === "public"
+    ? quote(def.name)
+    : `${quote(schema)}.${quote(def.name)}`;
+  return `CREATE TABLE IF NOT EXISTS ${qualified} (\n  ${parts.join(",\n  ")}\n)${strict}`;
 }
 
 /** 一张表的独立索引语句（两方言索引 DDL 相同，无需 dialect 参数）。 */
-export function createIndexSql(def: TableDef, name: string): string {
+export function createIndexSql(def: TableDef, name: string, schema?: string): string {
   const idx = def.indexes?.find((i) => i.name === name);
   if (idx === undefined) throw new Error(`unknown index "${name}" on table "${def.name}"`);
-  return `CREATE INDEX IF NOT EXISTS ${quote(idx.name)} ON ${quote(def.name)}(${idx.columns
+  const qualified = schema === undefined || schema === "public"
+    ? quote(def.name)
+    : `${quote(schema)}.${quote(def.name)}`;
+  return `CREATE INDEX IF NOT EXISTS ${quote(idx.name)} ON ${qualified}(${idx.columns
     .map(quote)
     .join(", ")})`;
 }
 
 /** 一组表的全部建表语句（每表一条 CREATE TABLE + 每条索引）。 */
-export function createTablesSql(dialect: Dialect, defs: readonly TableDef[]): string[] {
+export function createTablesSql(
+  dialect: Dialect,
+  defs: readonly TableDef[],
+  schema?: string,
+): string[] {
   const statements: string[] = [];
   for (const def of defs) {
-    statements.push(createTableSql(dialect, def));
-    for (const idx of def.indexes ?? []) statements.push(createIndexSql(def, idx.name));
+    statements.push(createTableSql(dialect, def, schema));
+    for (const idx of def.indexes ?? []) statements.push(createIndexSql(def, idx.name, schema));
   }
   return statements;
 }

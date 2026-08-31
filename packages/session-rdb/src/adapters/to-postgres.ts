@@ -11,6 +11,7 @@ import {
   check as pgCheck,
   index,
   integer,
+  pgSchema,
   pgTable,
   serial,
   text,
@@ -59,8 +60,15 @@ function buildColumn(c: ColumnDef, tables: TableRegistry): AnyPgColumnBuilder {
 }
 
 /** 由表描述构建 PostgreSQL drizzle 表对象（按传入顺序；外键目标须先构建）。 */
-export function toPostgresSchema(defs: readonly TableDef[]): Record<string, AnyPgTable> {
+export function toPostgresSchema(
+  defs: readonly TableDef[],
+  schemaName = "public",
+): Record<string, AnyPgTable> {
   const tables: TableRegistry = {};
+  // 显式 schema：`pgSchema(name).table` 使 drizzle 表对象携带 schema 限定
+  // （查询/DDL 都显式引用，不依赖 search_path）。默认 public 与无 schema
+  // 行为一致。
+  const table = schemaName === "public" ? pgTable : pgSchema(schemaName).table;
   for (const def of defs) {
     const columns: Record<string, AnyPgColumnBuilder> = {};
     for (const c of def.columns) columns[toProperty(c.name)] = buildColumn(c, tables);
@@ -83,7 +91,7 @@ export function toPostgresSchema(defs: readonly TableDef[]): Record<string, AnyP
         ),
       ),
     ];
-    tables[def.name] = pgTable(
+    tables[def.name] = (table as typeof pgTable)(
       def.name,
       columns as Record<string, AnyPgColumnBuilder>,
       extra as never,

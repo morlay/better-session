@@ -12,13 +12,29 @@
 
 - `SCHEMA_VERSION` 是**破坏性变更门禁**：表结构变更（列增删、列语义变化）
   必须 bump；`openDatabase` 对非当前版本**拒绝打开**（不迁移）。
-- 表结构级升级由**一次性迁移脚本**处理（重建表 + 数据搬运，可复用
-  legacy-clean 的解析逻辑）；`clean & reload` 只处理**同版本内**的数据格式
-  差异（见 [legacy-clean.md](legacy-clean.md)）。
+- 表结构级升级由**一次性迁移脚本**处理（`scripts/migrate-v1-to-v2.mts`，
+  重建表 + 数据搬运，可复用 legacy-clean 的解析逻辑）；`clean & reload`
+  只处理**同版本内**的数据格式差异（见 [legacy-clean.md](legacy-clean.md)）。
 - 本设计相对 v1 的破坏性变更：`t_events` 删 `f_source_event_seqs` /
   `f_surface_op` 列、`f_kind` 语义从「= type」改为「事件种类」、`t_events`
   加 `f_type` 列、`t_session_events` 加 `f_original_seq` / `f_surface_op`
-  列——**必须 bump 到 v2**。
+  列——**已 bump 到 v2**。
+
+## PostgreSQL schema 配置
+
+PG 后端支持 `schema` 配置（默认 `public`）：
+
+```yaml
+session-rdb:
+  type: postgres
+  connectionString: postgres://user:pass@host:5432/db
+  schema: sessions   # 显式 schema，默认 public
+```
+
+- 表对象经 `pgSchema(name).table` 构建——查询与 DDL 都**显式 schema 限定**，
+  不依赖 `search_path`。
+- schema 必须已存在（或连接角色可创建）；后端不自动创建。
+- `identityBase`（revision 前缀）含 schema，不同 schema 的 store 身份隔离。
 
 ## 元数据表
 
