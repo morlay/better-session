@@ -647,19 +647,19 @@ describe("SessionEditor rewind/retry/fork", () => {
             backend: {
               getEventRows(
                 id: SessionIdBrand,
-              ): Promise<Array<{ fSequence: number; fKind: string }>>;
+              ): Promise<Array<{ fSequence: number; fType: string }>>;
             };
           };
         }
       ).internals().backend;
       const rows = await backend.getEventRows(SessionIdBrand("src"));
       expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-      expect(rows[12]?.fKind).toBe("turn/start");
+      expect(rows[12]?.fType).toBe("turn/start");
       // 被 drop 的旧 user/message（seq 13）与轮 3 partial assistant（seq 15）
       // 不在 log 中（轮 1/2 的 assistant/message 保留）。
-      expect(rows.some((r) => r.fKind === "user/message" && r.fSequence === 13)).toBe(false);
-      expect(rows.some((r) => r.fKind === "assistant/message" && r.fSequence === 15)).toBe(false);
-      expect(rows.some((r) => r.fKind === "assistant/message" && r.fSequence === 3)).toBe(true);
+      expect(rows.some((r) => r.fType === "user/message" && r.fSequence === 13)).toBe(false);
+      expect(rows.some((r) => r.fType === "assistant/message" && r.fSequence === 15)).toBe(false);
+      expect(rows.some((r) => r.fType === "assistant/message" && r.fSequence === 3)).toBe(true);
 
       // 截断后继续 append 成功：版本效果（ignorable）占 seq 13 推进 cursor，
       // 后续输入从 seq 14 续接（落盘时 ignorable 被过滤、稠密重编号连续）。
@@ -966,15 +966,15 @@ describe("SessionEditor rewind/retry/fork", () => {
             backend: {
               getEventRows(
                 id: SessionIdBrand,
-              ): Promise<Array<{ fSequence: number; fKind: string }>>;
+              ): Promise<Array<{ fSequence: number; fType: string }>>;
             };
           };
         }
       ).internals().backend;
       const rows = await backend.getEventRows(SessionIdBrand("src"));
       expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-      expect(rows[12]?.fKind).toBe("turn/start");
-      expect(rows.some((r) => r.fKind === "step/start" && r.fSequence === 13)).toBe(false);
+      expect(rows[12]?.fType).toBe("turn/start");
+      expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 13)).toBe(false);
 
       // 截断后继续 append 成功：版本效果（ignorable）占 seq 13 推进 cursor，
       // 后续输入从 seq 14 续接（落盘时 ignorable 被过滤、稠密重编号连续）。

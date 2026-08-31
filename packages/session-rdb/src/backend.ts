@@ -38,6 +38,7 @@ export interface SessionRow {
 export interface EventInsert {
   fEventId: string;
   fParentId: string;
+  fType: string;
   fKind: string;
   fRole: string;
   fName: string;
@@ -45,9 +46,6 @@ export interface EventInsert {
   fEncoding: string;
   fData: string;
   fCreatedAt: number;
-  fOriginalSeq: number;
-  fSourceEventSeqs: string | null;
-  fSurfaceOp: string | null;
 }
 
 /**
@@ -55,19 +53,27 @@ export interface EventInsert {
  * 寻址的持久化事件（`f_data` 为 JSON 文本，surface 列为 JSON 文本或 null）。
  */
 export interface EventRow {
+  /** `t_session_events.f_event_id` — the shared event entity id (fork reuse). */
+  fEventId: string;
   /** `t_session_events.f_sequence` — the dense persisted seq. */
   fSequence: number;
-  /** `t_events.f_original_seq` — the upstream seq before delta filtering. */
+  /** `t_session_events.f_original_seq` — the upstream seq before delta filtering. */
   fOriginalSeq: number;
-  /** `t_events.f_kind` — the upstream `SessionEvent.type`. */
+  /** `t_events.f_type` — the upstream `SessionEvent.type`. */
+  fType: string;
+  /** `t_events.f_kind` — the event kind (message/thinking/turn/…). */
   fKind: string;
+  /** `t_events.f_role` — the conversation role (user/assistant/tool). */
+  fRole: string;
+  /** `t_events.f_name` — the event name (tool name / command name / …). */
+  fName: string;
+  /** `t_events.f_action_id` — the pairing id (callId / commandId / …). */
+  fActionId: string;
   /** `t_events.f_created_at` — the upstream `SessionEvent.time`. */
   fCreatedAt: number;
   /** `t_events.f_data` — JSON-encoded event data. */
   fData: string;
-  /** JSON-encoded `number[]` — the event's sourceEventSeqs (upstream seqs), or null. */
-  fSourceEventSeqs: string | null;
-  /** JSON-encoded `SurfaceOp` — how the event entered the surface, or null. */
+  /** JSON-encoded `SurfaceOp` — how the event entered the surface (original coords), or null. */
   fSurfaceOp: string | null;
 }
 
@@ -90,7 +96,13 @@ export interface BackendTx {
    * non-empty arrays; the implementation may no-op on an empty input.
    */
   insertBridges(
-    rows: Array<{ fSessionId: SessionId; fEventId: string; fSequence: number }>,
+    rows: Array<{
+      fSessionId: SessionId;
+      fEventId: string;
+      fSequence: number;
+      fOriginalSeq: number;
+      fSurfaceOp: string | null;
+    }>,
   ): Promise<void>;
   /** Move the head cursor forward. */
   updateHead(id: SessionId, headEventId: string, headSequence: number): Promise<void>;
@@ -106,17 +118,16 @@ export interface BackendTx {
   /** The highest bridge row (the physical tail anchor), if any. */
   getLastBridge(id: SessionId): Promise<{ fEventId: string; fSequence: number } | undefined>;
   /**
-   * Update an event's mutable columns in place (used by the per-session
-   * provenance cleanse, which rewrites surface/provenance JSON into the dense
-   * seq space). Undefined fields are left untouched; null clears the column.
+   * Update a bridge row's mutable columns in place (used by the per-session
+   * provenance cleanse, which rewrites surface metadata into the new format).
+   * Undefined fields are left untouched; null clears the column.
    */
-  updateEventFields(
+  updateBridgeFields(
     id: SessionId,
     sequence: number,
     fields: {
-      fSourceEventSeqs?: string | null;
       fSurfaceOp?: string | null;
-      fData?: string;
+      fOriginalSeq?: number;
     },
   ): Promise<void>;
 }
@@ -136,7 +147,7 @@ export interface Backend {
   /** Lightweight two-column upstream→persisted seq map source. */
   getSeqMapRows(
     id: SessionId,
-  ): Promise<Array<{ fSequence: number; fOriginalSeq: number; fKind: string }>>;
+  ): Promise<Array<{ fSequence: number; fOriginalSeq: number }>>;
   /** Joined event rows for one session, dense seq ascending (optionally from a seq). */
   getEventRows(id: SessionId, fromSequence?: number): Promise<EventRow[]>;
   /** All materialized sessions' rows. */

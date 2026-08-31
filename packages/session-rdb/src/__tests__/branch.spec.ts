@@ -13,6 +13,7 @@ import {
   SessionStore,
   type SessionEvent,
   type SessionHeader,
+  type SurfaceEvent,
 } from "@deepseek-ai/dsh-session";
 import { TokenMeter } from "@deepseek-ai/dsh-token-meter";
 import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
@@ -226,6 +227,38 @@ describe("forkFrom", () => {
       expect(child.events).toHaveLength(6);
       expect(child.events.some((e) => (e.type as string) === "session-branch/version")).toBe(false);
       expect(child.meta.seedLength).toBe(6);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("reuses parent event rows (no event-row copy; bridge rows only)", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      await createPersisted(ctx, "src", twoTurnLog());
+      const backend = persistence.internals().backend as unknown as {
+        getEventRows(id: SessionId): Promise<Array<{ fEventId: string; fSequence: number }>>;
+        getSeqMapRows(id: SessionId): Promise<Array<{ fOriginalSeq: number }>>;
+      };
+      const parentRows = await backend.getEventRows(SessionId("src"));
+      expect(parentRows).toHaveLength(12);
+
+      await provider.forkFrom(SessionId("src"), {
+        atSeq: 6,
+        anchorMode: "before",
+        childSessionId: SessionId("child"),
+      });
+
+      // 事件行复用是存储层事实：子会话桥接行引用父会话前 6 个事件行
+      // （f_event_id 复用，不复制事件行）。
+      const childRows = await backend.getEventRows(SessionId("child"));
+      expect(childRows).toHaveLength(6);
+      expect(childRows.map((r) => r.fEventId)).toEqual(
+        parentRows.slice(0, 6).map((r) => r.fEventId),
+      );
+      // 子会话桥接行的 f_original_seq 是子会话自己的上游空间（0..5）。
+      const childBridges = await backend.getSeqMapRows(SessionId("child"));
+      expect(childBridges.map((r) => r.fOriginalSeq)).toEqual([0, 1, 2, 3, 4, 5]);
     } finally {
       await dispose();
     }
@@ -576,15 +609,15 @@ describe("rewind", () => {
         persistence as unknown as {
           internals(): {
             backend: {
-              getEventRows(id: SessionId): Promise<Array<{ fSequence: number; fKind: string }>>;
+              getEventRows(id: SessionId): Promise<Array<{ fSequence: number; fType: string }>>;
             };
           };
         }
       ).internals().backend;
       const rows = await backend.getEventRows(SessionId("s1"));
       expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-      expect(rows.at(-1)?.fKind).toBe("turn/start");
-      expect(rows.some((r) => r.fKind === "step/start" && r.fSequence === 13)).toBe(false);
+      expect(rows.at(-1)?.fType).toBe("turn/start");
+      expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 13)).toBe(false);
 
       // 续写重放轮（完整闭合轮，seq 13 起）后，完整 log 对 token meter 合法。
       const continuation: SessionEvent[] = oneTurnLog().map(
@@ -651,6 +684,120 @@ describe("rewind", () => {
       // 但不会补孤儿 step/start 的配对——平衡化已把它剔除）。
       const after = await persistence.load(SessionId("s1"));
       expect(after.events.some((e) => e.type === "step/start" && e.data.turn === 3)).toBe(false);
+      const meter = new TokenMeter(ctx);
+      const session = Session.create(SessionId("s1"), [...after.events]);
+      expect(() => meter.measure(session)).not.toThrow();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("rewind keeps a surviving replace loadable (range intact, provenance recomputed)", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合，含 compaction replace）。
+      // 轮 2 的 compaction/summary（seq 10）claim 范围 [1..5]，紧随的
+      // assistant/message（seq 11）replace 同一范围。
+      const compacted = [
+        ...twoTurnLog().slice(0, 6),
+        { type: "turn/start", seq: 6, time: 6, data: { turn: 2 } },
+        { type: "step/start", seq: 7, time: 7, data: { turn: 2, step: 1 } },
+        {
+          type: "compaction/summary",
+          seq: 8,
+          time: 8,
+          data: {
+            turn: 2,
+            summary: "compacted",
+            shadowedRange: { start: 1, end: 3 },
+            shadowedTokenCount: 100,
+          },
+        },
+        {
+          type: "assistant/message",
+          seq: 9,
+          time: 9,
+          data: {
+            turn: 2,
+            step: 1,
+            message: {
+              id: "compacted",
+              role: "assistant",
+              content: [{ type: "text", text: "compacted" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: { op: "replace", start: 1, end: 3 },
+        },
+        { type: "step/end", seq: 10, time: 10, data: { turn: 2, step: 1 } },
+        { type: "turn/end", seq: 11, time: 11, data: { turn: 2, reason: { kind: "completed" } } },
+      ] as unknown as SessionEvent[];
+      await createPersisted(ctx, "s1", compacted);
+
+      // rewind 到轮 1 末尾（boundary 5）：轮 2 全部删除，轮 1 保留。
+      await provider.rewind(SessionId("s1"), 5);
+      const after = await persistence.load(SessionId("s1"));
+      expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      expect(after.events.at(-1)?.type).toBe("turn/end");
+      // 保留区无 replace（轮 2 的 replace 被删）——load 必须成功。
+      const meter = new TokenMeter(ctx);
+      const session = Session.create(SessionId("s1"), [...after.events]);
+      expect(() => meter.measure(session)).not.toThrow();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("rewind to a boundary before a surviving replace keeps the replace loadable", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      // 轮 1（seq 0..5）+ 轮 2（seq 6..11，含 replace [1..5]）+ 轮 3（seq 12..17）。
+      const compacted = [
+        ...twoTurnLog().slice(0, 6),
+        { type: "turn/start", seq: 6, time: 6, data: { turn: 2 } },
+        { type: "step/start", seq: 7, time: 7, data: { turn: 2, step: 1 } },
+        {
+          type: "compaction/summary",
+          seq: 8,
+          time: 8,
+          data: {
+            turn: 2,
+            summary: "compacted",
+            shadowedRange: { start: 1, end: 3 },
+            shadowedTokenCount: 100,
+          },
+        },
+        {
+          type: "assistant/message",
+          seq: 9,
+          time: 9,
+          data: {
+            turn: 2,
+            step: 1,
+            message: {
+              id: "compacted",
+              role: "assistant",
+              content: [{ type: "text", text: "compacted" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: { op: "replace", start: 1, end: 3 },
+        },
+        { type: "step/end", seq: 10, time: 10, data: { turn: 2, step: 1 } },
+        { type: "turn/end", seq: 11, time: 11, data: { turn: 2, reason: { kind: "completed" } } },
+        ...twoTurnLog().slice(6).map((e) => ({ ...e, seq: e.seq + 6, time: e.time + 100 })),
+      ] as unknown as SessionEvent[];
+      await createPersisted(ctx, "s1", compacted);
+
+      // rewind 到轮 2 末尾（boundary 11）：轮 3 删除，轮 1/2 保留（含 replace）。
+      await provider.rewind(SessionId("s1"), 11);
+      const after = await persistence.load(SessionId("s1"));
+      expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      // 保留区 replace 的 range [1..5] 完整（range 引用更早事件 ⇒ 截断尾部不破坏）。
+      const replacement = after.events.find((e) => e.type === "assistant/message" && e.seq === 9)!;
+      expect((replacement as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
+      // provenance 读取时重计算（覆盖 range 内全部 surface 节点）。
+      expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
       const meter = new TokenMeter(ctx);
       const session = Session.create(SessionId("s1"), [...after.events]);
       expect(() => meter.measure(session)).not.toThrow();

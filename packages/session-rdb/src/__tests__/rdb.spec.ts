@@ -18,8 +18,7 @@ import type {
 import SessionPersistenceSqlite, { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "../index.ts";
 import {
   buildSeqMap,
-  normalizeSurfaceReplaceProvenance,
-  remapProvenance,
+  recomputeReplaceProvenance,
   remapShadowedRange,
   remapSurfaceOp,
   rowToEvent,
@@ -79,9 +78,9 @@ function insertEventRow(
   const eventId = randomUUID();
   db.prepare(`
     INSERT INTO t_events
-      (f_event_id, f_parent_id, f_kind, f_role, f_name, f_action_id, f_encoding,
-       f_data, f_created_at, f_original_seq, f_source_event_seqs, f_surface_op)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (f_event_id, f_parent_id, f_type, f_kind, f_role, f_name, f_action_id, f_encoding,
+       f_data, f_created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     eventId,
     parentId,
@@ -89,16 +88,14 @@ function insertEventRow(
     "",
     "",
     "",
+    "",
     "json",
     JSON.stringify(data),
     seq + 1,
-    seq,
-    null,
-    null,
   );
   db.prepare(
-    "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence) VALUES (?, ?, ?)",
-  ).run(sessionId, eventId, seq);
+    "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_original_seq, f_surface_op) VALUES (?, ?, ?, ?, ?)",
+  ).run(sessionId, eventId, seq, seq, null);
   return eventId;
 }
 
@@ -149,26 +146,24 @@ runCoordinatorContract("sqlite", async (): Promise<CoordinatorFixture> => {
       const eventId = randomUUID();
       db.prepare(`
         INSERT INTO t_events
-          (f_event_id, f_parent_id, f_kind, f_role, f_name, f_action_id, f_encoding,
-           f_data, f_created_at, f_original_seq, f_source_event_seqs, f_surface_op)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (f_event_id, f_parent_id, f_type, f_kind, f_role, f_name, f_action_id, f_encoding,
+           f_data, f_created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         eventId,
         head.f_head_event_id,
         "assistant/chunk",
-        "model",
+        "",
+        "",
         "",
         "",
         "json",
         "{not valid json",
         99,
-        next,
-        null,
-        null,
       );
       db.prepare(
-        "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence) VALUES (?, ?, ?)",
-      ).run(id, eventId, next);
+        "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_original_seq, f_surface_op) VALUES (?, ?, ?, ?, ?)",
+      ).run(id, eventId, next, next, null);
       db.close();
     },
     cleanup: async () => {
@@ -178,17 +173,17 @@ runCoordinatorContract("sqlite", async (): Promise<CoordinatorFixture> => {
 });
 
 describe("eventDimensions", () => {
-  it("classifies boundary events as turn role", () => {
-    const { role, name, actionId } = eventDimensions({
+  it("classifies boundary events as turn kind with empty role", () => {
+    const { kind, role, name, actionId } = eventDimensions({
       type: "turn/start",
       seq: 0,
       time: 1,
       data: { turn: 1 },
     });
-    expect([role, name, actionId]).toEqual(["turn", "", ""]);
+    expect([kind, role, name, actionId]).toEqual(["turn", "", "", ""]);
   });
 
-  it("classifies messages as user/model roles", () => {
+  it("classifies messages as user/assistant roles", () => {
     expect(
       eventDimensions({
         type: "user/message",
@@ -215,7 +210,29 @@ describe("eventDimensions", () => {
           }),
         },
       }).role,
-    ).toBe("model");
+    ).toBe("assistant");
+  });
+
+  it("classifies assistant/message with reasoning blocks as thinking kind", () => {
+    const dims = eventDimensions({
+      type: "assistant/message",
+      seq: 2,
+      time: 3,
+      data: {
+        turn: 1,
+        step: 1,
+        message: createMessage({
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "think" },
+            { type: "text", text: "answer" },
+          ],
+          source: { kind: "model", provider: "mock", model: "mock" },
+        }),
+      },
+    });
+    expect(dims.kind).toBe("thinking");
+    expect(dims.role).toBe("assistant");
   });
 
   it("extracts the function name and call id from tool/call", () => {
@@ -225,10 +242,10 @@ describe("eventDimensions", () => {
       time: 5,
       data: { turn: 1, step: 1, callId: ToolCallId("call-1"), name: "read", arguments: "{}" },
     });
-    expect(dims).toEqual({ role: "function", name: "read", actionId: "call-1" });
+    expect(dims).toEqual({ kind: "tool", role: "", name: "read", actionId: "call-1" });
   });
 
-  it("extracts the call id from tool/result and classifies todo/write as state", () => {
+  it("extracts the call id from tool/result and classifies todo/write as todo kind", () => {
     const callId = ToolCallId("call-2");
     const result = eventDimensions({
       type: "tool/result",
@@ -244,18 +261,19 @@ describe("eventDimensions", () => {
         }),
       },
     });
-    expect(result).toEqual({ role: "function", name: "", actionId: "call-2" });
+    expect(result).toEqual({ kind: "tool", role: "tool", name: "", actionId: "call-2" });
     expect(eventDimensions({ type: "todo/write", seq: 6, time: 7, data: { todos: [] } })).toEqual({
-      role: "state",
+      kind: "todo",
+      role: "",
       name: "todos",
       actionId: "",
     });
   });
 
-  it("keeps playpen defaults for unknown plugin-merged event types", () => {
+  it("keeps empty defaults for unknown plugin-merged event types", () => {
     expect(
       eventDimensions({ type: "plugin/custom", seq: 0, time: 1, data: {} } as SessionEvent),
-    ).toEqual({ role: "", name: "", actionId: "" });
+    ).toEqual({ kind: "", role: "", name: "", actionId: "" });
   });
 });
 
@@ -302,13 +320,16 @@ describe("scanRows", () => {
     events.map((e) => {
       const se = e as SessionEvent<SurfaceEventType>;
       return {
+        fEventId: `evt-${e.seq}`,
         fSequence: e.seq,
         fOriginalSeq: e.seq,
-        fKind: e.type,
+        fType: e.type,
+        fKind: "",
+        fRole: "",
+        fName: "",
+        fActionId: "",
         fCreatedAt: e.time,
         fData: JSON.stringify(e.data),
-        fSourceEventSeqs:
-          se.sourceEventSeqs === undefined ? null : JSON.stringify(se.sourceEventSeqs),
         fSurfaceOp: se.surfaceOp !== undefined ? JSON.stringify(se.surfaceOp) : null,
       };
     });
@@ -371,21 +392,29 @@ describe("scanRows", () => {
   it("throws on an unparsable row inside the committed region", () => {
     const withCorruptCommitted: EventRow[] = [
       {
+        fEventId: "evt-0",
         fSequence: 0,
         fOriginalSeq: 0,
-        fKind: "turn/start",
+        fType: "turn/start",
+        fKind: "",
+        fRole: "",
+        fName: "",
+        fActionId: "",
         fCreatedAt: 1,
         fData: "{not json",
-        fSourceEventSeqs: null,
         fSurfaceOp: null,
       },
       {
+        fEventId: "evt-1",
         fSequence: 1,
         fOriginalSeq: 1,
-        fKind: "turn/end",
+        fType: "turn/end",
+        fKind: "",
+        fRole: "",
+        fName: "",
+        fActionId: "",
         fCreatedAt: 2,
         fData: JSON.stringify({ turn: 1, reason: { kind: "completed" } }),
-        fSourceEventSeqs: null,
         fSurfaceOp: null,
       },
     ];
@@ -396,12 +425,16 @@ describe("scanRows", () => {
     const withCorruptTail: EventRow[] = [
       ...rows(oneTurnLog()),
       {
+        fEventId: "evt-6",
         fSequence: 6,
         fOriginalSeq: 6,
-        fKind: "turn/start",
+        fType: "turn/start",
+        fKind: "",
+        fRole: "",
+        fName: "",
+        fActionId: "",
         fCreatedAt: 7,
         fData: "{not json",
-        fSourceEventSeqs: null,
         fSurfaceOp: null,
       },
     ];
@@ -435,161 +468,208 @@ describe("rowToMeta", () => {
 describe("rowToEvent", () => {
   it("parses surface fields from EventRow columns", () => {
     const row: EventRow = {
+      fEventId: "evt-0",
       fSequence: 0,
       fOriginalSeq: 0,
-      fKind: "assistant/message",
+      fType: "assistant/message",
+      fKind: "message",
+      fRole: "assistant",
+      fName: "",
+      fActionId: "",
       fCreatedAt: 1,
       fData: JSON.stringify({ turn: 1, step: 1, content: [] }),
-      fSourceEventSeqs: JSON.stringify([3, 5]),
       fSurfaceOp: JSON.stringify("append"),
     };
-    const event = rowToEvent(row);
+    const event = rowToEvent(row, new Map<number, number>([[0, 0]]));
     expect(event.seq).toBe(0);
-    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([3, 5]);
     expect((event as SurfaceEvent).surfaceOp).toBe("append");
-  });
-
-  it("remaps sourceEventSeqs through the upstream→persisted seq map", () => {
-    const row: EventRow = {
-      fSequence: 4,
-      fOriginalSeq: 7,
-      fKind: "assistant/message",
-      fCreatedAt: 1,
-      fData: JSON.stringify({ turn: 1, step: 1, content: [] }),
-      fSourceEventSeqs: JSON.stringify([2, 6]),
-      fSurfaceOp: JSON.stringify({ op: "replace", start: 0, end: 1 }),
-    };
-    const map = new Map<number, number>([
-      [0, 0],
-      [1, 1],
-      [2, 2],
-      [6, 3],
-      [7, 4],
-    ]);
-    const event = rowToEvent(row, map);
-    expect(event.seq).toBe(4);
-    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([2, 3]);
-    expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 0, end: 1 });
-  });
-
-  it("drops unmapped sourceEventSeqs entries (never mixes upstream with dense seqs)", () => {
-    const row: EventRow = {
-      fSequence: 1,
-      fOriginalSeq: 1,
-      fKind: "user/message",
-      fCreatedAt: 1,
-      fData: JSON.stringify({ content: [{ type: "text", text: "hi" }], source: { kind: "user" } }),
-      fSourceEventSeqs: JSON.stringify([9]),
-      fSurfaceOp: null,
-    };
-    const event = rowToEvent(row, new Map<number, number>([[1, 1]]));
-    // upstream 9 has no persisted row → the reference is pruned, and an empty
-    // provenance list is omitted entirely (matching the write path's null).
+    // sourceEventSeqs 不落库：append 事件不带 provenance。
     expect((event as SurfaceEvent).sourceEventSeqs).toBeUndefined();
   });
 
-  it("keeps resume-era DENSE sourceEventSeqs and a dense replace range (f_sequence wins)", () => {
-    // 新代码时代:上游 resume 后 live log == 稠密 log,checkpoint 引用稠密 seq
-    // (4564/4565 compaction、2107/2101/2114 surface 节点),replace range 也是
-    // 稠密。读取时这些值必须原样保留,不能按「上游→稠密」重映射。
+  it("remaps a positional replace surfaceOp through the upstream→persisted seq map", () => {
+    // The dense persisted seq must be used for the replacement range, or the
+    // surface fold rejects the log ("start seq N not found in surface").
     const row: EventRow = {
-      fSequence: 4566,
-      fOriginalSeq: 4566,
-      fKind: "user/message",
+      fEventId: "evt-30",
+      fSequence: 30,
+      fOriginalSeq: 30,
+      fType: "tool/result",
+      fKind: "tool",
+      fRole: "tool",
+      fName: "",
+      fActionId: "c",
       fCreatedAt: 1,
       fData: JSON.stringify({
-        content: [{ type: "text", text: "checkpoint" }],
-        source: { kind: "user" },
+        turn: 1,
+        step: 1,
+        message: { source: { kind: "tool", callId: "c" }, content: [] },
       }),
-      fSourceEventSeqs: JSON.stringify([4564, 4565, 2107, 2101, 2114]),
-      fSurfaceOp: JSON.stringify({ op: "replace", start: 2107, end: 4556 }),
-    };
-    const seqMap = new Map<number, number>([
-      [4564, 4564], // compaction/start self-map
-      [4565, 4565], // compaction/summary self-map
-      [2196, 98], // unrelated upstream collision, not cited here
-    ]);
-    const denseTypeMap = new Map<number, string>([
-      [4564, "compaction/start"],
-      [4565, "compaction/summary"],
-      [2107, "user/message"],
-      [2101, "assistant/message"],
-      [2114, "user/message"],
-      [4556, "tool/result"],
-    ]);
-    const event = rowToEvent(row, seqMap, denseTypeMap);
-    // 4564/4565: dense 非 surface 但上游 self-map(映射回自身)→ 仍为原值。
-    // 2107/2101/2114: dense surface → 原值保留。
-    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([2101, 2107, 2114, 4564, 4565]);
-    expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 2107, end: 4556 });
-  });
-
-  it("remaps an upstream seq that collides with a non-surface dense seq", () => {
-    // 旧数据:replace end=5 是「上游 seq 5」(assistant/message),稠密 5 恰好是
-    // turn/end(非 surface)——启发式必须走上游映射(5 → 3),否则 end 指向
-    // 非节点导致 "end seq not found in surface"。
-    const row: EventRow = {
-      fSequence: 10,
-      fOriginalSeq: 12,
-      fKind: "assistant/message",
-      fCreatedAt: 1,
-      fData: JSON.stringify({ turn: 2, step: 1, content: [] }),
-      fSourceEventSeqs: JSON.stringify([1, 5]),
-      fSurfaceOp: JSON.stringify({ op: "replace", start: 1, end: 5 }),
-    };
-    const seqMap = new Map<number, number>([
-      [1, 1],
-      [5, 3],
-    ]);
-    const denseTypeMap = new Map<number, string>([
-      [1, "user/message"],
-      [3, "assistant/message"],
-      [5, "turn/end"],
-    ]);
-    const event = rowToEvent(row, seqMap, denseTypeMap);
-    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
-    expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
-  });
-
-  it("normalizes remapped sourceEventSeqs: prunes, sorts, and de-duplicates", () => {
-    // A checkpoint user/message after a rewind: references span the reused
-    // upstream space — [8, 2, 8, 9, 15] where 15 has no row, 2→20, 8→30, 9→31.
-    const row: EventRow = {
-      fSequence: 40,
-      fOriginalSeq: 40,
-      fKind: "user/message",
-      fCreatedAt: 1,
-      fData: JSON.stringify({
-        content: [{ type: "text", text: "checkpoint" }],
-        source: { kind: "user" },
-      }),
-      fSourceEventSeqs: JSON.stringify([8, 2, 8, 9, 15]),
-      fSurfaceOp: JSON.stringify("append"),
+      fSurfaceOp: JSON.stringify({ op: "replace", start: 2, end: 2 }),
     };
     const map = new Map<number, number>([
-      [2, 20],
-      [8, 30],
-      [9, 31],
+      [2, 5],
+      [30, 9],
     ]);
     const event = rowToEvent(row, map);
-    // 15 unmapped → dropped; 8 dup → one; sorted → [20, 30, 31].
-    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([20, 30, 31]);
+    expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 5, end: 5 });
   });
 
-  it("remapProvenance prunes unresolvable refs, sorts, and de-duplicates", () => {
-    const remap = (seq: number): number | undefined => (seq % 2 === 0 ? seq * 10 : undefined);
-    expect(remapProvenance([5, 2, 4, 2, 6], remap)).toEqual([20, 40, 60]);
-    expect(remapProvenance([1, 3], remap)).toEqual([]);
-    expect(remapProvenance([], remap)).toEqual([]);
+  it("remaps a compaction/summary shadowedRange through the upstream→persisted seq map", () => {
+    // The metering event's shadow-price claim names the replaced range by
+    // UPSTREAM seq; it must follow the replace's surfaceOp into dense space or
+    // the token-meter fold rejects the log ("token surface: replace ... has no
+    // adjacent shadow price").
+    const row: EventRow = {
+      fEventId: "evt-4056",
+      fSequence: 4056,
+      fOriginalSeq: 400_000,
+      fType: "compaction/summary",
+      fKind: "compaction",
+      fRole: "",
+      fName: "",
+      fActionId: "",
+      fCreatedAt: 1,
+      fData: JSON.stringify({
+        turn: 1,
+        summary: "…",
+        shadowedRange: { start: 15, end: 398_881 },
+        shadowedTokenCount: 12_345,
+      }),
+      fSurfaceOp: null,
+    };
+    const map = new Map<number, number>([
+      [15, 15],
+      [398_881, 4048],
+      [400_000, 4056],
+    ]);
+    const event = rowToEvent(row, map);
+    expect(event.data).toMatchObject({
+      shadowedRange: { start: 15, end: 4048 },
+      shadowedTokenCount: 12_345,
+    });
   });
 
-  it("normalizeSurfaceReplaceProvenance merges the dense range's surface nodes into a replace's provenance", () => {
-    // checkpoint user/message (seq 40) replaces dense range [7..9]; its stored
-    // provenance covers only [7, 8] and the range's surface node (user/message
-    // @ 8) is already cited — but after a rewind reused the upstream space the
-    // shadowed validation requires EVERY surface node in the range to be
-    // cited, so a missing one must be merged. turn/start / turn/end are not
-    // surface nodes and must stay out of the provenance.
+  it("remaps a compaction/prune shadowedRange and leaves other data untouched", () => {
+    const row: EventRow = {
+      fEventId: "evt-10",
+      fSequence: 10,
+      fOriginalSeq: 10,
+      fType: "compaction/prune",
+      fKind: "compaction",
+      fRole: "",
+      fName: "",
+      fActionId: "",
+      fCreatedAt: 1,
+      fData: JSON.stringify({
+        turn: 2,
+        shadowedRange: { start: 7, end: 9 },
+        shadowedTokenCount: 42,
+      }),
+      fSurfaceOp: null,
+    };
+    const event = rowToEvent(
+      row,
+      new Map<number, number>([
+        [7, 1],
+        [9, 2],
+        [10, 3],
+      ]),
+    );
+    expect(event.data).toMatchObject({
+      turn: 2,
+      shadowedRange: { start: 1, end: 2 },
+      shadowedTokenCount: 42,
+    });
+  });
+
+  it("keeps a compact shadowedRange verbatim with an identity map (no delta filtering)", () => {
+    const row: EventRow = {
+      fEventId: "evt-3",
+      fSequence: 3,
+      fOriginalSeq: 3,
+      fType: "compaction/summary",
+      fKind: "compaction",
+      fRole: "",
+      fName: "",
+      fActionId: "",
+      fCreatedAt: 1,
+      fData: JSON.stringify({
+        turn: 1,
+        shadowedRange: { start: 1, end: 2 },
+        shadowedTokenCount: 9,
+      }),
+      fSurfaceOp: null,
+    };
+    expect(rowToEvent(row, new Map<number, number>([[3, 3]])).data).toMatchObject({
+      shadowedRange: { start: 1, end: 2 },
+      shadowedTokenCount: 9,
+    });
+  });
+
+  it("replays a compact seam so the shadow-price claim matches the replace range", () => {
+    // Regression for the reported history-load failure:
+    //   token surface: replace at seq 4057 over range 15-4048 has no adjacent
+    //   shadow price (armed claim covers 15-398881)
+    // The claim (compaction/summary data.shadowedRange, upstream seqs) must land
+    // on the SAME dense range as the immediately following replace's surfaceOp.
+    const map = new Map<number, number>([
+      [15, 15],
+      [398_881, 4048],
+      [4056, 4056],
+      [4057, 4057],
+    ]);
+    const metering = rowToEvent(
+      {
+        fEventId: "evt-4056",
+        fSequence: 4056,
+        fOriginalSeq: 4056,
+        fType: "compaction/summary",
+        fKind: "compaction",
+        fRole: "",
+        fName: "",
+        fActionId: "",
+        fCreatedAt: 1,
+        fData: JSON.stringify({
+          turn: 1,
+          shadowedRange: { start: 15, end: 398_881 },
+          shadowedTokenCount: 12_345,
+        }),
+        fSurfaceOp: null,
+      },
+      map,
+    );
+    const replacement = rowToEvent(
+      {
+        fEventId: "evt-4057",
+        fSequence: 4057,
+        fOriginalSeq: 4057,
+        fType: "assistant/message",
+        fKind: "message",
+        fRole: "assistant",
+        fName: "",
+        fActionId: "",
+        fCreatedAt: 2,
+        fData: JSON.stringify({ turn: 1, step: 1, message: { role: "assistant", content: [] } }),
+        fSurfaceOp: JSON.stringify({ op: "replace", start: 15, end: 398_881 }),
+      },
+      map,
+    );
+    const claim = (metering.data as unknown as { shadowedRange: { start: number; end: number } })
+      .shadowedRange;
+    // The token-meter fold compares claim.start/end with op.start/end for exact
+    // equality — an un-remapped claim (15-398881) is exactly the reported failure.
+    expect((replacement as SurfaceEvent).surfaceOp).toEqual({
+      op: "replace",
+      start: 15,
+      end: 4048,
+    });
+    expect(claim).toEqual({ start: 15, end: 4048 });
+  });
+});
+
+describe("recomputeReplaceProvenance", () => {
+  it("recomputes sourceEventSeqs as the range's surface nodes for every replace", () => {
     const events: SessionEvent[] = [
       { type: "turn/start", seq: 7, time: 1, data: { turn: 1 } },
       {
@@ -606,18 +686,18 @@ describe("rowToEvent", () => {
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
         surfaceOp: { op: "replace", start: 7, end: 9 },
-        sourceEventSeqs: [7, 8],
       } as SessionEvent,
     ];
-    normalizeSurfaceReplaceProvenance(events);
+    recomputeReplaceProvenance(events);
     const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
-    // surface node @ 8 already cited; nothing new to merge.
-    expect(checkpoint.sourceEventSeqs).toEqual([7, 8]);
+    // 只有 surface 节点（user/message @ 8）进 provenance；turn/start/end 不是。
+    expect(checkpoint.sourceEventSeqs).toEqual([8]);
     // Non-replace events are untouched.
     expect(events[1]).toMatchObject({ seq: 8, surfaceOp: "append" });
+    expect((events[1] as SessionEvent & { sourceEventSeqs?: number[] }).sourceEventSeqs).toBeUndefined();
   });
 
-  it("normalizeSurfaceReplaceProvenance merges a missing surface node from the range", () => {
+  it("merges every surface node in the range (assistant/message included)", () => {
     const events: SessionEvent[] = [
       {
         type: "user/message",
@@ -649,170 +729,12 @@ describe("rowToEvent", () => {
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
         surfaceOp: { op: "replace", start: 10, end: 12 },
-        sourceEventSeqs: [10],
       } as SessionEvent,
     ];
-    normalizeSurfaceReplaceProvenance(events);
+    recomputeReplaceProvenance(events);
     const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
-    // assistant/message @ 11 is a surface node in the range and was missing.
+    // user/message @ 10 + assistant/message @ 11 are surface nodes in the range.
     expect(checkpoint.sourceEventSeqs).toEqual([10, 11]);
-  });
-
-  it("remaps a positional replace surfaceOp through the upstream→persisted seq map", () => {
-    // The dense persisted seq must be used for the replacement range, or the
-    // surface fold rejects the log ("start seq N not found in surface").
-    const row: EventRow = {
-      fSequence: 9,
-      fOriginalSeq: 30,
-      fKind: "tool/result",
-      fCreatedAt: 1,
-      fData: JSON.stringify({
-        turn: 1,
-        step: 1,
-        message: { source: { kind: "tool", callId: "c" }, content: [] },
-      }),
-      fSourceEventSeqs: JSON.stringify([2]),
-      fSurfaceOp: JSON.stringify({ op: "replace", start: 2, end: 2 }),
-    };
-    const map = new Map<number, number>([
-      [2, 5],
-      [30, 9],
-    ]);
-    const event = rowToEvent(row, map);
-    expect((event as SurfaceEvent).sourceEventSeqs).toEqual([5]);
-    expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 5, end: 5 });
-  });
-
-  it("remaps a compaction/summary shadowedRange through the upstream→persisted seq map", () => {
-    // The metering event's shadow-price claim names the replaced range by
-    // UPSTREAM seq; it must follow the replace's surfaceOp into dense space or
-    // the token-meter fold rejects the log ("token surface: replace ... has no
-    // adjacent shadow price").
-    const row: EventRow = {
-      fSequence: 4056,
-      fOriginalSeq: 400_000,
-      fKind: "compaction/summary",
-      fCreatedAt: 1,
-      fData: JSON.stringify({
-        turn: 1,
-        summary: "…",
-        shadowedRange: { start: 15, end: 398_881 },
-        shadowedTokenCount: 12_345,
-      }),
-      fSourceEventSeqs: null,
-      fSurfaceOp: null,
-    };
-    const map = new Map<number, number>([
-      [15, 15],
-      [398_881, 4048],
-      [400_000, 4056],
-    ]);
-    const event = rowToEvent(row, map);
-    expect(event.data).toMatchObject({
-      shadowedRange: { start: 15, end: 4048 },
-      shadowedTokenCount: 12_345,
-    });
-  });
-
-  it("remaps a compaction/prune shadowedRange and leaves other data untouched", () => {
-    const row: EventRow = {
-      fSequence: 3,
-      fOriginalSeq: 10,
-      fKind: "compaction/prune",
-      fCreatedAt: 1,
-      fData: JSON.stringify({
-        turn: 2,
-        shadowedRange: { start: 7, end: 9 },
-        shadowedTokenCount: 42,
-      }),
-      fSourceEventSeqs: null,
-      fSurfaceOp: null,
-    };
-    const event = rowToEvent(
-      row,
-      new Map<number, number>([
-        [7, 1],
-        [9, 2],
-        [10, 3],
-      ]),
-    );
-    expect(event.data).toMatchObject({
-      turn: 2,
-      shadowedRange: { start: 1, end: 2 },
-      shadowedTokenCount: 42,
-    });
-  });
-
-  it("keeps a compact shadowedRange verbatim without a seq map (no delta filtering)", () => {
-    const row: EventRow = {
-      fSequence: 3,
-      fOriginalSeq: 3,
-      fKind: "compaction/summary",
-      fCreatedAt: 1,
-      fData: JSON.stringify({
-        turn: 1,
-        shadowedRange: { start: 1, end: 2 },
-        shadowedTokenCount: 9,
-      }),
-      fSourceEventSeqs: null,
-      fSurfaceOp: null,
-    };
-    expect(rowToEvent(row).data).toMatchObject({
-      shadowedRange: { start: 1, end: 2 },
-      shadowedTokenCount: 9,
-    });
-  });
-
-  it("replays a compact seam so the shadow-price claim matches the replace range", () => {
-    // Regression for the reported history-load failure:
-    //   token surface: replace at seq 4057 over range 15-4048 has no adjacent
-    //   shadow price (armed claim covers 15-398881)
-    // The claim (compaction/summary data.shadowedRange, upstream seqs) must land
-    // on the SAME dense range as the immediately following replace's surfaceOp.
-    const map = new Map<number, number>([
-      [15, 15],
-      [398_881, 4048],
-      [4056, 4056],
-      [4057, 4057],
-    ]);
-    const metering = rowToEvent(
-      {
-        fSequence: 4056,
-        fOriginalSeq: 4056,
-        fKind: "compaction/summary",
-        fCreatedAt: 1,
-        fData: JSON.stringify({
-          turn: 1,
-          shadowedRange: { start: 15, end: 398_881 },
-          shadowedTokenCount: 12_345,
-        }),
-        fSourceEventSeqs: null,
-        fSurfaceOp: null,
-      },
-      map,
-    );
-    const replacement = rowToEvent(
-      {
-        fSequence: 4057,
-        fOriginalSeq: 4057,
-        fKind: "assistant/message",
-        fCreatedAt: 2,
-        fData: JSON.stringify({ turn: 1, step: 1, message: { role: "assistant", content: [] } }),
-        fSourceEventSeqs: JSON.stringify([15, 398_881]),
-        fSurfaceOp: JSON.stringify({ op: "replace", start: 15, end: 398_881 }),
-      },
-      map,
-    );
-    const claim = (metering.data as unknown as { shadowedRange: { start: number; end: number } })
-      .shadowedRange;
-    // The token-meter fold compares claim.start/end with op.start/end for exact
-    // equality — an un-remapped claim (15-398881) is exactly the reported failure.
-    expect((replacement as SurfaceEvent).surfaceOp).toEqual({
-      op: "replace",
-      start: 15,
-      end: 4048,
-    });
-    expect(claim).toEqual({ start: 15, end: 4048 });
   });
 });
 
@@ -1023,14 +945,14 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const probe = openDatabase(path, "wal");
     const stored = probe
       .prepare(`
-      SELECT se.f_sequence, e.f_kind FROM t_session_events se
+      SELECT se.f_sequence, e.f_type FROM t_session_events se
       JOIN t_events e ON se.f_event_id = e.f_event_id
       WHERE se.f_session_id = ? ORDER BY se.f_sequence
     `)
-      .all(m.id) as { f_sequence: number; f_kind: string }[];
+      .all(m.id) as { f_sequence: number; f_type: string }[];
     probe.close();
     expect(stored.map((r) => r.f_sequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-    expect(stored.at(-1)!.f_kind).toBe("turn/end");
+    expect(stored.at(-1)!.f_type).toBe("turn/end");
     await b2.dispose();
   });
 
@@ -1188,9 +1110,9 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const eventId = randomUUID();
     db.prepare(`
       INSERT INTO t_events
-        (f_event_id, f_parent_id, f_kind, f_role, f_name, f_action_id, f_encoding,
-         f_data, f_created_at, f_original_seq, f_source_event_seqs, f_surface_op)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (f_event_id, f_parent_id, f_type, f_kind, f_role, f_name, f_action_id, f_encoding,
+         f_data, f_created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       eventId,
       head.f_head_event_id,
@@ -1198,16 +1120,14 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
       "turn",
       "",
       "",
+      "",
       "json",
       "{not valid json",
       7,
-      6,
-      null,
-      null,
     );
     db.prepare(
-      "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence) VALUES (?, ?, ?)",
-    ).run(m.id, eventId, 6);
+      "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_original_seq, f_surface_op) VALUES (?, ?, ?, ?, ?)",
+    ).run(m.id, eventId, 6, 6, null);
     db.close();
 
     const b2 = await backend(path);
@@ -1488,23 +1408,23 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     const probe = openDatabase(path, "wal");
     const rows = probe
       .prepare(`
-      SELECT se.f_sequence, e.f_original_seq, e.f_kind, e.f_role FROM t_session_events se
+      SELECT se.f_sequence, se.f_original_seq, e.f_type, e.f_role FROM t_session_events se
       JOIN t_events e ON se.f_event_id = e.f_event_id
       WHERE se.f_session_id = ? ORDER BY se.f_sequence
     `)
       .all(m.id) as {
       f_sequence: number;
       f_original_seq: number;
-      f_kind: string;
+      f_type: string;
       f_role: string;
     }[];
     expect(rows).toEqual([
-      { f_sequence: 0, f_original_seq: 0, f_kind: "turn/start", f_role: "turn" },
-      { f_sequence: 1, f_original_seq: 1, f_kind: "user/message", f_role: "user" },
-      { f_sequence: 2, f_original_seq: 2, f_kind: "step/start", f_role: "turn" },
-      { f_sequence: 3, f_original_seq: 5, f_kind: "assistant/message", f_role: "model" },
-      { f_sequence: 4, f_original_seq: 6, f_kind: "step/end", f_role: "turn" },
-      { f_sequence: 5, f_original_seq: 7, f_kind: "turn/end", f_role: "turn" },
+      { f_sequence: 0, f_original_seq: 0, f_type: "turn/start", f_role: "" },
+      { f_sequence: 1, f_original_seq: 1, f_type: "user/message", f_role: "user" },
+      { f_sequence: 2, f_original_seq: 2, f_type: "step/start", f_role: "" },
+      { f_sequence: 3, f_original_seq: 5, f_type: "assistant/message", f_role: "assistant" },
+      { f_sequence: 4, f_original_seq: 6, f_type: "step/end", f_role: "" },
+      { f_sequence: 5, f_original_seq: 7, f_type: "turn/end", f_role: "" },
     ]);
     // The head cursor tracks the dense persisted seq.
     expect(
@@ -1554,13 +1474,14 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.dispose();
   });
 
-  it("prunes assistant/message sourceEventSeqs references to dropped deltas (same batch)", async () => {
+  it("drops assistant/message sourceEventSeqs (chunk refs never persisted)", async () => {
     const path = await freshDbPath();
     const b = await backend(path);
     const m = meta("delta-prune-same");
     await b.ctx.sessionPersistence.create(m);
     // The assistant/message references the chunk events (upstream seqs 3,4),
-    // which are dropped at write time — the reference must not be persisted.
+    // which are dropped at write time — sourceEventSeqs 不落库（读取时对
+    // replace 事件重计算；append 事件不带 provenance）。
     await b.ctx.sessionPersistence.append(m.id, [
       {
         type: "turn/start",
@@ -1600,15 +1521,6 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
       { type: "step/end", seq: 5, time: 6, data: { turn: 1, step: 1 } },
       { type: "turn/end", seq: 6, time: 7, data: { turn: 1, reason: { kind: "completed" } } },
     ]);
-    // The dropped-delta references are gone from the stored row.
-    const probe = openDatabase(path, "wal");
-    const row = probe
-      .prepare(
-        "SELECT e.f_source_event_seqs AS ses FROM t_session_events se JOIN t_events e ON se.f_event_id = e.f_event_id WHERE se.f_session_id = ? AND e.f_kind = 'assistant/message'",
-      )
-      .get(m.id) as { ses: string | null };
-    expect(row.ses).toBeNull();
-    probe.close();
     // Reload replays cleanly: the dense assistant/message carries no provenance.
     const loaded = await b.ctx.sessionPersistence.load(m.id);
     const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
@@ -1617,7 +1529,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.dispose();
   });
 
-  it("prunes assistant/message sourceEventSeqs references to dropped deltas across batches", async () => {
+  it("drops assistant/message sourceEventSeqs across batches (chunk refs never persisted)", async () => {
     const path = await freshDbPath();
     const b = await backend(path);
     const m = meta("delta-prune-cross");
@@ -1657,14 +1569,6 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
       },
       { type: "turn/end", seq: 3, time: 4, data: { turn: 1, reason: { kind: "completed" } } },
     ]);
-    const probe = openDatabase(path, "wal");
-    const row = probe
-      .prepare(
-        "SELECT e.f_source_event_seqs AS ses FROM t_session_events se JOIN t_events e ON se.f_event_id = e.f_event_id WHERE se.f_session_id = ? AND e.f_kind = 'assistant/message'",
-      )
-      .get(m.id) as { ses: string | null };
-    expect(row.ses).toBeNull();
-    probe.close();
     const loaded = await b.ctx.sessionPersistence.load(m.id);
     const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
     expect(assistant.seq).toBe(0); // dense
@@ -1672,13 +1576,14 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.dispose();
   });
 
-  it("keeps sourceEventSeqs references to persisted events while pruning dropped-delta refs", async () => {
+  it("drops assistant/message sourceEventSeqs even when referencing persisted events (append semantics)", async () => {
     const path = await freshDbPath();
     const b = await backend(path);
     const m = meta("delta-prune-mixed");
     await b.ctx.sessionPersistence.create(m);
     // The user/message (upstream seq 1) survives, the chunks (seqs 3,4) do not;
-    // the message references all three — only the survived reference persists.
+    // the message references all three — sourceEventSeqs 不落库，append 事件
+    // 读取时也不带 provenance（只有 replace 事件重计算）。
     await b.ctx.sessionPersistence.append(m.id, [
       {
         type: "turn/start",
@@ -1728,19 +1633,9 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
       { type: "step/end", seq: 6, time: 7, data: { turn: 1, step: 1 } },
       { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
     ]);
-    const probe = openDatabase(path, "wal");
-    const row = probe
-      .prepare(
-        "SELECT e.f_source_event_seqs AS ses FROM t_session_events se JOIN t_events e ON se.f_event_id = e.f_event_id WHERE se.f_session_id = ? AND e.f_kind = 'assistant/message'",
-      )
-      .get(m.id) as { ses: string | null };
-    // Upstream 1 is persisted (dense 1); 3,4 are dropped. The stored list keeps
-    // only the resolvable reference.
-    expect(JSON.parse(row.ses!)).toEqual([1]);
-    probe.close();
     const loaded = await b.ctx.sessionPersistence.load(m.id);
     const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
-    expect((assistant as SurfaceEvent).sourceEventSeqs).toEqual([1]);
+    expect((assistant as SurfaceEvent).sourceEventSeqs).toBeUndefined();
     await b.dispose();
   });
 
@@ -1786,19 +1681,19 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b2.dispose();
   });
 
-  it("remaps sourceEventSeqs provenance to the dense seq space on read", async () => {
+  it("loads without provenance on append events (chunk refs never persisted)", async () => {
     const path = await freshDbPath();
     const b = await backend(path);
     const m = meta("delta-provenance");
     await b.ctx.sessionPersistence.create(m);
     // user/message seq 0; the assistant/message after the delta stream carries
-    // sourceEventSeqs [1] (the user message's UPSTREAM seq 1).
+    // sourceEventSeqs [1] (the user message's UPSTREAM seq 1) — 不落库。
     await b.ctx.sessionPersistence.append(m.id, chunkedTurnLog());
 
     const loaded = await b.ctx.sessionPersistence.load(m.id);
     const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
     expect(assistant.seq).toBe(3); // dense
-    expect((assistant as SurfaceEvent).sourceEventSeqs).toEqual([1]); // upstream 1 == dense 1 here
+    expect((assistant as SurfaceEvent).sourceEventSeqs).toBeUndefined();
     await b.dispose();
   });
 
@@ -1895,15 +1790,15 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     const probe = openDatabase(path, "wal");
     const rows = probe
       .prepare(`
-      SELECT se.f_sequence, e.f_original_seq, e.f_kind FROM t_session_events se
+      SELECT se.f_sequence, se.f_original_seq, e.f_type FROM t_session_events se
       JOIN t_events e ON se.f_event_id = e.f_event_id
       WHERE se.f_session_id = ? ORDER BY se.f_sequence
     `)
-      .all(m.id) as { f_sequence: number; f_original_seq: number; f_kind: string }[];
+      .all(m.id) as { f_sequence: number; f_original_seq: number; f_type: string }[];
     expect(rows).toEqual([
-      { f_sequence: 0, f_original_seq: 0, f_kind: "turn/start" },
-      { f_sequence: 1, f_original_seq: 2, f_kind: "user/message" },
-      { f_sequence: 2, f_original_seq: 3, f_kind: "turn/end" },
+      { f_sequence: 0, f_original_seq: 0, f_type: "turn/start" },
+      { f_sequence: 1, f_original_seq: 2, f_type: "user/message" },
+      { f_sequence: 2, f_original_seq: 3, f_type: "turn/end" },
     ]);
     probe.close();
     const loaded = await b.ctx.sessionPersistence.load(m.id);
@@ -1941,13 +1836,13 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.dispose();
   });
 
-  it("prunes assistant/message sourceEventSeqs references to dropped ignorable events", async () => {
+  it("drops assistant/message sourceEventSeqs referencing ignorable events (append semantics)", async () => {
     const path = await freshDbPath();
     const b = await backend(path);
     const m = meta("ignorable-prune");
     await b.ctx.sessionPersistence.create(m);
     // The assistant/message references the ignorable plugin event (upstream
-    // seq 1), which is dropped at write time — the reference must not persist.
+    // seq 1), which is dropped at write time — sourceEventSeqs 不落库。
     await b.ctx.sessionPersistence.append(m.id, [
       { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
       {
@@ -1975,14 +1870,6 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
       },
       { type: "turn/end", seq: 3, time: 4, data: { turn: 1, reason: { kind: "completed" } } },
     ]);
-    const probe = openDatabase(path, "wal");
-    const row = probe
-      .prepare(
-        "SELECT e.f_source_event_seqs AS ses FROM t_session_events se JOIN t_events e ON se.f_event_id = e.f_event_id WHERE se.f_session_id = ? AND e.f_kind = 'assistant/message'",
-      )
-      .get(m.id) as { ses: string | null };
-    expect(row.ses).toBeNull();
-    probe.close();
     const loaded = await b.ctx.sessionPersistence.load(m.id);
     const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
     expect(assistant.seq).toBe(1); // dense
@@ -2190,13 +2077,15 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
 
     const persistence = b.ctx.sessionPersistence as SessionPersistenceSqlite;
     const backendApi = persistence.internals().backend;
-    // 存储是上游坐标:replace [1,5] 与 sourceEventSeqs [1,5] 原样落库。
+    // 存储是上游坐标:replace [1,5] 原样落桥接行 f_surface_op。
     const rowBefore = (await backendApi.getEventRows(m.id)).find((r) => r.fSequence === 8)!;
-    expect(rowBefore.fSourceEventSeqs).toBe("[1,5]");
+    expect(rowBefore.fSurfaceOp).toBe(JSON.stringify({ op: "replace", start: 1, end: 5 }));
 
-    // 读取时启发式已给出稠密视图。
+    // 读取时经 f_original_seq 映射重映射到稠密坐标。
     const loaded = await b.ctx.sessionPersistence.load(m.id);
     const replacement = loaded.events.find((e) => e.type === "assistant/message" && e.seq === 8)!;
+    expect((replacement as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
+    // replace 的 provenance 读取时重计算（sourceEventSeqs 不落库）。
     expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
 
     // 清洗:重写为稠密坐标。
@@ -2204,7 +2093,6 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     expect(changed).toBeGreaterThan(0);
 
     const rowAfter = (await backendApi.getEventRows(m.id)).find((r) => r.fSequence === 8)!;
-    expect(rowAfter.fSourceEventSeqs).toBe("[1,3]");
     expect(rowAfter.fSurfaceOp).toBe(JSON.stringify({ op: "replace", start: 1, end: 3 }));
 
     // 清洗后仍可正常加载,且无需启发式即得稠密视图。
@@ -2356,24 +2244,32 @@ describe("surface field round-trip", () => {
   it("scanRows with surface columns reconstructs events with surface fields", () => {
     const rows: EventRow[] = [
       {
+        fEventId: "evt-0",
         fSequence: 0,
         fOriginalSeq: 0,
-        fKind: "user/message",
+        fType: "user/message",
+        fKind: "message",
+        fRole: "user",
+        fName: "",
+        fActionId: "",
         fCreatedAt: 1,
         fData: JSON.stringify({
           content: [{ type: "text", text: "hi" }],
           source: { kind: "user" },
         }),
-        fSourceEventSeqs: null,
         fSurfaceOp: '{"op":"replace","start":0,"end":0}',
       },
       {
+        fEventId: "evt-1",
         fSequence: 1,
         fOriginalSeq: 1,
-        fKind: "turn/end",
+        fType: "turn/end",
+        fKind: "turn",
+        fRole: "",
+        fName: "",
+        fActionId: "",
         fCreatedAt: 2,
         fData: JSON.stringify({ turn: 1, reason: { kind: "completed" } }),
-        fSourceEventSeqs: null,
         fSurfaceOp: null,
       },
     ];

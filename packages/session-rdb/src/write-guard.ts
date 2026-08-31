@@ -16,14 +16,6 @@
  * has its own head), so two instances writing different sessions remain a
  * supported multi-process deployment.
  *
- * The guard also tracks the upstream seqs of events this instance has dropped
- * per session — delta events (`assistant/chunk`) and events the writer marked
- * `ignorable`. A later `assistant/message` may carry `sourceEventSeqs`
- * referencing those events' upstream seqs; the references can never be remapped
- * on read (the referenced events have no persisted row), so the write path
- * prunes them. The concurrent-writer guarantee above limits each session to
- * one writer, making this instance the only authority for its dropped seqs.
- *
  * Pure in-memory state machine — no I/O — so the coordinator's timing contract
  * (never-read vs. confirmed absence vs. confirmed head; confirm after append /
  * after load / re-confirm after repair) is directly unit-testable instead of
@@ -32,7 +24,6 @@
  */
 
 import type { SessionId } from "@deepseek-ai/dsh-session";
-import { pruneSourceEventSeqs } from "./log.ts";
 
 /**
  * The write-authority state machine for one backend instance. Not part of the
@@ -47,13 +38,6 @@ export class WriteGuard {
    * wrote the session.
    */
   private readonly headSeqs = new Map<SessionId, number>();
-
-  /**
-   * Upstream seqs of delta events dropped per session. Mirrors `headSeqs` in
-   * shape: the concurrent-writer guarantee limits each session to one writer,
-   * so this instance is the only authority for its dropped seqs.
-   */
-  private readonly filteredSeqs = new Map<SessionId, Set<number>>();
 
   /**
    * Record a head this instance actually observed or wrote.
@@ -91,40 +75,5 @@ export class WriteGuard {
           "concurrent writers on one session are not supported",
       );
     }
-  }
-
-  /**
-   * Record the upstream seqs of events dropped for a session (delta events and
-   * ignorable events), so a later batch's `assistant/message` can prune
-   * `sourceEventSeqs` references to events that never got a persisted row.
-   * @param id - the session id.
-   * @param seqs - the dropped events' upstream seqs (pure-delta batches included).
-   */
-  noteDropped(id: SessionId, seqs: Iterable<number>): void {
-    const known = this.filteredSeqs.get(id) ?? new Set<number>();
-    for (const seq of seqs) known.add(seq);
-    this.filteredSeqs.set(id, known);
-  }
-
-  /**
-   * Prune `sourceEventSeqs` references that hit this session's dropped-delta
-   * seq set. `undefined`-like state (no dropped seqs recorded for the session)
-   * leaves the list untouched, matching the write path's "no known drops →
-   * keep verbatim" semantics (repair closers, which never carry provenance,
-   * call through the identity path).
-   *
-   * The predicate is THIS INSTANCE's view (see
-   * {@link pruneSourceEventSeqs}): only seqs it knows were dropped are
-   * pruned — references to rows persisted by another instance (e.g. a resume
-   * seed segment) must survive, so the disk-wide view used by the one-shot
-   * repair script is not applicable here.
-   * @param id - the session id.
-   * @param refs - the event's `sourceEventSeqs` (upstream seqs).
-   * @returns the pruned list; identical content when nothing was dropped.
-   */
-  pruneRefs(id: SessionId, refs: readonly number[]): number[] {
-    const dropped = this.filteredSeqs.get(id);
-    if (dropped === undefined || dropped.size === 0) return [...refs];
-    return pruneSourceEventSeqs(refs, (seq) => !dropped.has(seq));
   }
 }

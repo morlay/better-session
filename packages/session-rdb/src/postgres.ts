@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { PgAsyncDatabase, PgAsyncTransaction, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import {
@@ -141,8 +141,12 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
 
   async getSeqMapRows(
     id: SessionId,
-  ): Promise<Array<{ fSequence: number; fOriginalSeq: number; fKind: string }>> {
-    return this.eventRows(this.db).where(eq(pgSessionEvents.fSessionId, id)).execute();
+  ): Promise<Array<{ fSequence: number; fOriginalSeq: number }>> {
+    return this.db
+      .select({ fSequence: pgSessionEvents.fSequence, fOriginalSeq: pgSessionEvents.fOriginalSeq })
+      .from(pgSessionEvents)
+      .where(eq(pgSessionEvents.fSessionId, id))
+      .execute();
   }
 
   async getEventRows(id: SessionId, fromSequence?: number): Promise<EventRow[]> {
@@ -176,7 +180,8 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
       deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(tx, id, fromSequence),
       getPrevBridge: (id, sequence) => this.getPrevBridge(tx, id, sequence),
       getLastBridge: (id) => this.getLastBridge(tx, id),
-      updateEventFields: (id, sequence, fields) => this.updateEventFields(tx, id, sequence, fields),
+      updateBridgeFields: (id, sequence, fields) =>
+        this.updateBridgeFields(tx, id, sequence, fields),
     };
   }
 
@@ -234,7 +239,13 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
 
   private async insertBridges(
     exec: PgAsyncDatabase<THKT>,
-    rows: Array<{ fSessionId: SessionId; fEventId: string; fSequence: number }>,
+    rows: Array<{
+      fSessionId: SessionId;
+      fEventId: string;
+      fSequence: number;
+      fOriginalSeq: number;
+      fSurfaceOp: string | null;
+    }>,
   ): Promise<void> {
     if (rows.length === 0) return;
     await exec
@@ -308,42 +319,38 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   private eventRows(exec: PgAsyncDatabase<THKT>) {
     return exec
       .select({
+        fEventId: pgSessionEvents.fEventId,
         fSequence: pgSessionEvents.fSequence,
-        fOriginalSeq: pgEvents.fOriginalSeq,
+        fOriginalSeq: pgSessionEvents.fOriginalSeq,
+        fType: pgEvents.fType,
         fKind: pgEvents.fKind,
+        fRole: pgEvents.fRole,
+        fName: pgEvents.fName,
+        fActionId: pgEvents.fActionId,
         fCreatedAt: pgEvents.fCreatedAt,
         fData: pgEvents.fData,
-        fSourceEventSeqs: pgEvents.fSourceEventSeqs,
-        fSurfaceOp: pgEvents.fSurfaceOp,
+        fSurfaceOp: pgSessionEvents.fSurfaceOp,
       })
       .from(pgSessionEvents)
       .innerJoin(pgEvents, eq(pgSessionEvents.fEventId, pgEvents.fEventId));
   }
 
-  private async updateEventFields(
+  private async updateBridgeFields(
     exec: PgAsyncDatabase<THKT>,
     id: SessionId,
     sequence: number,
     fields: {
-      fSourceEventSeqs?: string | null;
       fSurfaceOp?: string | null;
-      fData?: string;
+      fOriginalSeq?: number;
     },
   ): Promise<void> {
-    const eventIds = exec
-      .select({ fEventId: pgSessionEvents.fEventId })
-      .from(pgSessionEvents)
-      .where(and(eq(pgSessionEvents.fSessionId, id), eq(pgSessionEvents.fSequence, sequence)));
     await exec
-      .update(pgEvents)
+      .update(pgSessionEvents)
       .set({
-        ...(fields.fSourceEventSeqs === undefined
-          ? {}
-          : { fSourceEventSeqs: fields.fSourceEventSeqs }),
         ...(fields.fSurfaceOp === undefined ? {} : { fSurfaceOp: fields.fSurfaceOp }),
-        ...(fields.fData === undefined ? {} : { fData: fields.fData }),
+        ...(fields.fOriginalSeq === undefined ? {} : { fOriginalSeq: fields.fOriginalSeq }),
       })
-      .where(inArray(pgEvents.fEventId, eventIds))
+      .where(and(eq(pgSessionEvents.fSessionId, id), eq(pgSessionEvents.fSequence, sequence)))
       .execute();
   }
 }

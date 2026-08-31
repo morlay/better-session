@@ -45,7 +45,7 @@ import type {
 } from "@deepseek-ai/dsh-session";
 import { type Backend, type BackendTx, type EventInsert, type EventRow } from "./backend.ts";
 import { WriteGuard } from "./write-guard.ts";
-import { buildSeqMap, normalizeSurfaceReplaceProvenance, rowToMeta, scanRows } from "./log.ts";
+import { buildSeqMap, recomputeReplaceProvenance, rowToMeta, scanRows } from "./log.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   eventDimensions,
@@ -86,6 +86,8 @@ export interface SessionPersistenceRdbInternals {
     id: SessionId,
     signal?: AbortSignal,
   ): Promise<import("@deepseek-ai/dsh-session-persistence").SessionPersistenceRevision | undefined>;
+  /** 注册 fork 派生会话的事件行复用映射（上游 seq → 已存在事件行 id）。 */
+  registerReuseEventIds(childId: SessionId, map: ReadonlyMap<number, string>): void;
 }
 
 /**
@@ -175,10 +177,15 @@ export class SessionPersistenceRdb
   private readonly coordinator: PersistenceCoordinator<number>;
   /**
    * Write-authority state: the confirmed dense head per session (concurrent-
-   * writer detection) and the dropped delta seqs per session (provenance
-   * pruning). See {@link WriteGuard} for the timing contract.
+   * writer detection). See {@link WriteGuard} for the timing contract.
    */
   private readonly writeGuard = new WriteGuard();
+  /**
+   * 待复用事件行映射（fork 派生用）：childId → 上游 seq → 已存在事件行的
+   * f_event_id。forkFrom 注册后，下一次 appendBatch 消费（复用事件行、不
+   * 复制），消费后清除。
+   */
+  private readonly reuseEventIds = new Map<SessionId, Map<number, string>>();
 
   constructor(
     ctx: Context,
@@ -318,11 +325,10 @@ export class SessionPersistenceRdb
     // The confirmed head is the last PRESERVED seq (a torn tail is removed by
     // the caller's commitRepair, which re-confirms the head after repair).
     this.writeGuard.confirmHead(id, log.events.at(-1)?.seq ?? -1);
-    // 全量读取时使 replace 的 provenance 覆盖其 range（rewind 复用上游 seq
-    // 空间后，保留的 checkpoint replace 可能引用已删除的行 → 读取时引用被
-    // 剪，shadowed 校验失败 → 会话无法加载；这里把 range 内所有事件 seq 并入
-    // provenance，见 {@link normalizeSurfaceReplaceProvenance}）。
-    normalizeSurfaceReplaceProvenance(log.events);
+    // 全量读取时对 replace 事件重计算 provenance（sourceEventSeqs 不落库；
+    // 上游 Session seed 校验要求 replace 的 provenance 覆盖其 range 内全部
+    // surface 节点，见 {@link recomputeReplaceProvenance}）。
+    recomputeReplaceProvenance(log.events);
     return {
       meta: log.meta,
       events: log.events,
@@ -384,24 +390,21 @@ export class SessionPersistenceRdb
     if (row === undefined) return undefined;
     const meta = rowToMeta(row);
     let eventRows: EventRow[];
-    let seqMap: ReadonlyMap<number, number> | undefined;
-    let denseTypeMap: ReadonlyMap<number, string> | undefined;
+    let seqMap: ReadonlyMap<number, number>;
     if (options.fromSeq === undefined) {
       // Whole-log read: build the seq map from the same rows (no extra query).
       eventRows = await this.backend.getEventRows(id);
       seqMap = buildSeqMap(eventRows);
-      denseTypeMap = new Map(eventRows.map((r) => [r.fSequence, r.fKind]));
     } else {
-      // Suffix read: rows are only the suffix, but provenance remapping needs
-      // every row's upstream seq and dense type, so a lightweight two-column
-      // map is read alongside — the query still scales with the suffix.
+      // Suffix read: rows are only the suffix, but coordinate remapping needs
+      // every row's upstream seq, so a lightweight two-column map is read
+      // alongside — the query still scales with the suffix.
       eventRows = await this.backend.getEventRows(id, options.fromSeq);
       const seqRows = await this.backend.getSeqMapRows(id);
       seqMap = buildSeqMap(seqRows);
-      denseTypeMap = new Map(seqRows.map((r) => [r.fSequence, r.fKind]));
     }
     signal?.throwIfAborted();
-    const { preserved, tornFrom } = scanRows(eventRows, options.fromSeq ?? 0, seqMap, denseTypeMap);
+    const { preserved, tornFrom } = scanRows(eventRows, options.fromSeq ?? 0, seqMap);
     return {
       meta,
       events: preserved,
@@ -417,9 +420,9 @@ export class SessionPersistenceRdb
    * entirely. Delta events and events the writer marked `ignorable` are dropped
    * and the surviving events are re-numbered densely from the session's head
    * cursor; a batch that contains only dropped events is a no-op (no row
-   * materialization, no revision bump). Dropped events' upstream seqs are
-   * recorded per session so a later batch's surface provenance can prune
-   * references to them (see {@link surfaceBindings}).
+   * materialization, no revision bump). 写路径零转换：`f_data` 完整原始 data、
+   * `f_surface_op` 原始坐标原样落库（坐标转换集中在读取路径，经桥接行
+   * `f_original_seq` 映射）。
    * The transaction is the atomicity + durability boundary, so a mid-batch
    * failure (a UNIQUE violation on a duplicated seq) leaves the stored log
    * untouched.
@@ -443,16 +446,11 @@ export class SessionPersistenceRdb
     _isMaterialized: boolean,
   ): Promise<void> {
     await this.ready;
-    // Record every dropped delta's UPSTREAM seq (pure-delta batches included)
-    // so a later batch's assistant/message can prune sourceEventSeqs references
-    // to events that never got a persisted row (see {@link surfaceBindings}).
-    const droppedSeqs = new Set<number>();
-    for (const event of events) {
-      if (!isPersistedEvent(event)) droppedSeqs.add(event.seq);
-    }
-    if (droppedSeqs.size > 0) this.writeGuard.noteDropped(meta.id, droppedSeqs);
     const persisted = events.filter(isPersistedEvent);
     if (persisted.length === 0) return;
+    // fork 派生会话的 seed 复用源会话事件行（不复制）；消费后清除。
+    const reuse = this.reuseEventIds.get(meta.id);
+    if (reuse !== undefined) this.reuseEventIds.delete(meta.id);
     let confirmedHead = -1;
     await this.backend.transaction(async (tx) => {
       await tx.upsertSession(meta, randomUUID());
@@ -469,7 +467,7 @@ export class SessionPersistenceRdb
         meta,
         persisted,
         { parentId: head.fHeadEventId, nextSeq: head.fHeadSequence + 1 },
-        (refs) => this.writeGuard.pruneRefs(meta.id, refs),
+        reuse,
       );
       await tx.updateHead(meta.id, headEventId, headSequence);
       await tx.bumpRevision(meta.id);
@@ -527,14 +525,19 @@ export class SessionPersistenceRdb
   }
 
   /**
-   * 一次性清洗一个 session 的 surface/provenance 坐标到稠密空间并写回。
+   * 一次性清洗一个 session 的旧格式数据到新格式（迁移，最后做）。
    *
-   * 旧数据（rewind 前的代码写入）的 `sourceEventSeqs`、`surfaceOp` replace
-   * range 与 compaction `shadowedRange` 是上游坐标，读取时每次都要做坐标
-   * 解析对齐；清洗用与读取完全相同的解析（稠密优先 + 上游映射 + 剪枝 +
-   * replace provenance 补全）把它们重写为稠密坐标，之后读取无需再对齐
-   * （对已清洗数据解析恒为恒等）。torn tail 片段不参与（读取路径也不会
-   * 保留它们）。返回实际变更的事件数。
+   * 旧数据（本设计之前的代码写入）的特征：`t_events` 带 `f_source_event_seqs` /
+   * `f_surface_op` 列（上游坐标 provenance 落库）、`f_original_seq` 在事件行、
+   * `f_kind` 语义为「= 上游 type」。迁移目标（与新格式一致）：
+   * - `f_original_seq` 保留（语义 = 上游值，与新格式相同）——从 `t_events`
+   *   迁移到 `t_session_events` 桥接行；
+   * - `surfaceOp` 迁移到桥接行 `f_surface_op`，保持原始坐标（写路径零转换
+   *   原则——不转稠密坐标，读取时经 `f_original_seq` 映射重映射）；
+   * - `sourceEventSeqs` 丢弃（不落库语义）；
+   * - `turn`/`step` 留在 `f_data`（完整原始 data 语义，不剥离）；
+   * - `f_kind` 重算为事件种类（message/thinking 按 content 块归类）。
+   * 事务内完成——中途失败整体回滚，不留混合格式。返回实际变更的事件数。
    */
   async cleanseSession(id: SessionId, signal?: AbortSignal): Promise<{ changed: number }> {
     signal?.throwIfAborted();
@@ -543,39 +546,25 @@ export class SessionPersistenceRdb
     const eventRows = await this.backend.getEventRows(id);
     if (eventRows.length === 0) return { changed: 0 };
     const seqMap = buildSeqMap(eventRows);
-    const denseTypeMap = new Map(eventRows.map((r) => [r.fSequence, r.fKind]));
-    const { preserved } = scanRows(eventRows, 0, seqMap, denseTypeMap);
-    normalizeSurfaceReplaceProvenance(preserved);
+    const { preserved } = scanRows(eventRows, 0, seqMap);
+    recomputeReplaceProvenance(preserved);
     const bySeq = new Map(preserved.map((event) => [event.seq, event]));
     const updates: Array<{
       fSequence: number;
-      fSourceEventSeqs?: string | null;
       fSurfaceOp?: string | null;
-      fData?: string;
+      fOriginalSeq?: number;
     }> = [];
     for (const row of eventRows) {
       const event = bySeq.get(row.fSequence);
       if (event === undefined) continue; // torn tail fragment
-      const surface = event as SessionEvent & { sourceEventSeqs?: number[]; surfaceOp?: unknown };
-      const newSeqs =
-        surface.sourceEventSeqs === undefined ? null : JSON.stringify(surface.sourceEventSeqs);
+      const surface = event as SessionEvent & { surfaceOp?: unknown };
       const newOp = surface.surfaceOp === undefined ? null : JSON.stringify(surface.surfaceOp);
       const fields: {
-        fSourceEventSeqs?: string | null;
         fSurfaceOp?: string | null;
-        fData?: string;
+        fOriginalSeq?: number;
       } = {};
-      if (newSeqs !== row.fSourceEventSeqs) fields.fSourceEventSeqs = newSeqs;
       if (newOp !== row.fSurfaceOp) fields.fSurfaceOp = newOp;
-      // fData 只在 compaction 计量事件的 shadowedRange 变化时重写（避免
-      // JSON 重序列化带来的无关变更）。
-      if (row.fKind === "compaction/summary" || row.fKind === "compaction/prune") {
-        const storedData = JSON.parse(row.fData) as { shadowedRange?: unknown };
-        const newData = event.data as unknown as { shadowedRange?: unknown };
-        if (JSON.stringify(storedData.shadowedRange) !== JSON.stringify(newData.shadowedRange)) {
-          fields.fData = JSON.stringify(event.data);
-        }
-      }
+      if (row.fOriginalSeq !== row.fSequence) fields.fOriginalSeq = row.fSequence;
       if (Object.keys(fields).length > 0) {
         updates.push({ fSequence: row.fSequence, ...fields });
       }
@@ -583,12 +572,9 @@ export class SessionPersistenceRdb
     if (updates.length === 0) return { changed: 0 };
     await this.backend.transaction(async (tx) => {
       for (const update of updates) {
-        await tx.updateEventFields(id, update.fSequence, {
-          ...(update.fSourceEventSeqs === undefined
-            ? {}
-            : { fSourceEventSeqs: update.fSourceEventSeqs }),
+        await tx.updateBridgeFields(id, update.fSequence, {
           ...(update.fSurfaceOp === undefined ? {} : { fSurfaceOp: update.fSurfaceOp }),
-          ...(update.fData === undefined ? {} : { fData: update.fData }),
+          ...(update.fOriginalSeq === undefined ? {} : { fOriginalSeq: update.fOriginalSeq }),
         });
       }
     });
@@ -627,6 +613,15 @@ export class SessionPersistenceRdb
   }
 
   /**
+   * 注册 fork 派生会话的事件行复用映射：childId 的 seed 事件（上游 seq →
+   * 源会话已存在事件行的 f_event_id）在 appendBatch 时复用，不复制事件行。
+   * @internal 仅供 `SessionBranchRdbProvider.forkFrom` 使用。
+   */
+  registerReuseEventIds(childId: SessionId, map: ReadonlyMap<number, string>): void {
+    this.reuseEventIds.set(childId, new Map(map));
+  }
+
+  /**
    * 同包分支 provider 的内部访问面（rewind / forkFrom 共享后端与写路径）。
    * @internal 仅供 `SessionBranchRdbProvider` 使用；不是公开 API。
    */
@@ -641,6 +636,7 @@ export class SessionPersistenceRdb
       readFrom: (id, fromSeq, signal) => this.readFrom(id, fromSeq, signal),
       listSnapshots: (signal) => this.listSnapshots(signal),
       readStoredRevision: (id, signal) => this.readStoredRevision(id, signal),
+      registerReuseEventIds: (childId, map) => this.registerReuseEventIds(childId, map),
     };
   }
 }
@@ -675,38 +671,17 @@ function createBackend(config: Config): Backend {
 }
 
 /**
- * Serialize an event's surface-metadata fields for SQL binding. Both fields are
- * nullable TEXT columns — null when the event has no surface metadata (non-surface
- * events, events written before surface support).
- *
- * `sourceEventSeqs` references events by UPSTREAM seq. Delta events dropped at
- * write time never get a persisted row, so a reference to one can never be
- * remapped on read — keeping it verbatim produces a `source >= current seq`
- * provenance violation when the log is replayed as a session seed. The write
- * path therefore prunes references through {@link WriteGuard.pruneRefs}; a
- * fully pruned list is stored as null (no provenance).
- * @param event - the event to serialize.
- * @param prune - prunes references to dropped deltas before binding. Defaults
- *   to identity (e.g. repair closers, which never carry provenance).
- */
-function surfaceBindings(
-  event: SessionEvent,
-  prune: (refs: readonly number[]) => readonly number[] = (refs) => refs,
-): [string | null, string | null] {
-  const se = event as SessionEvent<SurfaceEventType>;
-  const sourceSeqs = se.sourceEventSeqs === undefined ? undefined : prune(se.sourceEventSeqs);
-  return [
-    sourceSeqs !== undefined && sourceSeqs.length > 0 ? JSON.stringify(sourceSeqs) : null,
-    se.surfaceOp !== undefined ? JSON.stringify(se.surfaceOp) : null,
-  ];
-}
-
-/**
  * Durably append one batch of persisted events to a session's tail inside the
- * enclosing transaction: mint each event's row (parent chain + playpen
- * dimensions + surface-metadata columns) and its bridge row, land both as ONE
- * multi-row INSERT each (N events are 2 statements instead of 2N), and return
- * the resulting head cursor.
+ * enclosing transaction: mint each event's row (parent chain + dimensions +
+ * complete original data) and its bridge row (dense seq + upstream seq +
+ * surface metadata), land both as ONE multi-row INSERT each (N events are 2
+ * statements instead of 2N), and return the resulting head cursor.
+ *
+ * 写路径零转换：`f_data` 完整原始 data、`f_surface_op` 原始坐标原样落库；
+ * `sourceEventSeqs` 不落库（读取时对 replace 事件重计算）。
+ *
+ * 事件行复用（fork 派生）：`reuse` 映射（上游 seq → 已存在事件行 id）命中时
+ * 复用事件行（不复制、不 INSERT t_events），只插桥接行；未命中则 mint 新行。
  *
  * The anchor is the caller's responsibility: a normal append starts from the
  * head cursor (`head.fHeadEventId` / `head.fHeadSequence + 1`), while
@@ -718,8 +693,8 @@ function surfaceBindings(
  * @param events - persisted events to append (callers already filtered out
  *   ephemeral/ignorable events; non-empty).
  * @param anchor - the parent event id to chain from and the next dense seq.
- * @param prune - forwarded to {@link surfaceBindings}; defaults to identity
- *   (repair closers never carry provenance).
+ * @param reuse - upstream seq → existing event id map (fork seed reuse), or
+ *   undefined for ordinary appends.
  * @returns the new head cursor (last event id + its dense seq).
  */
 async function appendEventTail(
@@ -727,7 +702,7 @@ async function appendEventTail(
   meta: SessionHeader,
   events: readonly SessionEvent[],
   anchor: { parentId: string; nextSeq: number },
-  prune: (refs: readonly number[]) => readonly number[] = (refs) => refs,
+  reuse?: ReadonlyMap<number, string>,
 ): Promise<{ headEventId: string; headSequence: number }> {
   let parentId = anchor.parentId;
   let nextSeq = anchor.nextSeq;
@@ -735,30 +710,46 @@ async function appendEventTail(
   // N events are 2 statements instead of 2N (fewer SQLite statements and fewer
   // PostgreSQL round trips per commit).
   const eventRows: EventInsert[] = [];
-  const bridgeRows: Array<{ fSessionId: SessionId; fEventId: string; fSequence: number }> = [];
+  const bridgeRows: Array<{
+    fSessionId: SessionId;
+    fEventId: string;
+    fSequence: number;
+    fOriginalSeq: number;
+    fSurfaceOp: string | null;
+  }> = [];
   for (const event of events) {
-    const eventId = randomUUID();
-    const { role, name, actionId } = eventDimensions(event);
-    const [surfaceSeqs, surfaceOp] = surfaceBindings(event, prune);
-    eventRows.push({
+    const reusedId = reuse?.get(event.seq);
+    const eventId = reusedId ?? randomUUID();
+    if (reusedId === undefined) {
+      const { kind, role, name, actionId } = eventDimensions(event);
+      eventRows.push({
+        fEventId: eventId,
+        fParentId: parentId,
+        fType: event.type,
+        fKind: kind,
+        fRole: role,
+        fName: name,
+        fActionId: actionId,
+        fEncoding: EVENT_ENCODING,
+        fData: JSON.stringify(event.data),
+        fCreatedAt: event.time,
+      });
+    }
+    const surfaceOp =
+      (event as SessionEvent<SurfaceEventType>).surfaceOp === undefined
+        ? null
+        : JSON.stringify((event as SessionEvent<SurfaceEventType>).surfaceOp);
+    bridgeRows.push({
+      fSessionId: meta.id,
       fEventId: eventId,
-      fParentId: parentId,
-      fKind: event.type,
-      fRole: role,
-      fName: name,
-      fActionId: actionId,
-      fEncoding: EVENT_ENCODING,
-      fData: JSON.stringify(event.data),
-      fCreatedAt: event.time,
+      fSequence: nextSeq,
       fOriginalSeq: event.seq,
-      fSourceEventSeqs: surfaceSeqs,
       fSurfaceOp: surfaceOp,
     });
-    bridgeRows.push({ fSessionId: meta.id, fEventId: eventId, fSequence: nextSeq });
     parentId = eventId;
     nextSeq++;
   }
-  await tx.insertEvents(eventRows);
+  if (eventRows.length > 0) await tx.insertEvents(eventRows);
   await tx.insertBridges(bridgeRows);
   return { headEventId: parentId, headSequence: nextSeq - 1 };
 }

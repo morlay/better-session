@@ -1,7 +1,6 @@
 /**
  * `WriteGuard` 状态机直接单测：并发写者检测的时序契约（never-read /
- * confirmed-absence / confirmed head）与 delta 剔除的跨批累积，不再需要
- * 端到端双实例堆栈即可覆盖。
+ * confirmed-absence / confirmed head），不再需要端到端双实例堆栈即可覆盖。
  */
 import { describe, expect, it } from "vitest";
 import { SessionId } from "@deepseek-ai/dsh-session";
@@ -82,40 +81,5 @@ describe("WriteGuard: concurrent-writer detection", () => {
       () => guard.assertNoConcurrentWriter(SessionId("s2"), 0),
       /modified by another writer/,
     );
-  });
-});
-
-describe("WriteGuard: dropped-delta provenance pruning", () => {
-  it("no dropped seqs recorded → refs pass through untouched", () => {
-    const guard = new WriteGuard();
-    const refs = [1, 2, 3];
-    expect(guard.pruneRefs(SessionId("s1"), refs)).toEqual([1, 2, 3]);
-    // A fresh array is returned; the input is never mutated.
-    expect(guard.pruneRefs(SessionId("s1"), refs)).not.toBe(refs);
-  });
-
-  it("prunes references that hit dropped delta seqs and keeps the rest", () => {
-    const guard = new WriteGuard();
-    guard.noteDropped(SessionId("s1"), [4, 7]);
-    expect(guard.pruneRefs(SessionId("s1"), [2, 4, 5, 7])).toEqual([2, 5]);
-  });
-
-  it("dropped seqs accumulate across batches (later assistant/message prunes earlier deltas)", () => {
-    const guard = new WriteGuard();
-    guard.noteDropped(SessionId("s1"), [4]);
-    guard.noteDropped(SessionId("s1"), [7, 9]);
-    expect(guard.pruneRefs(SessionId("s1"), [4, 7, 9, 10])).toEqual([10]);
-  });
-
-  it("a fully pruned list becomes empty (the serializer stores null)", () => {
-    const guard = new WriteGuard();
-    guard.noteDropped(SessionId("s1"), [1, 2]);
-    expect(guard.pruneRefs(SessionId("s1"), [1, 2])).toEqual([]);
-  });
-
-  it("sessions are independent: dropped seqs of one session do not prune another's refs", () => {
-    const guard = new WriteGuard();
-    guard.noteDropped(SessionId("s1"), [1]);
-    expect(guard.pruneRefs(SessionId("s2"), [1])).toEqual([1]);
   });
 });

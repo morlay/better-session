@@ -6,4 +6,4 @@ down:
 
 [no-cd]
 test: up
-    TEST_PG_URL="postgres://postgres:postgres@localhost:25433/postgres" nub exec vitest run src/__tests__/pg.spec.ts
+    TEST_PG_URL="postgres://postgres:postgres@localhost:25433/postgres" pnpm exec vitest run src/__tests__/pg.spec.ts

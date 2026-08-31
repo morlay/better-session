@@ -14,7 +14,7 @@ import { statSync } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import {
@@ -265,8 +265,12 @@ export class SqliteBackend implements Backend {
 
   async getSeqMapRows(
     id: SessionId,
-  ): Promise<Array<{ fSequence: number; fOriginalSeq: number; fKind: string }>> {
-    return this.eventRows().where(eq(tSessionEvents.fSessionId, id)).all();
+  ): Promise<Array<{ fSequence: number; fOriginalSeq: number }>> {
+    return this.db
+      .select({ fSequence: tSessionEvents.fSequence, fOriginalSeq: tSessionEvents.fOriginalSeq })
+      .from(tSessionEvents)
+      .where(eq(tSessionEvents.fSessionId, id))
+      .all();
   }
 
   async getEventRows(id: SessionId, fromSequence?: number): Promise<EventRow[]> {
@@ -335,7 +339,7 @@ export class SqliteBackend implements Backend {
     deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(id, fromSequence),
     getPrevBridge: (id, sequence) => this.getPrevBridge(id, sequence),
     getLastBridge: (id) => this.getLastBridge(id),
-    updateEventFields: (id, sequence, fields) => this.updateEventFields(id, sequence, fields),
+    updateBridgeFields: (id, sequence, fields) => this.updateBridgeFields(id, sequence, fields),
   };
 
   // --- row primitives (transaction-internal or standalone) ---
@@ -373,7 +377,13 @@ export class SqliteBackend implements Backend {
   }
 
   private async insertBridges(
-    rows: Array<{ fSessionId: SessionId; fEventId: string; fSequence: number }>,
+    rows: Array<{
+      fSessionId: SessionId;
+      fEventId: string;
+      fSequence: number;
+      fOriginalSeq: number;
+      fSurfaceOp: string | null;
+    }>,
   ): Promise<void> {
     if (rows.length === 0) return;
     this.db
@@ -436,41 +446,37 @@ export class SqliteBackend implements Backend {
   private eventRows() {
     return this.db
       .select({
+        fEventId: tSessionEvents.fEventId,
         fSequence: tSessionEvents.fSequence,
-        fOriginalSeq: tEvents.fOriginalSeq,
+        fOriginalSeq: tSessionEvents.fOriginalSeq,
+        fType: tEvents.fType,
         fKind: tEvents.fKind,
+        fRole: tEvents.fRole,
+        fName: tEvents.fName,
+        fActionId: tEvents.fActionId,
         fCreatedAt: tEvents.fCreatedAt,
         fData: tEvents.fData,
-        fSourceEventSeqs: tEvents.fSourceEventSeqs,
-        fSurfaceOp: tEvents.fSurfaceOp,
+        fSurfaceOp: tSessionEvents.fSurfaceOp,
       })
       .from(tSessionEvents)
       .innerJoin(tEvents, eq(tSessionEvents.fEventId, tEvents.fEventId));
   }
 
-  private async updateEventFields(
+  private async updateBridgeFields(
     id: SessionId,
     sequence: number,
     fields: {
-      fSourceEventSeqs?: string | null;
       fSurfaceOp?: string | null;
-      fData?: string;
+      fOriginalSeq?: number;
     },
   ): Promise<void> {
-    const eventIds = this.db
-      .select({ fEventId: tSessionEvents.fEventId })
-      .from(tSessionEvents)
-      .where(and(eq(tSessionEvents.fSessionId, id), eq(tSessionEvents.fSequence, sequence)));
     this.db
-      .update(tEvents)
+      .update(tSessionEvents)
       .set({
-        ...(fields.fSourceEventSeqs === undefined
-          ? {}
-          : { fSourceEventSeqs: fields.fSourceEventSeqs }),
         ...(fields.fSurfaceOp === undefined ? {} : { fSurfaceOp: fields.fSurfaceOp }),
-        ...(fields.fData === undefined ? {} : { fData: fields.fData }),
+        ...(fields.fOriginalSeq === undefined ? {} : { fOriginalSeq: fields.fOriginalSeq }),
       })
-      .where(inArray(tEvents.fEventId, eventIds))
+      .where(and(eq(tSessionEvents.fSessionId, id), eq(tSessionEvents.fSequence, sequence)))
       .run();
   }
 }

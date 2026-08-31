@@ -255,6 +255,18 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
     };
     const seed = [...renumber(prefix, 0), ...renumber(seedSuffix, prefix.length)];
+    // 事件行复用：前缀事件（上游 seq → 源会话已存在事件行 id）注册到写路径，
+    // appendBatch 消费时复用事件行、不复制。seedSuffix 的 manualTurn 事件是
+    // 新事件（无源行），不注册。
+    const internals = this.persistence.internals();
+    const sourceRows = await internals.backend.getEventRows(sourceId);
+    const sourceEventIds = new Map(sourceRows.map((row) => [row.fOriginalSeq, row.fEventId]));
+    const reuse = new Map<number, string>();
+    for (const event of prefix) {
+      const eventId = sourceEventIds.get(event.seq);
+      if (eventId !== undefined) reuse.set(event.seq, eventId);
+    }
+    internals.registerReuseEventIds(childId, reuse);
     await this.persistence.create(childMeta);
     if (seed.length > 0) await this.persistence.append(childId, seed);
     return childId;
