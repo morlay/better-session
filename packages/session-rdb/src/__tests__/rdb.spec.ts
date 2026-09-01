@@ -929,11 +929,42 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     await mounted.dispose();
   });
 
+  it("rebases a stale upstream seedLength onto the dense descriptor seq", async () => {
+    // Fork-seeded subagent children keep f_seed_length in the ORIGINAL parent
+    // coordinates while events are re-numbered densely per session; the read
+    // path must rebase the boundary so the descriptor satisfies
+    // seq >= seedLength (see readLog).
+    const path = await freshDbPath();
+    const m = meta("seedlen-fork-child", "/w");
+    const db = openDatabase(path, "wal");
+    db.prepare(`
+      INSERT INTO t_sessions
+        (f_session_id, f_head_event_id, f_head_sequence, f_version, f_created_at, f_cwd,
+         f_parent_session, f_seed_length, f_origin, f_delegation_depth, f_incarnation, f_revision)
+      VALUES (?, '', -1, ?, ?, ?, 'session-parent', 20963, 'subagent', 1, 'seedlen', 1)
+    `).run(m.id, m.version, m.createdAt, m.cwd ?? null);
+    let parent = "";
+    parent = insertEventRow(db, m.id, 0, "turn/start", { turn: 1 }, parent);
+    insertEventRow(
+      db,
+      m.id,
+      1,
+      "subagent/descriptor",
+      { version: 1, mode: "one-shot", provider: "fork", label: "review" },
+      parent,
+    );
+    db.close();
+
+    const mounted = await backend(path);
+    const loaded = await mounted.ctx.sessionPersistence.load(m.id);
+    expect(loaded.meta.seedLength).toBe(1);
+    await mounted.dispose();
+  });
+
   it("has no independent per-session log location", async () => {
     const { ctx, dispose } = await backend();
     expect(ctx.sessionPersistence.locate(meta("sqlite-location"))).toBeUndefined();
-    await dispose();
-  });
+    await dispose();  });
 
   it("an interrupted turn (rows after the last turn/end) is PRESERVED and closed during load", async () => {
     const path = await freshDbPath();

@@ -23,7 +23,20 @@
 
 import { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
-import { settingsNamespace, type SettingsProvider } from "@deepseek-ai/dsh-settings";
+import type { SettingsNamespace, SettingsProvider } from "@deepseek-ai/dsh-settings";
+
+/**
+ * Compat shim: `settingsNamespace` was removed from @deepseek-ai/dsh-settings
+ * in the 0.1.2-alpha line; namespaces are now plain kebab-case strings
+ * validated at the call site. Keep the same validation locally so a misnamed
+ * namespace still fails loud. Revert when dsh-settings re-exports it.
+ */
+const settingsNamespace = (ns: string): SettingsNamespace => {
+  if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(ns)) {
+    throw new TypeError(`settings namespace "${ns}" is not kebab-case`);
+  }
+  return ns as SettingsNamespace;
+};
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
@@ -273,6 +286,44 @@ export class SessionPersistenceRdb
   }
 
   /**
+   * Compat shim: the 0.1.2-alpha session-query gateway calls
+   * `persistence.borrowSession(id, signal)` on the registered
+   * sessionPersistence service and expects a disposable prepared observation
+   * (`{ source, inspection: { meta, events }, revision, [Symbol.dispose] }`).
+   * Adapt the existing whole-log read to that contract. Revert when the
+   * upstream `PersistenceBackend` seam grows a first-class borrow API.
+   */
+  async borrowSession(id: SessionId, signal?: AbortSignal) {
+    const prefix = await this.readPrefix(id, signal);
+    if (prefix === undefined) {
+      const notFound = new Error(`stored session "${id}" not found`);
+      notFound.name = "SessionPersistenceNotFoundError";
+      throw notFound;
+    }
+    const sessions = this.ctx.get("sessions") as
+      | { prepare: (id: SessionId, options: unknown) => unknown }
+      | undefined;
+    if (sessions === undefined) {
+      throw new Error("cannot borrow a session: SessionStore is not configured");
+    }
+    const session = sessions.prepare(id, {
+      seed: prefix.events.map((event) => structuredClone(event)),
+      meta: structuredClone(prefix.meta),
+      seedSource: "persistence",
+    }) as { header: SessionHeader };
+    return {
+      source: "prepared",
+      inspection: Object.freeze({
+        meta: session.header,
+        events: Object.freeze(prefix.events),
+      }),
+      revision: prefix.revision,
+      preparedSession: session,
+      [Symbol.dispose]: () => {},
+    };
+  }
+
+  /**
    * Seek-capable suffix read: the backend selects `f_sequence >= fromSeq`
    * directly, so the read scales with the suffix, not the log. Provenance
    * remapping still needs every row's upstream seq, so a lightweight
@@ -394,6 +445,29 @@ export class SessionPersistenceRdb
     }
     signal?.throwIfAborted();
     const { preserved, tornFrom } = scanRows(eventRows, options.fromSeq ?? 0, seqMap, denseTypeMap);
+    // Fork-seeded subagent children are persisted with per-session DENSE
+    // re-numbered seqs, but `f_seed_length` keeps the ORIGINAL upstream cut
+    // length — so `meta.seedLength` exceeds every dense seq and consumers that
+    // require the subagent descriptor to sit at `seq >= seedLength` (e.g. the
+    // session gateway's address validation) reject the child with
+    // "subagent descriptor is unavailable". The descriptor is the first
+    // child-owned event, so the renumbered seed boundary IS its dense seq.
+    // Rebase only when the invariant would be violated, which can only happen
+    // in the re-numbered-log artifact.
+    if (
+      meta.origin === "subagent" &&
+      meta.seedLength !== undefined &&
+      options.fromSeq === undefined
+    ) {
+      // `subagent/descriptor` is not in this toolchain's SessionEvent type
+      // union (the dsh-session pinned here predates it), hence the widening.
+      const descriptor = preserved.find(
+        (event) => (event.type as string) === "subagent/descriptor",
+      );
+      if (descriptor !== undefined && descriptor.seq < meta.seedLength) {
+        (meta as { seedLength: number }).seedLength = descriptor.seq;
+      }
+    }
     return {
       meta,
       events: preserved,
