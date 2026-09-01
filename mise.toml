@@ -1,5 +1,5 @@
 [env]
-DEEPSEEK_HARNESS_VERSION = "0.1.2-alpha.2"
+DEEPSEEK_HARNESS_VERSION = "0.1.2-alpha.3"
 
 [tools]
 node = "26"

@@ -1,4 +1,3 @@
-
 sync: && patch
     @if [ -d deepseek-harness ]; then rm -rf deepseek-harness; fi
     git clone --depth=1 -b dsh-v{{ env("DEEPSEEK_HARNESS_VERSION") }} https://github.com/deepseek-ai/deepseek-harness.git deepseek-harness
