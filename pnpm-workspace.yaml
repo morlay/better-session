@@ -9,6 +9,8 @@ packages:
 
 linkWorkspacePackages: true
 autoInstallPeers: true
+nodeLinker: hoisted
+injectWorkspacePackages: true
 
 allowBuilds:
   "@deepseek-ai/dsh-subprocess-local": true
