@@ -698,7 +698,7 @@ export class SessionEditor extends Service {
     signal?: AbortSignal,
   ): Promise<readonly SessionEvent[]> {
     const live = this.ctx.sessions.get(sessionId);
-    if (live !== undefined) return live.events;
+    if (live !== undefined) return live.snapshotEvents();
     // cold：读原始事件（`loadStored`，scanRows 只做 torn-tail 切割、不补
     // closers）。`inspect` 会经 coordinator 的 `prepareCore` 给未闭合 log
     // 补合成 step/end + turn/end——未闭合轮次被掩盖成闭合，编辑未闭合轮次

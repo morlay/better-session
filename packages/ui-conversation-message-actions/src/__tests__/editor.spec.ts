@@ -9,6 +9,7 @@ import { Context } from "@deepseek-ai/cordis";
 import {
   Session,
   SessionId as SessionIdBrand,
+  SessionSeq,
   SessionStore,
   type SessionEvent,
   type SessionHeader,
@@ -146,7 +147,7 @@ describe("SessionEditor rewind/retry/fork", () => {
       await ctx.sessions.flush(live);
       await editor.rewind(SessionIdBrand("live"), 5);
       // live 内存 log 与持久化一起截断，会话不释放、id 不变。
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
       expect(ctx.sessions.get(SessionIdBrand("live"))).toBe(live);
     } finally {
       await dispose();
@@ -169,8 +170,8 @@ describe("SessionEditor rewind/retry/fork", () => {
       expect(result.sessionId).toBe(SessionIdBrand("live"));
 
       // live 内存 log：截断前缀 + ignorable 版本效果（seq 6）。
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
-      expect(live.events[6]?.type).toBe("session-branch/version");
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect(live.snapshotEvents()[6]?.type).toBe("session-branch/version");
       // RDB canonical log：只有截断前缀（版本效果 ignorable 不落库）。
       const backend = (
         ctx.sessionPersistence as unknown as {
@@ -194,15 +195,15 @@ describe("SessionEditor rewind/retry/fork", () => {
       // 落盘时被 RDB 过滤）+ assistant/message + step/end，没有 turn/end。
       const chunk = (seq: number, text: string): SessionEvent => ({
         type: "assistant/chunk",
-        seq,
+        seq: SessionSeq(seq),
         time: seq,
         data: { turn: 3, step: 1, chunk: { type: "text-delta", index: 0, text } },
       });
       const openTail: SessionEvent[] = [
-        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         {
           type: "user/message",
-          seq: 13,
+          seq: SessionSeq(13),
           time: 13,
           data: {
             id: "turn3-user",
@@ -212,13 +213,13 @@ describe("SessionEditor rewind/retry/fork", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/start", seq: 14, time: 14, data: { turn: 3, step: 1 } },
+        { type: "step/start", seq: SessionSeq(14), time: 14, data: { turn: 3, step: 1 } },
         chunk(15, "a"),
         chunk(16, "b"),
         chunk(17, "c"),
         {
           type: "assistant/message",
-          seq: 18,
+          seq: SessionSeq(18),
           time: 18,
           data: {
             turn: 3,
@@ -232,7 +233,7 @@ describe("SessionEditor rewind/retry/fork", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/end", seq: 19, time: 19, data: { turn: 3, step: 1 } },
+        { type: "step/end", seq: SessionSeq(19), time: 19, data: { turn: 3, step: 1 } },
       ];
       ctx.sessions.create(SessionIdBrand("live"), {
         meta: meta("live"),
@@ -250,7 +251,7 @@ describe("SessionEditor rewind/retry/fork", () => {
           };
         }
       ).internals().backend;
-      expect(live.events.at(-1)?.seq).toBe(20);
+      expect(live.snapshotEvents().at(-1)?.seq).toBe(20);
       expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(17);
 
       // 编辑轮 2 的助手文本 → boundary = 轮 1 的 turn/end（上游 seq 5）。
@@ -268,9 +269,11 @@ describe("SessionEditor rewind/retry/fork", () => {
       expect(result.queuedTurns).toBe(0);
 
       // live 内存 log：截断前缀（0..5）+ ignorable 版本效果（6）+ 手工闭合轮（7..12）。
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-      expect(live.events[6]?.type).toBe("session-branch/version");
-      expect(live.events.at(-1)?.type).toBe("turn/end");
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+      ]);
+      expect(live.snapshotEvents()[6]?.type).toBe("session-branch/version");
+      expect(live.snapshotEvents().at(-1)?.type).toBe("turn/end");
       // RDB canonical log：截断前缀 + 手工轮（版本效果 ignorable 不落库）→ head = 11。
       expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(11);
 
@@ -278,7 +281,9 @@ describe("SessionEditor rewind/retry/fork", () => {
       const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
       liveAppend.append("turn/start", { turn: 4 });
       await ctx.sessions.flush(live);
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+      ]);
       expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(12);
     } finally {
       await dispose();
@@ -295,7 +300,7 @@ describe("SessionEditor rewind/retry/fork", () => {
       );
       const header: SessionEvent = {
         type: "request/header",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: {
           header: { config: { provider: "mock", model: "mock" } },
@@ -349,8 +354,8 @@ describe("SessionEditor rewind/retry/fork", () => {
       expect(followups).toHaveLength(1);
       // live log：截断前缀（header seq 0 + 轮 1 seq 1..6）+ ignorable
       // 版本效果（seq 7，boundary = 轮 1 的 turn/end @ 6）。
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-      expect(live.events[7]?.type).toBe("session-branch/version");
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+      expect(live.snapshotEvents()[7]?.type).toBe("session-branch/version");
       disposeAgents();
     } finally {
       await dispose();
@@ -362,7 +367,7 @@ describe("SessionEditor rewind/retry/fork", () => {
     try {
       const header: SessionEvent = {
         type: "request/header",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
       } as SessionEvent;
@@ -398,13 +403,15 @@ describe("SessionEditor rewind/retry/fork", () => {
 
       // live log：截断前缀（header + 轮 1，seq 0..6）+ ignorable 版本效果
       // （seq 7）+ manualTurn 轮 2（seq 8..13，含 turn/start…turn/end）。
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-      expect(live.events[7]?.type).toBe("session-branch/version");
-      expect(live.events.at(-1)?.type).toBe("turn/end");
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+      ]);
+      expect(live.snapshotEvents()[7]?.type).toBe("session-branch/version");
+      expect(live.snapshotEvents().at(-1)?.type).toBe("turn/end");
       // manualTurn 的 assistant 内容为编辑后文本。
-      const editedAssistant = live.events.find(
-        (e) => e.type === "assistant/message" && e.data.turn === 2,
-      );
+      const editedAssistant = live
+        .snapshotEvents()
+        .find((e) => e.type === "assistant/message" && e.data.turn === 2);
       expect(
         editedAssistant?.type === "assistant/message" &&
           (editedAssistant.data.message.content[0] as { text?: string }).text,
@@ -419,7 +426,7 @@ describe("SessionEditor rewind/retry/fork", () => {
     try {
       const header: SessionEvent = {
         type: "request/header",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
       } as SessionEvent;
@@ -464,8 +471,8 @@ describe("SessionEditor rewind/retry/fork", () => {
       expect(followups).toHaveLength(1);
       // live log：版本效果（seq 0）+ 重放输入由 followup 后的 agent append
       // （mock 只记录，不 append）→ 版本效果是唯一新事件。
-      expect(live.events.map((e) => e.seq)).toEqual([0]);
-      expect(live.events[0]?.type).toBe("session-branch/version");
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0]);
+      expect(live.snapshotEvents()[0]?.type).toBe("session-branch/version");
       disposeAgents();
     } finally {
       await dispose();
@@ -477,7 +484,7 @@ describe("SessionEditor rewind/retry/fork", () => {
     try {
       const header: SessionEvent = {
         type: "request/header",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
       } as SessionEvent;
@@ -592,10 +599,10 @@ describe("SessionEditor rewind/retry/fork", () => {
       // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合：
       // turn/start + user/message（seq 12）+ step/start + assistant/message（seq 14）。
       const openTail: SessionEvent[] = [
-        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         {
           type: "user/message",
-          seq: 13,
+          seq: SessionSeq(13),
           time: 13,
           data: {
             id: "turn3-user",
@@ -605,10 +612,10 @@ describe("SessionEditor rewind/retry/fork", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/start", seq: 14, time: 14, data: { turn: 3, step: 1 } },
+        { type: "step/start", seq: SessionSeq(14), time: 14, data: { turn: 3, step: 1 } },
         {
           type: "assistant/message",
-          seq: 15,
+          seq: SessionSeq(15),
           time: 15,
           data: {
             turn: 3,
@@ -685,10 +692,10 @@ describe("SessionEditor rewind/retry/fork", () => {
     const { ctx, editor, dispose } = await harness();
     try {
       const openTail: SessionEvent[] = [
-        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         {
           type: "user/message",
-          seq: 13,
+          seq: SessionSeq(13),
           time: 13,
           data: {
             id: "turn3-user",
@@ -698,10 +705,10 @@ describe("SessionEditor rewind/retry/fork", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/start", seq: 14, time: 14, data: { turn: 3, step: 1 } },
+        { type: "step/start", seq: SessionSeq(14), time: 14, data: { turn: 3, step: 1 } },
         {
           type: "assistant/message",
-          seq: 15,
+          seq: SessionSeq(15),
           time: 15,
           data: {
             turn: 3,
@@ -739,11 +746,11 @@ describe("SessionEditor rewind/retry/fork", () => {
       // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合，真实
       // agent-loop 顺序：turn/start → step/start → user/message → ...
       const openTail: SessionEvent[] = [
-        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
-        { type: "step/start", seq: 13, time: 13, data: { turn: 3, step: 1 } },
+        { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
+        { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
         {
           type: "user/message",
-          seq: 14,
+          seq: SessionSeq(14),
           time: 14,
           data: {
             id: "turn3-user",
@@ -755,7 +762,7 @@ describe("SessionEditor rewind/retry/fork", () => {
         } as SessionEvent,
         {
           type: "assistant/message",
-          seq: 15,
+          seq: SessionSeq(15),
           time: 15,
           data: {
             turn: 3,
@@ -769,7 +776,7 @@ describe("SessionEditor rewind/retry/fork", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/end", seq: 16, time: 16, data: { turn: 3, step: 1 } },
+        { type: "step/end", seq: SessionSeq(16), time: 16, data: { turn: 3, step: 1 } },
       ];
       ctx.sessions.create(SessionIdBrand("live"), {
         meta: meta("live"),
@@ -795,10 +802,14 @@ describe("SessionEditor rewind/retry/fork", () => {
 
       // live 内存 log：截断前缀（0..12，孤儿 step/start 13 被剔除）+
       // ignorable 版本效果（13）。
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-      expect(live.events[12]?.type).toBe("turn/start");
-      expect(live.events[13]?.type).toBe("session-branch/version");
-      expect(live.events.some((e) => e.type === "step/start" && e.data.turn === 3)).toBe(false);
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+      ]);
+      expect(live.snapshotEvents()[12]?.type).toBe("turn/start");
+      expect(live.snapshotEvents()[13]?.type).toBe("session-branch/version");
+      expect(live.snapshotEvents().some((e) => e.type === "step/start" && e.data.turn === 3)).toBe(
+        false,
+      );
       // 内存 log 对 token meter 重放合法。
       const meter = new TokenMeter(ctx);
       expect(() => meter.measure(live)).not.toThrow();
@@ -813,10 +824,10 @@ describe("SessionEditor rewind/retry/fork", () => {
       // append 时事件 seq 是上游坐标（delta 被过滤后稠密重编号），replace 的
       // sourceEventSeqs/surfaceOp 原样落库为上游坐标——历史加载失败的数据样式。
       const compacted: SessionEvent[] = [
-        { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+        { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
         {
           type: "user/message",
-          seq: 1,
+          seq: SessionSeq(1),
           time: 2,
           data: {
             id: "cleanse-user",
@@ -826,22 +837,22 @@ describe("SessionEditor rewind/retry/fork", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+        { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
         {
           type: "assistant/chunk",
-          seq: 3,
+          seq: SessionSeq(3),
           time: 4,
           data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
         },
         {
           type: "assistant/chunk",
-          seq: 4,
+          seq: SessionSeq(4),
           time: 5,
           data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
         },
         {
           type: "assistant/message",
-          seq: 5,
+          seq: SessionSeq(5),
           time: 6,
           data: {
             turn: 1,
@@ -855,13 +866,18 @@ describe("SessionEditor rewind/retry/fork", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/end", seq: 6, time: 7, data: { turn: 1, step: 1 } },
-        { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
-        { type: "turn/start", seq: 8, time: 9, data: { turn: 2 } },
-        { type: "step/start", seq: 9, time: 10, data: { turn: 2, step: 1 } },
+        { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
+        {
+          type: "turn/end",
+          seq: SessionSeq(7),
+          time: 8,
+          data: { turn: 1, reason: { kind: "completed" } },
+        },
+        { type: "turn/start", seq: SessionSeq(8), time: 9, data: { turn: 2 } },
+        { type: "step/start", seq: SessionSeq(9), time: 10, data: { turn: 2, step: 1 } },
         {
           type: "assistant/message",
-          seq: 10,
+          seq: SessionSeq(10),
           time: 11,
           data: {
             turn: 2,
@@ -876,8 +892,13 @@ describe("SessionEditor rewind/retry/fork", () => {
           surfaceOp: { op: "replace", start: 1, end: 5 },
           sourceEventSeqs: [1, 5],
         } as SessionEvent,
-        { type: "step/end", seq: 11, time: 12, data: { turn: 2, step: 1 } },
-        { type: "turn/end", seq: 12, time: 13, data: { turn: 2, reason: { kind: "completed" } } },
+        { type: "step/end", seq: SessionSeq(11), time: 12, data: { turn: 2, step: 1 } },
+        {
+          type: "turn/end",
+          seq: SessionSeq(12),
+          time: 13,
+          data: { turn: 2, reason: { kind: "completed" } },
+        },
       ];
       await createPersisted(ctx, "cleanse-me", compacted);
 
@@ -902,16 +923,16 @@ describe("SessionEditor rewind/retry/fork", () => {
       // （无 turn/end）。轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 未闭合。
       const chunk = (seq: number, text: string): SessionEvent => ({
         type: "assistant/chunk",
-        seq,
+        seq: SessionSeq(seq),
         time: seq,
         data: { turn: 3, step: 1, chunk: { type: "text-delta", index: 0, text } },
       });
       const openTail: SessionEvent[] = [
-        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
-        { type: "step/start", seq: 13, time: 13, data: { turn: 3, step: 1 } },
+        { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
+        { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
         {
           type: "user/message",
-          seq: 14,
+          seq: SessionSeq(14),
           time: 14,
           data: {
             id: "turn3-user",
@@ -925,7 +946,7 @@ describe("SessionEditor rewind/retry/fork", () => {
         chunk(16, "b"),
         {
           type: "assistant/message",
-          seq: 17,
+          seq: SessionSeq(17),
           time: 17,
           data: {
             turn: 3,
@@ -939,7 +960,7 @@ describe("SessionEditor rewind/retry/fork", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/end", seq: 18, time: 18, data: { turn: 3, step: 1 } },
+        { type: "step/end", seq: SessionSeq(18), time: 18, data: { turn: 3, step: 1 } },
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
 

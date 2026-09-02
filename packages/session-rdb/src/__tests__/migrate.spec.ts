@@ -146,9 +146,7 @@ describe("migrate v1 → v2", () => {
     expect(bridge.f_surface_op).toBe('"append"');
 
     // 旧列已删除。
-    const eventColumns = db
-      .prepare("PRAGMA table_info(t_events)")
-      .all() as Array<{ name: string }>;
+    const eventColumns = db.prepare("PRAGMA table_info(t_events)").all() as Array<{ name: string }>;
     expect(eventColumns.map((c) => c.name)).not.toContain("f_original_seq");
     expect(eventColumns.map((c) => c.name)).not.toContain("f_source_event_seqs");
     expect(eventColumns.map((c) => c.name)).not.toContain("f_surface_op");

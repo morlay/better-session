@@ -5,16 +5,16 @@
 
 ## 技术栈
 
-| 项         | 值                                     | 位置              |
-| ---------- | -------------------------------------- | ----------------- |
-| node       | 26                                     | mise.toml         |
-| pnpm       | 12                                     | mise.toml         |
-| just       | latest                                 | mise.toml         |
-| 上游版本   | `DEEPSEEK_HARNESS_VERSION`             | mise.toml         |
-| 构建       | tsdown（rolldown）                     | 根 devDependencies |
-| 类型检查   | typescript（strict + noUncheckedIndexedAccess） | 根 tsconfig.json  |
-| 测试       | vitest                                 | 根 vitest.config.ts |
-| lint / fmt | oxlint / oxfmt                         | 根 devDependencies |
+| 项         | 值                                              | 位置                |
+| ---------- | ----------------------------------------------- | ------------------- |
+| node       | 26                                              | mise.toml           |
+| pnpm       | 12                                              | mise.toml           |
+| just       | latest                                          | mise.toml           |
+| 上游版本   | `DEEPSEEK_HARNESS_VERSION`                      | mise.toml           |
+| 构建       | tsdown（rolldown）                              | 根 devDependencies  |
+| 类型检查   | typescript（strict + noUncheckedIndexedAccess） | 根 tsconfig.json    |
+| 测试       | vitest                                          | 根 vitest.config.ts |
+| lint / fmt | oxlint / oxfmt                                  | 根 devDependencies  |
 
 ## 常用命令
 

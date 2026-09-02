@@ -53,9 +53,10 @@ export function createTableSql(dialect: Dialect, def: TableDef, schema?: string)
     parts.push(`UNIQUE (${u.columns.map(quote).join(", ")})`);
   }
   const strict = dialect === "sqlite" ? " STRICT" : "";
-  const qualified = schema === undefined || schema === "public"
-    ? quote(def.name)
-    : `${quote(schema)}.${quote(def.name)}`;
+  const qualified =
+    schema === undefined || schema === "public"
+      ? quote(def.name)
+      : `${quote(schema)}.${quote(def.name)}`;
   return `CREATE TABLE IF NOT EXISTS ${qualified} (\n  ${parts.join(",\n  ")}\n)${strict}`;
 }
 
@@ -63,9 +64,10 @@ export function createTableSql(dialect: Dialect, def: TableDef, schema?: string)
 export function createIndexSql(def: TableDef, name: string, schema?: string): string {
   const idx = def.indexes?.find((i) => i.name === name);
   if (idx === undefined) throw new Error(`unknown index "${name}" on table "${def.name}"`);
-  const qualified = schema === undefined || schema === "public"
-    ? quote(def.name)
-    : `${quote(schema)}.${quote(def.name)}`;
+  const qualified =
+    schema === undefined || schema === "public"
+      ? quote(def.name)
+      : `${quote(schema)}.${quote(def.name)}`;
   return `CREATE INDEX IF NOT EXISTS ${quote(idx.name)} ON ${qualified}(${idx.columns
     .map(quote)
     .join(", ")})`;

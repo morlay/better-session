@@ -23,3 +23,8 @@ allowBuilds:
   protobufjs: true
 
 minimumReleaseAge: 0
+
+overrides:
+  "@deepseek-ai/dsh-session": "workspace:*"
+  "@deepseek-ai/dsh-brand": "workspace:*"
+  "@deepseek-ai/cordis": "workspace:*"

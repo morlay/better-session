@@ -20,14 +20,8 @@
   ],
   "type": "module",
   "exports": {
-    ".": {
-      "types": "./lib/index.d.mts",
-      "default": "./lib/index.mjs"
-    },
-    "./invariant": {
-      "types": "./lib/invariant.d.mts",
-      "default": "./lib/invariant.mjs"
-    },
+    ".": "./dist/index.mjs",
+    "./invariant": "./dist/invariant.mjs",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },

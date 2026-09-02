@@ -10,6 +10,7 @@ import { Context } from "@deepseek-ai/cordis";
 import {
   Session,
   SessionId,
+  SessionSeq,
   SessionStore,
   type SessionEvent,
   type SessionHeader,
@@ -121,7 +122,7 @@ describe("locateTurnEnd", () => {
   it("rejects an anchor inside an open turn (after mode)", () => {
     const log: SessionEvent[] = [
       ...twoTurnLog(),
-      { type: "turn/start", seq: 12, time: 1, data: { turn: 3 } },
+      { type: "turn/start", seq: SessionSeq(12), time: 1, data: { turn: 3 } },
     ];
     expect(() => locateTurnEnd(log, 13, "after")).toThrow(SessionBranchError);
   });
@@ -180,7 +181,8 @@ describe("forkFrom", () => {
       expect(childId).toBe("child");
       const child = await persistence.load(childId);
       expect(child.meta.parentSession).toBe(SessionId("src"));
-      expect(child.meta.seedLength).toBe(6);
+      expect(child.meta.isSeeded).toBe(true);
+      expect(child.inheritedEventCount).toBe(6);
       expect(child.meta.cwd).toBe("/work");
       expect(child.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
       expect(child.events[0]?.type).toBe("turn/start");
@@ -199,7 +201,7 @@ describe("forkFrom", () => {
       await createPersisted(ctx, "src", twoTurnLog());
       const version = {
         type: "session-branch/version",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         ignorable: true,
         data: {
@@ -226,7 +228,8 @@ describe("forkFrom", () => {
       // ignorable 事件不进 canonical log：只有边界前缀（6 事件）。
       expect(child.events).toHaveLength(6);
       expect(child.events.some((e) => (e.type as string) === "session-branch/version")).toBe(false);
-      expect(child.meta.seedLength).toBe(6);
+      expect(child.meta.isSeeded).toBe(true);
+      expect(child.inheritedEventCount).toBe(6);
     } finally {
       await dispose();
     }
@@ -317,13 +320,13 @@ describe("rewind", () => {
       const live = ctx.sessions.get(SessionId("live"))!;
       await ctx.sessions.flush(live);
       // 12 seed 事件 + 构造时自动补记的 session/end-seed（seq 12）。
-      expect(live.events).toHaveLength(13);
+      expect(live.snapshotEvents()).toHaveLength(13);
 
       const snapshot = await provider.rewind(SessionId("live"), 5);
       expect(snapshot.header.id).toBe("live");
 
       // live 内存 log 截断到边界（含派生缓存与 surface 状态复位）。
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
       // RDB head 截断（load/inspect 在 live 时读内存，直接校验后端 head）。
       const backend = persistence.internals().backend as unknown as {
         getHead(id: SessionId): Promise<{ fHeadSequence: number }>;
@@ -336,7 +339,7 @@ describe("rewind", () => {
       const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
       liveAppend.append("turn/start", { turn: 3 });
       await ctx.sessions.flush(live);
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
 
       // surface 派生缓存重建：仍能派生截断前缀的完整消息历史。
       expect(live.deriveMessages().map((m) => m.content[0])).toEqual([
@@ -393,26 +396,26 @@ describe("rewind", () => {
         ...oneTurnLog(),
         {
           type: "assistant/chunk",
-          seq: 6,
+          seq: SessionSeq(6),
           time: 7,
           data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "x" } },
         },
         {
           type: "assistant/chunk",
-          seq: 7,
+          seq: SessionSeq(7),
           time: 8,
           data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "y" } },
         },
         ...turn2,
         {
           type: "assistant/chunk",
-          seq: 14,
+          seq: SessionSeq(14),
           time: 15,
           data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "z" } },
         },
         {
           type: "assistant/chunk",
-          seq: 15,
+          seq: SessionSeq(15),
           time: 16,
           data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "w" } },
         },
@@ -426,7 +429,7 @@ describe("rewind", () => {
       };
       // live 上游 head = 16；RDB 稠密 head = 12（persisted：轮 1 seq 0..5、
       // 轮 2 seq 8..13、end-seed seq 16；4 个 delta 被过滤）。
-      expect(live.events.at(-1)?.seq).toBe(16);
+      expect(live.snapshotEvents().at(-1)?.seq).toBe(16);
       expect((await backend.getHead(SessionId("live-delta"))).fHeadSequence).toBe(12);
 
       // 编辑轮 2 → boundary = 轮 1 的 turn/end（上游 seq 5）。修复前此处
@@ -435,7 +438,7 @@ describe("rewind", () => {
       expect(snapshot.header.id).toBe("live-delta");
 
       // live 内存 log 截断到上游边界。
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
       // RDB head 截断到稠密目标（轮 1 无 delta 插入中间 → 上游 5 == 稠密 5）。
       expect((await backend.getHead(SessionId("live-delta"))).fHeadSequence).toBe(5);
 
@@ -443,7 +446,7 @@ describe("rewind", () => {
       const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
       liveAppend.append("turn/start", { turn: 2 });
       await ctx.sessions.flush(live);
-      expect(live.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
       expect((await backend.getHead(SessionId("live-delta"))).fHeadSequence).toBe(6);
     } finally {
       await dispose();
@@ -469,10 +472,10 @@ describe("rewind", () => {
       // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合：
       // turn/start + user/message（seq 12）+ step/start + assistant/message（seq 14）。
       const openTail: SessionEvent[] = [
-        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
+        { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         {
           type: "user/message",
-          seq: 13,
+          seq: SessionSeq(13),
           time: 13,
           data: {
             id: "turn3-user",
@@ -482,10 +485,10 @@ describe("rewind", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/start", seq: 14, time: 14, data: { turn: 3, step: 1 } },
+        { type: "step/start", seq: SessionSeq(14), time: 14, data: { turn: 3, step: 1 } },
         {
           type: "assistant/message",
-          seq: 15,
+          seq: SessionSeq(15),
           time: 15,
           data: {
             turn: 3,
@@ -557,16 +560,16 @@ describe("rewind", () => {
       // （无 turn/end）。轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 未闭合。
       const chunk = (seq: number, text: string): SessionEvent => ({
         type: "assistant/chunk",
-        seq,
+        seq: SessionSeq(seq),
         time: seq,
         data: { turn: 3, step: 1, chunk: { type: "text-delta", index: 0, text } },
       });
       const openTail: SessionEvent[] = [
-        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
-        { type: "step/start", seq: 13, time: 13, data: { turn: 3, step: 1 } },
+        { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
+        { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
         {
           type: "user/message",
-          seq: 14,
+          seq: SessionSeq(14),
           time: 14,
           data: {
             id: "turn3-user",
@@ -580,7 +583,7 @@ describe("rewind", () => {
         chunk(16, "b"),
         {
           type: "assistant/message",
-          seq: 17,
+          seq: SessionSeq(17),
           time: 17,
           data: {
             turn: 3,
@@ -594,7 +597,7 @@ describe("rewind", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/end", seq: 18, time: 18, data: { turn: 3, step: 1 } },
+        { type: "step/end", seq: SessionSeq(18), time: 18, data: { turn: 3, step: 1 } },
       ];
       await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
 
@@ -645,11 +648,11 @@ describe("rewind", () => {
     try {
       // 真实 agent-loop 顺序的未闭合轮 3（step/start 在 user/message 之前）。
       const openTail: SessionEvent[] = [
-        { type: "turn/start", seq: 12, time: 12, data: { turn: 3 } },
-        { type: "step/start", seq: 13, time: 13, data: { turn: 3, step: 1 } },
+        { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
+        { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
         {
           type: "user/message",
-          seq: 14,
+          seq: SessionSeq(14),
           time: 14,
           data: {
             id: "turn3-user",
@@ -661,7 +664,7 @@ describe("rewind", () => {
         } as SessionEvent,
         {
           type: "assistant/message",
-          seq: 15,
+          seq: SessionSeq(15),
           time: 15,
           data: {
             turn: 3,
@@ -675,7 +678,7 @@ describe("rewind", () => {
           },
           surfaceOp: "append",
         } as SessionEvent,
-        { type: "step/end", seq: 16, time: 16, data: { turn: 3, step: 1 } },
+        { type: "step/end", seq: SessionSeq(16), time: 16, data: { turn: 3, step: 1 } },
       ];
       await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
       await provider.rewind(SessionId("s1"), 14);
@@ -700,11 +703,11 @@ describe("rewind", () => {
       // assistant/message（seq 11）replace 同一范围。
       const compacted = [
         ...twoTurnLog().slice(0, 6),
-        { type: "turn/start", seq: 6, time: 6, data: { turn: 2 } },
-        { type: "step/start", seq: 7, time: 7, data: { turn: 2, step: 1 } },
+        { type: "turn/start", seq: SessionSeq(6), time: 6, data: { turn: 2 } },
+        { type: "step/start", seq: SessionSeq(7), time: 7, data: { turn: 2, step: 1 } },
         {
           type: "compaction/summary",
-          seq: 8,
+          seq: SessionSeq(8),
           time: 8,
           data: {
             turn: 2,
@@ -715,7 +718,7 @@ describe("rewind", () => {
         },
         {
           type: "assistant/message",
-          seq: 9,
+          seq: SessionSeq(9),
           time: 9,
           data: {
             turn: 2,
@@ -729,8 +732,13 @@ describe("rewind", () => {
           },
           surfaceOp: { op: "replace", start: 1, end: 3 },
         },
-        { type: "step/end", seq: 10, time: 10, data: { turn: 2, step: 1 } },
-        { type: "turn/end", seq: 11, time: 11, data: { turn: 2, reason: { kind: "completed" } } },
+        { type: "step/end", seq: SessionSeq(10), time: 10, data: { turn: 2, step: 1 } },
+        {
+          type: "turn/end",
+          seq: SessionSeq(11),
+          time: 11,
+          data: { turn: 2, reason: { kind: "completed" } },
+        },
       ] as unknown as SessionEvent[];
       await createPersisted(ctx, "s1", compacted);
 
@@ -754,11 +762,11 @@ describe("rewind", () => {
       // 轮 1（seq 0..5）+ 轮 2（seq 6..11，含 replace [1..5]）+ 轮 3（seq 12..17）。
       const compacted = [
         ...twoTurnLog().slice(0, 6),
-        { type: "turn/start", seq: 6, time: 6, data: { turn: 2 } },
-        { type: "step/start", seq: 7, time: 7, data: { turn: 2, step: 1 } },
+        { type: "turn/start", seq: SessionSeq(6), time: 6, data: { turn: 2 } },
+        { type: "step/start", seq: SessionSeq(7), time: 7, data: { turn: 2, step: 1 } },
         {
           type: "compaction/summary",
-          seq: 8,
+          seq: SessionSeq(8),
           time: 8,
           data: {
             turn: 2,
@@ -769,7 +777,7 @@ describe("rewind", () => {
         },
         {
           type: "assistant/message",
-          seq: 9,
+          seq: SessionSeq(9),
           time: 9,
           data: {
             turn: 2,
@@ -783,9 +791,16 @@ describe("rewind", () => {
           },
           surfaceOp: { op: "replace", start: 1, end: 3 },
         },
-        { type: "step/end", seq: 10, time: 10, data: { turn: 2, step: 1 } },
-        { type: "turn/end", seq: 11, time: 11, data: { turn: 2, reason: { kind: "completed" } } },
-        ...twoTurnLog().slice(6).map((e) => ({ ...e, seq: e.seq + 6, time: e.time + 100 })),
+        { type: "step/end", seq: SessionSeq(10), time: 10, data: { turn: 2, step: 1 } },
+        {
+          type: "turn/end",
+          seq: SessionSeq(11),
+          time: 11,
+          data: { turn: 2, reason: { kind: "completed" } },
+        },
+        ...twoTurnLog()
+          .slice(6)
+          .map((e) => ({ ...e, seq: e.seq + 6, time: e.time + 100 })),
       ] as unknown as SessionEvent[];
       await createPersisted(ctx, "s1", compacted);
 

@@ -16,7 +16,8 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
-import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
+import type { SessionId } from "@deepseek-ai/dsh-session";
+import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import {
   type Backend,
   type BackendTx,
@@ -334,7 +335,7 @@ export class SqliteBackend implements Backend {
    * row primitives used by the non-transactional reads.
    */
   private readonly tx: BackendTx = {
-    upsertSession: (meta, incarnation) => this.upsertSession(meta, incarnation),
+    upsertSession: (storage, incarnation) => this.upsertSession(storage, incarnation),
     getHead: (id) => this.getHead(id),
     insertEvents: (events) => this.insertEvents(events),
     insertBridges: (rows) => this.insertBridges(rows),
@@ -348,13 +349,13 @@ export class SqliteBackend implements Backend {
 
   // --- row primitives (transaction-internal or standalone) ---
 
-  private async upsertSession(meta: SessionHeader, incarnation: string): Promise<void> {
+  private async upsertSession(storage: SessionStorageMetadata, incarnation: string): Promise<void> {
     this.db
       .insert(tSessions)
-      .values(sessionInsertRow(meta, incarnation))
+      .values(sessionInsertRow(storage, incarnation))
       .onConflictDoUpdate({
         target: tSessions.fSessionId,
-        set: sessionConflictRow(meta),
+        set: sessionConflictRow(storage),
       })
       .run();
   }
@@ -372,12 +373,22 @@ export class SqliteBackend implements Backend {
     return head;
   }
 
+  /**
+   * 单条多行 INSERT 的绑定参数上限（SQLite 默认 32766；`t_events` 10 列、
+   * `t_session_events` 5 列，按 10 列取 1000 行/批保证两表都安全）。
+   */
+  private static readonly INSERT_BATCH_ROWS = 1000;
+
   private async insertEvents(events: EventInsert[]): Promise<void> {
     if (events.length === 0) return;
-    this.db
-      .insert(tEvents)
-      .values(events.map((event) => ({ ...event })))
-      .run();
+    for (let i = 0; i < events.length; i += SqliteBackend.INSERT_BATCH_ROWS) {
+      this.db
+        .insert(tEvents)
+        .values(
+          events.slice(i, i + SqliteBackend.INSERT_BATCH_ROWS).map((event) => ({ ...event })),
+        )
+        .run();
+    }
   }
 
   private async insertBridges(
@@ -390,10 +401,12 @@ export class SqliteBackend implements Backend {
     }>,
   ): Promise<void> {
     if (rows.length === 0) return;
-    this.db
-      .insert(tSessionEvents)
-      .values(rows.map((row) => ({ ...row })))
-      .run();
+    for (let i = 0; i < rows.length; i += SqliteBackend.INSERT_BATCH_ROWS) {
+      this.db
+        .insert(tSessionEvents)
+        .values(rows.slice(i, i + SqliteBackend.INSERT_BATCH_ROWS).map((row) => ({ ...row })))
+        .run();
+    }
   }
 
   private async updateHead(

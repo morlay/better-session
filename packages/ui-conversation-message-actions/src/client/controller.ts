@@ -24,7 +24,7 @@ import {
 export interface SessionEditorState {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
-  pending: VersionOperation | "cleanse" | null;
+  pending: VersionOperation | "cleanse" | "import" | null;
   timeline: SessionEditorTimeline | null;
   /** 会话历史加载失败（openState === "error"）——据此显示「清洗会话」入口。 */
   sessionOpenError: boolean;
@@ -45,6 +45,8 @@ export interface SessionEditorFace {
   rewind(toBoundary: number): Promise<boolean>;
   /** 清洗当前会话的 provenance 坐标为稠密空间（修复历史加载失败）。 */
   cleanse(): Promise<boolean>;
+  /** 用导出的 zip 覆盖当前会话内容（host 端 rewind 清空后追加导入事件）。 */
+  importSession(file: File): Promise<boolean>;
   openVersion(sessionId: string): Promise<void>;
 }
 
@@ -109,6 +111,7 @@ export class SessionEditorController {
       rewind: (toBoundary) =>
         this.mutate({ action: "rewind", sessionId: this.sessionId, toBoundary }),
       cleanse: () => this.mutate({ action: "cleanse", sessionId: this.sessionId }),
+      importSession: (file) => this.importSession(file),
       openVersion: (sessionId) => this.openWhenListed(sessionId as SessionId),
     };
     this.observe();
@@ -255,6 +258,63 @@ export class SessionEditorController {
           // fall through to full reload
         }
       }
+      location.reload();
+      return true;
+    } catch (error) {
+      if (this.disposed) return false;
+      this.store.update((state) => {
+        state.pending = null;
+        state.error = messageOf(error);
+      });
+      return false;
+    }
+  }
+
+  /**
+   * 读取 zip 文件并 POST `/api/session.import`（携带当前 sessionId 覆盖
+   * 当前会话内容）。成功后会话级 resync 刷新历史；resync 不可用（或失败）
+   * 时整页重载。与就地编辑（rewind）的刷新策略一致。
+   * @param file - 用户选择的导出 zip。
+   * @returns 是否成功。
+   */
+  private async importSession(file: File): Promise<boolean> {
+    const current = this.store.getSnapshot();
+    if (current.pending !== null) return false;
+    this.store.update((state) => {
+      state.pending = "import";
+      state.error = null;
+    });
+    try {
+      const zip = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = typeof reader.result === "string" ? reader.result : "";
+          const comma = dataUrl.indexOf(",");
+          resolve(comma < 0 ? dataUrl : dataUrl.slice(comma + 1));
+        };
+        reader.onerror = () => reject(reader.error ?? new Error("failed to read the selected file"));
+        reader.readAsDataURL(file);
+      });
+      const response = await fetch("/api/session.import", {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify({ zip, sessionId: this.sessionId }),
+      });
+      const value = (await response.json()) as unknown;
+      if (this.disposed) return true;
+      if (!response.ok) {
+        const error = (value as { error?: unknown })["error"];
+        throw new Error(
+          typeof error === "string" ? error : `请求失败：HTTP ${String(response.status)}`,
+        );
+      }
+      this.store.update((state) => {
+        state.pending = null;
+      });
+      // 覆盖成功：会话 id 不变但事件被整体替换。**不能**走 resync——
+      // resync 重开事件流时 `observeSession` 仍优先读 live session（rewind
+      // 已把其内存 log 截断为空，append 只写 DB 不进 live），会再次读到
+      // 空/截断数据。整页重载让会话从 live 卸载，后续冷读 DB 完整数据。
       location.reload();
       return true;
     } catch (error) {

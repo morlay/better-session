@@ -38,17 +38,20 @@ function sourceAssetPath(source: string, importer: string): string {
   const marker = `${sep}lib${sep}types${sep}`;
   const boundary = emitted.indexOf(marker);
   if (boundary < 0) return emitted;
-  return resolvePath(emitted.slice(0, boundary), "src", emitted.slice(boundary + marker.length));
+  return resolvePath(
+    emitted.slice(0, boundary),
+    "src",
+    emitted.slice(boundary + marker.length),
+  );
 }
 
 export default defineConfig([
   {
-    // Host 半：node ESM（lib/，主入口）。
     entry: { index: "src/index.ts", invariant: "src/invariant.ts" },
     format: ["esm"],
-    outDir: "lib",
+    outDir: "dist",
     dts: true,
-    sourcemap: true,
+    sourcemap: false,
     platform: "node",
   },
   {
@@ -60,7 +63,7 @@ export default defineConfig([
     // 合并（官方 tsdown.client.ts 的 noExternal 同款策略）。
     name: "ui-conversation-message-actions/client",
     entry: { client: "src/client/index.ts" },
-    outDir: "lib",
+    outDir: "dist",
     format: "cjs",
     platform: "browser",
     dts: false,
@@ -75,22 +78,30 @@ export default defineConfig([
     deps: {
       neverBundle: [...CLIENT_EXTERNALS, /^@deepseek-ai\//],
       alwaysBundle: (id: string) =>
-        CLIENT_EXTERNALS.includes(id) || id.startsWith("@deepseek-ai/") ? false : true,
+        CLIENT_EXTERNALS.includes(id) || id.startsWith("@deepseek-ai/")
+          ? false
+          : true,
     },
     define: {
-      "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "production"),
+      "process.env.NODE_ENV": JSON.stringify(
+        process.env.NODE_ENV ?? "production",
+      ),
     },
     plugins: [
       {
         name: "dsh-css-modules-inline",
         resolveId(source: string, importer: string | undefined) {
           if (!source.endsWith(".module.css")) return null;
-          const abs = importer !== undefined ? sourceAssetPath(source, importer) : source;
+          const abs =
+            importer !== undefined ? sourceAssetPath(source, importer) : source;
           return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX;
         },
         async load(virtualId: string) {
           if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null;
-          const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length);
+          const fileId = virtualId.slice(
+            CSS_VIRTUAL_PREFIX.length,
+            -CSS_VIRTUAL_SUFFIX.length,
+          );
           this.addWatchFile(fileId);
           const source = await readFile(fileId);
           const { code, exports: cssExports } = transform({
@@ -100,7 +111,8 @@ export default defineConfig([
             minify: true,
           });
           const classMap: Record<string, string> = {};
-          for (const [local, exp] of Object.entries(cssExports ?? {})) classMap[local] = exp.name;
+          for (const [local, exp] of Object.entries(cssExports ?? {}))
+            classMap[local] = exp.name;
           const tagId = `${PLUGIN_ID}/${basename(fileId)}`;
           return [
             `const css = ${JSON.stringify(code.toString())};`,

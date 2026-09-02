@@ -69,12 +69,12 @@ packages/session-rdb/
 
 ## 文档导航
 
-| 主题 | 文档 |
-| --- | --- |
-| 数据表设计（元数据 / 事件实体 / 会话桥接） | [schema.md](schema.md) |
-| 写路径流程（appendBatch） | [write-path.md](write-path.md) |
-| 读路径流程（load / readFrom） | [read-path.md](read-path.md) |
-| 分支能力（forkFrom / rewind / timeline） | [branch.md](branch.md) |
-| 旧数据修复（clean & reload） | [legacy-clean.md](legacy-clean.md) |
-| 并发写入者检测 | [concurrency.md](concurrency.md) |
-| 事件 id 关联与重建可行性分析 | [event-reconstruction.md](event-reconstruction.md) |
+| 主题                                       | 文档                                               |
+| ------------------------------------------ | -------------------------------------------------- |
+| 数据表设计（元数据 / 事件实体 / 会话桥接） | [schema.md](schema.md)                             |
+| 写路径流程（appendBatch）                  | [write-path.md](write-path.md)                     |
+| 读路径流程（load / readFrom）              | [read-path.md](read-path.md)                       |
+| 分支能力（forkFrom / rewind / timeline）   | [branch.md](branch.md)                             |
+| 旧数据修复（clean & reload）               | [legacy-clean.md](legacy-clean.md)                 |
+| 并发写入者检测                             | [concurrency.md](concurrency.md)                   |
+| 事件 id 关联与重建可行性分析               | [event-reconstruction.md](event-reconstruction.md) |

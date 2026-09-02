@@ -41,5 +41,4 @@ test:
 
 prepare-vendor:
     just vendor sync
-    just dep
     just vendor build

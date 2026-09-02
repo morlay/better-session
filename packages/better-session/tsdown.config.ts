@@ -1,10 +1,18 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-  entry: ["src/invariant.ts"],
+  entry: {
+    invariant: "./src/invariant.ts",
+  },
+  exports: {
+    packageJson: true,
+    customExports: {
+      "./cordis.patch.yml": "./cordis.patch.yml",
+    },
+  },
   format: ["esm"],
-  outDir: "lib",
-  dts: true,
-  sourcemap: false,
-  platform: "node",
+  deps: {
+    onlyBundle: false,
+  },
+  clean: true,
 });

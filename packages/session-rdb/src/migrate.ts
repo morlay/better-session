@@ -131,11 +131,7 @@ export function migrateSqliteV1ToV2(db: DatabaseSync): number {
     .all() as Array<{ f_session_id: string; f_event_id: string; f_sequence: number }>;
   const oldEventMeta = new Map(
     (
-      db
-        .prepare(
-          `SELECT f_event_id, f_original_seq, f_surface_op FROM t_events`,
-        )
-        .all() as Array<{
+      db.prepare(`SELECT f_event_id, f_original_seq, f_surface_op FROM t_events`).all() as Array<{
         f_event_id: string;
         f_original_seq: number;
         f_surface_op: string | null;

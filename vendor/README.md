@@ -21,11 +21,11 @@ just vendor::sync && just dep && just vendor::build
 > `DEEPSEEK_HARNESS_VERSION` 环境变量，请在 mise 环境下执行
 > （`mise exec -- just vendor::sync`，或 shell 已 `mise activate`）。
 
-| 步骤                | 命令               | 做什么                                                                                          |
-| ------------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
-| 1. 同步上游         | `just vendor::sync` | 删除旧 `vendor/deepseek-harness/`，按 `DEEPSEEK_HARNESS_VERSION` 浅克隆上游分支，并打本地 patch |
-| 2. 安装依赖         | `just dep`          | `pnpm install`：把 vendor 纳入根 workspace（更新 `pnpm-lock.yaml`）                              |
-| 3. 构建上游         | `just vendor::build` | 在上游目录内 `pnpm run build`（产出 `lib/`）并清理其 `node_modules`                              |
+| 步骤        | 命令                 | 做什么                                                                                          |
+| ----------- | -------------------- | ----------------------------------------------------------------------------------------------- |
+| 1. 同步上游 | `just vendor::sync`  | 删除旧 `vendor/deepseek-harness/`，按 `DEEPSEEK_HARNESS_VERSION` 浅克隆上游分支，并打本地 patch |
+| 2. 安装依赖 | `just dep`           | `pnpm install`：把 vendor 纳入根 workspace（更新 `pnpm-lock.yaml`）                             |
+| 3. 构建上游 | `just vendor::build` | 在上游目录内 `pnpm run build`（产出 `lib/`）并清理其 `node_modules`                             |
 
 升级后验证：`just test`、`just lint`、`just build`（门禁与 CI 一致）。
 
@@ -36,6 +36,11 @@ just vendor::sync && just dep && just vendor::build
 - 删除 `apps/cli/tests/profiles/acp/cordis.yml`
 - 删除 `packages/subagent/subagent-codex`、`packages/subagent/subagent-claude-code`
 - `sed` 从 `tsconfig.host.json` 移除上述两个 subagent 包的引用
+- `git apply patches/css-inline-query.patch`：把 `tsdown.client.ts` 的 CSS
+  `resolveId` 钩子改为 `pre` 顺序。rolldown 1.1.1 在默认顺序钩子前剥离
+  `?inline` 查询并在返回的虚拟 id 上重新追加，导致 `dsh-css-text-inline`
+  永不匹配、`?inline` 样式落入 `dsh-css-global-inline` 后 `load` 切片得到
+  `base.css.mjs?in` 而 ENOENT；`pre` 顺序保留原始 specifier。
 
 ## 注意
 

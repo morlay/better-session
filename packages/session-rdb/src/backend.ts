@@ -8,7 +8,8 @@
  * @module @morlay/session-rdb/backend
  */
 
-import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
+import type { SessionId } from "@deepseek-ai/dsh-session";
+import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 
 /**
  * 与方言无关的 `t_sessions` 行投影。SQLite / PostgreSQL 的 drizzle
@@ -83,7 +84,7 @@ export interface EventRow {
  */
 export interface BackendTx {
   /** Insert-or-replace the session's metadata row (initial head cursor). */
-  upsertSession(meta: SessionHeader, incarnation: string): Promise<void>;
+  upsertSession(storage: SessionStorageMetadata, incarnation: string): Promise<void>;
   /** Fetch the head cursor; the caller materialized the row first. */
   getHead(id: SessionId): Promise<Pick<SessionRow, "fHeadEventId" | "fHeadSequence">>;
   /**

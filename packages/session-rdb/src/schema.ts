@@ -286,9 +286,7 @@ export function eventDimensions(event: SessionEvent): {
     case "tool/result": {
       // Optional chain: the coordinator migrates pre-identity legacy events
       // only on READ; an append may still carry the old shape without `message`.
-      const message = data["message"] as
-        | { content?: Array<{ toolCallId?: string }> }
-        | undefined;
+      const message = data["message"] as { content?: Array<{ toolCallId?: string }> } | undefined;
       return { kind, role: "tool", name: "", actionId: message?.content?.[0]?.toolCallId ?? "" };
     }
     case "tool/call":
@@ -311,9 +309,7 @@ export function eventDimensions(event: SessionEvent): {
       return {
         kind,
         role: "",
-        name: type === "command/run" && typeof data["name"] === "string"
-          ? data["name"]
-          : "",
+        name: type === "command/run" && typeof data["name"] === "string" ? data["name"] : "",
         actionId: typeof data["commandId"] === "string" ? data["commandId"] : "",
       };
     case "approval/asked":

@@ -19,19 +19,19 @@
     "url": "https://github.com/morlay/better-session.git"
   },
   "files": [
-    "lib",
+    "dist",
     "cordis.patch.yml"
   ],
   "type": "module",
   "exports": {
     ".": {
-      "types": "./lib/index.d.mts",
-      "default": "./lib/index.mjs"
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
     },
-    "./client": "./lib/client.js",
+    "./client": "./dist/client.js",
     "./invariant": {
-      "types": "./lib/invariant.d.mts",
-      "default": "./lib/invariant.mjs"
+      "types": "./dist/invariant.d.mts",
+      "default": "./dist/invariant.mjs"
     },
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"

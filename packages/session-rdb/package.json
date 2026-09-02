@@ -22,16 +22,10 @@
   ],
   "type": "module",
   "exports": {
-    ".": {
-      "types": "./lib/index.d.mts",
-      "default": "./lib/index.mjs"
-    },
-    "./invariant": {
-      "types": "./lib/invariant.d.mts",
-      "default": "./lib/invariant.mjs"
-    },
+    ".": "./dist/index.mjs",
+    "./invariant": "./dist/invariant.mjs",
     "./package.json": "./package.json",
-    "./cordis.patch.yml": "./cordis.patch.yml"
+    "./cordis.patch.yml": "cordis.patch.yml"
   },
   "scripts": {
     "build": "pnpm exec tsdown",
@@ -40,6 +34,7 @@
   "dependencies": {
     "@morlay/session-branch": "workspace:^",
     "drizzle-orm": "^1.0.0-rc.5-ab785fc",
+    "fflate": "^0.8.2",
     "pg": "^8.23.0"
   },
   "devDependencies": {

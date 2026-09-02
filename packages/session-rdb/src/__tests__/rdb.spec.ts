@@ -8,7 +8,7 @@ import { chmod, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { SessionStore, SessionId } from "@deepseek-ai/dsh-session";
+import { SessionStore, SessionId, SessionLogOffset, SessionSeq } from "@deepseek-ai/dsh-session";
 import type {
   Session,
   SessionEvent,
@@ -176,7 +176,7 @@ describe("eventDimensions", () => {
   it("classifies boundary events as turn kind with empty role", () => {
     const { kind, role, name, actionId } = eventDimensions({
       type: "turn/start",
-      seq: 0,
+      seq: SessionSeq(0),
       time: 1,
       data: { turn: 1 },
     });
@@ -187,7 +187,7 @@ describe("eventDimensions", () => {
     expect(
       eventDimensions({
         type: "user/message",
-        seq: 1,
+        seq: SessionSeq(1),
         time: 2,
         data: createUserMessage({
           content: [{ type: "text", text: "hi" }],
@@ -198,7 +198,7 @@ describe("eventDimensions", () => {
     expect(
       eventDimensions({
         type: "assistant/message",
-        seq: 2,
+        seq: SessionSeq(2),
         time: 3,
         data: {
           turn: 1,
@@ -216,7 +216,7 @@ describe("eventDimensions", () => {
   it("classifies assistant/message with reasoning blocks as thinking kind", () => {
     const dims = eventDimensions({
       type: "assistant/message",
-      seq: 2,
+      seq: SessionSeq(2),
       time: 3,
       data: {
         turn: 1,
@@ -238,7 +238,7 @@ describe("eventDimensions", () => {
   it("extracts the function name and call id from tool/call", () => {
     const dims = eventDimensions({
       type: "tool/call",
-      seq: 4,
+      seq: SessionSeq(4),
       time: 5,
       data: { turn: 1, step: 1, callId: ToolCallId("call-1"), name: "read", arguments: "{}" },
     });
@@ -249,7 +249,7 @@ describe("eventDimensions", () => {
     const callId = ToolCallId("call-2");
     const result = eventDimensions({
       type: "tool/result",
-      seq: 5,
+      seq: SessionSeq(5),
       time: 6,
       data: {
         turn: 1,
@@ -262,7 +262,9 @@ describe("eventDimensions", () => {
       },
     });
     expect(result).toEqual({ kind: "tool", role: "tool", name: "", actionId: "call-2" });
-    expect(eventDimensions({ type: "todo/write", seq: 6, time: 7, data: { todos: [] } })).toEqual({
+    expect(
+      eventDimensions({ type: "todo/write", seq: SessionSeq(6), time: 7, data: { todos: [] } }),
+    ).toEqual({
       kind: "todo",
       role: "",
       name: "todos",
@@ -272,7 +274,12 @@ describe("eventDimensions", () => {
 
   it("keeps empty defaults for unknown plugin-merged event types", () => {
     expect(
-      eventDimensions({ type: "plugin/custom", seq: 0, time: 1, data: {} } as SessionEvent),
+      eventDimensions({
+        type: "plugin/custom",
+        seq: SessionSeq(0),
+        time: 1,
+        data: {},
+      } as SessionEvent),
     ).toEqual({ kind: "", role: "", name: "", actionId: "" });
   });
 });
@@ -290,7 +297,7 @@ describe("isPersistedEvent", () => {
   // `ignorable` 是下游信封扩展（上游 SessionEvent 无此字段），测试里
   // 结构化构造：用 `Partial<SessionEvent & { ignorable?: unknown }>` 表达。
   const ev = (extra: Partial<SessionEvent & { ignorable?: unknown }> = {}): SessionEvent =>
-    ({ type: "plugin/x", seq: 0, time: 1, data: null, ...extra }) as SessionEvent;
+    ({ type: "plugin/x", seq: SessionSeq(0), time: 1, data: null, ...extra }) as SessionEvent;
 
   it("drops ephemeral types and ignorable events, keeps everything else", () => {
     expect(isPersistedEvent(ev({ type: "assistant/chunk" }))).toBe(false);
@@ -303,7 +310,7 @@ describe("isPersistedEvent", () => {
     // assertEventsSupported refuse the unknown type.
     const dirty = {
       type: "plugin/x",
-      seq: 0,
+      seq: SessionSeq(0),
       time: 1,
       data: null,
       ignorable: false,
@@ -345,11 +352,11 @@ describe("scanRows", () => {
       ...oneTurnLog(),
       {
         type: "turn/start",
-        seq: 6,
+        seq: SessionSeq(6),
         time: 7,
         data: { turn: 2 },
       },
-      { type: "step/start", seq: 7, time: 8, data: { turn: 2, step: 1 } },
+      { type: "step/start", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
     ];
     const { preserved, tornFrom } = scanRows(rows(withOpenTurn));
     expect(preserved.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -360,11 +367,11 @@ describe("scanRows", () => {
     const gapped: SessionEvent[] = [
       {
         type: "turn/start",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: { turn: 1 },
       },
-      { type: "step/start", seq: 2, time: 2, data: { turn: 1, step: 1 } }, // seq 1 missing
+      { type: "step/start", seq: SessionSeq(2), time: 2, data: { turn: 1, step: 1 } }, // seq 1 missing
     ];
     const { preserved, tornFrom } = scanRows(rows(gapped));
     expect(preserved.map((e) => e.seq)).toEqual([0]);
@@ -379,12 +386,17 @@ describe("scanRows", () => {
     const gapped: SessionEvent[] = [
       {
         type: "turn/start",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: { turn: 1 },
       },
-      { type: "step/start", seq: 2, time: 2, data: { turn: 1, step: 1 } }, // seq 1 missing
-      { type: "turn/end", seq: 3, time: 3, data: { turn: 1, reason: { kind: "completed" } } },
+      { type: "step/start", seq: SessionSeq(2), time: 2, data: { turn: 1, step: 1 } }, // seq 1 missing
+      {
+        type: "turn/end",
+        seq: SessionSeq(3),
+        time: 3,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
     ];
     expect(() => scanRows(rows(gapped))).toThrow(/seq gap in committed region/);
   });
@@ -671,18 +683,23 @@ describe("rowToEvent", () => {
 describe("recomputeReplaceProvenance", () => {
   it("recomputes sourceEventSeqs as the range's surface nodes for every replace", () => {
     const events: SessionEvent[] = [
-      { type: "turn/start", seq: 7, time: 1, data: { turn: 1 } },
+      { type: "turn/start", seq: SessionSeq(7), time: 1, data: { turn: 1 } },
       {
         type: "user/message",
-        seq: 8,
+        seq: SessionSeq(8),
         time: 2,
         data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
         surfaceOp: "append",
       } as SessionEvent,
-      { type: "turn/end", seq: 9, time: 3, data: { turn: 1, reason: { kind: "completed" } } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(9),
+        time: 3,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
       {
         type: "user/message",
-        seq: 40,
+        seq: SessionSeq(40),
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
         surfaceOp: { op: "replace", start: 7, end: 9 },
@@ -693,22 +710,24 @@ describe("recomputeReplaceProvenance", () => {
     // 只有 surface 节点（user/message @ 8）进 provenance；turn/start/end 不是。
     expect(checkpoint.sourceEventSeqs).toEqual([8]);
     // Non-replace events are untouched.
-    expect(events[1]).toMatchObject({ seq: 8, surfaceOp: "append" });
-    expect((events[1] as SessionEvent & { sourceEventSeqs?: number[] }).sourceEventSeqs).toBeUndefined();
+    expect(events[1]).toMatchObject({ seq: SessionSeq(8), surfaceOp: "append" });
+    expect(
+      (events[1] as SessionEvent & { sourceEventSeqs?: number[] }).sourceEventSeqs,
+    ).toBeUndefined();
   });
 
   it("merges every surface node in the range (assistant/message included)", () => {
     const events: SessionEvent[] = [
       {
         type: "user/message",
-        seq: 10,
+        seq: SessionSeq(10),
         time: 1,
         data: { content: [{ type: "text", text: "old" }], source: { kind: "user" } },
         surfaceOp: "append",
       } as SessionEvent,
       {
         type: "assistant/message",
-        seq: 11,
+        seq: SessionSeq(11),
         time: 2,
         data: {
           turn: 1,
@@ -722,10 +741,15 @@ describe("recomputeReplaceProvenance", () => {
         },
         surfaceOp: "append",
       } as SessionEvent,
-      { type: "turn/end", seq: 12, time: 3, data: { turn: 1, reason: { kind: "completed" } } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(12),
+        time: 3,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
       {
         type: "user/message",
-        seq: 20,
+        seq: SessionSeq(20),
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
         surfaceOp: { op: "replace", start: 10, end: 12 },
@@ -748,10 +772,15 @@ describe("remapSurfaceOp", () => {
   });
 
   it("remaps both ends of a replace range", () => {
-    expect(remapSurfaceOp({ op: "replace", start: 2, end: 4 }, (seq) => seq * 10)).toEqual({
+    expect(
+      remapSurfaceOp(
+        { op: "replace", start: SessionSeq(2), end: SessionSeq(4) },
+        (seq) => seq * 10,
+      ),
+    ).toEqual({
       op: "replace",
-      start: 20,
-      end: 40,
+      start: SessionSeq(20),
+      end: SessionSeq(40),
     });
   });
 });
@@ -872,11 +901,11 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     await ctx1.sessionPersistence.append(m.id, [
       {
         type: "turn/start",
-        seq: 6,
+        seq: SessionSeq(6),
         time: 7,
         data: { turn: 2 },
       },
-      { type: "step/start", seq: 7, time: 8, data: { turn: 2, step: 1 } },
+      { type: "step/start", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
     ]);
     await fiber1.dispose();
 
@@ -909,11 +938,16 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     await ctx2.sessionPersistence.append(m.id, [
       {
         type: "turn/start",
-        seq: 10,
+        seq: SessionSeq(10),
         time: 9,
         data: { turn: 3 },
       },
-      { type: "turn/end", seq: 11, time: 10, data: { turn: 3, reason: { kind: "completed" } } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(11),
+        time: 10,
+        data: { turn: 3, reason: { kind: "completed" } },
+      },
     ]);
     const reloaded = await ctx2.sessionPersistence.load(m.id);
     expect(reloaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
@@ -1137,11 +1171,16 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     await b2.ctx.sessionPersistence.append(m.id, [
       {
         type: "turn/start",
-        seq: 6,
+        seq: SessionSeq(6),
         time: 8,
         data: { turn: 2 },
       },
-      { type: "turn/end", seq: 7, time: 9, data: { turn: 2, reason: { kind: "completed" } } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(7),
+        time: 9,
+        data: { turn: 2, reason: { kind: "completed" } },
+      },
     ]);
     const reloaded = await b2.ctx.sessionPersistence.load(m.id);
     expect(reloaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -1259,7 +1298,11 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     await b.ctx.sessionPersistence.create(m);
     await b.ctx.sessionPersistence.append(m.id, oneTurnLog());
     const before = await b.ctx.sessionPersistence.listSnapshots();
-    await (b.ctx.sessionPersistence as SessionPersistenceSqlite).commitRepair(m, undefined, []);
+    await (b.ctx.sessionPersistence as SessionPersistenceSqlite).commitRepair(
+      { meta: m, inheritedEventCount: SessionLogOffset(0) },
+      undefined,
+      [],
+    );
     expect(await b.ctx.sessionPersistence.listSnapshots()).toEqual(before);
     await b.dispose();
   });
@@ -1304,13 +1347,13 @@ function chunkedTurnLog(): SessionEvent[] {
   return [
     {
       type: "turn/start",
-      seq: 0,
+      seq: SessionSeq(0),
       time: 1,
       data: { turn: 1 },
     },
     {
       type: "user/message",
-      seq: 1,
+      seq: SessionSeq(1),
       time: 2,
       data: createUserMessage({
         content: [{ type: "text", text: "hi" }],
@@ -1318,22 +1361,22 @@ function chunkedTurnLog(): SessionEvent[] {
       }),
       surfaceOp: "append",
     },
-    { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+    { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
     {
       type: "assistant/chunk",
-      seq: 3,
+      seq: SessionSeq(3),
       time: 4,
       data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
     },
     {
       type: "assistant/chunk",
-      seq: 4,
+      seq: SessionSeq(4),
       time: 5,
       data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
     },
     {
       type: "assistant/message",
-      seq: 5,
+      seq: SessionSeq(5),
       time: 6,
       data: {
         turn: 1,
@@ -1345,10 +1388,15 @@ function chunkedTurnLog(): SessionEvent[] {
         }),
       },
       surfaceOp: "append",
-      sourceEventSeqs: [1],
+      sourceEventSeqs: [1].map((n) => SessionSeq(n)),
     },
-    { type: "step/end", seq: 6, time: 7, data: { turn: 1, step: 1 } },
-    { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
+    { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
+    {
+      type: "turn/end",
+      seq: SessionSeq(7),
+      time: 8,
+      data: { turn: 1, reason: { kind: "completed" } },
+    },
   ];
 }
 
@@ -1419,12 +1467,17 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
       f_role: string;
     }[];
     expect(rows).toEqual([
-      { f_sequence: 0, f_original_seq: 0, f_type: "turn/start", f_role: "" },
-      { f_sequence: 1, f_original_seq: 1, f_type: "user/message", f_role: "user" },
-      { f_sequence: 2, f_original_seq: 2, f_type: "step/start", f_role: "" },
-      { f_sequence: 3, f_original_seq: 5, f_type: "assistant/message", f_role: "assistant" },
-      { f_sequence: 4, f_original_seq: 6, f_type: "step/end", f_role: "" },
-      { f_sequence: 5, f_original_seq: 7, f_type: "turn/end", f_role: "" },
+      { f_sequence: 0, f_original_seq: SessionSeq(0), f_type: "turn/start", f_role: "" },
+      { f_sequence: 1, f_original_seq: SessionSeq(1), f_type: "user/message", f_role: "user" },
+      { f_sequence: 2, f_original_seq: SessionSeq(2), f_type: "step/start", f_role: "" },
+      {
+        f_sequence: 3,
+        f_original_seq: SessionSeq(5),
+        f_type: "assistant/message",
+        f_role: "assistant",
+      },
+      { f_sequence: 4, f_original_seq: SessionSeq(6), f_type: "step/end", f_role: "" },
+      { f_sequence: 5, f_original_seq: SessionSeq(7), f_type: "turn/end", f_role: "" },
     ]);
     // The head cursor tracks the dense persisted seq.
     expect(
@@ -1454,7 +1507,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.ctx.sessionPersistence.append(m.id, [
       {
         type: "assistant/chunk",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "x" } },
       },
@@ -1466,7 +1519,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     // so the next batch starts at upstream seq 1 and lands at dense seq 0.
     await b.ctx.sessionPersistence.append(
       m.id,
-      oneTurnLog().map((e) => ({ ...e, seq: e.seq + 1 })),
+      oneTurnLog().map((e) => ({ ...e, seq: SessionSeq(e.seq + 1) })),
     );
     expect(await b.ctx.sessionPersistence.list()).toHaveLength(1);
     const loaded = await b.ctx.sessionPersistence.load(m.id);
@@ -1485,26 +1538,26 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.ctx.sessionPersistence.append(m.id, [
       {
         type: "turn/start",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: { turn: 1 },
       },
-      { type: "step/start", seq: 1, time: 2, data: { turn: 1, step: 1 } },
+      { type: "step/start", seq: SessionSeq(1), time: 2, data: { turn: 1, step: 1 } },
       {
         type: "assistant/chunk",
-        seq: 2,
+        seq: SessionSeq(2),
         time: 3,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
       },
       {
         type: "assistant/chunk",
-        seq: 3,
+        seq: SessionSeq(3),
         time: 4,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
       },
       {
         type: "assistant/message",
-        seq: 4,
+        seq: SessionSeq(4),
         time: 5,
         data: {
           turn: 1,
@@ -1516,10 +1569,15 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
           }),
         },
         surfaceOp: "append",
-        sourceEventSeqs: [2, 3],
+        sourceEventSeqs: [2, 3].map((n) => SessionSeq(n)),
       },
-      { type: "step/end", seq: 5, time: 6, data: { turn: 1, step: 1 } },
-      { type: "turn/end", seq: 6, time: 7, data: { turn: 1, reason: { kind: "completed" } } },
+      { type: "step/end", seq: SessionSeq(5), time: 6, data: { turn: 1, step: 1 } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(6),
+        time: 7,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
     ]);
     // Reload replays cleanly: the dense assistant/message carries no provenance.
     const loaded = await b.ctx.sessionPersistence.load(m.id);
@@ -1538,13 +1596,13 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.ctx.sessionPersistence.append(m.id, [
       {
         type: "assistant/chunk",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
       },
       {
         type: "assistant/chunk",
-        seq: 1,
+        seq: SessionSeq(1),
         time: 2,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
       },
@@ -1553,7 +1611,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.ctx.sessionPersistence.append(m.id, [
       {
         type: "assistant/message",
-        seq: 2,
+        seq: SessionSeq(2),
         time: 3,
         data: {
           turn: 1,
@@ -1565,9 +1623,14 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
           }),
         },
         surfaceOp: "append",
-        sourceEventSeqs: [0, 1],
+        sourceEventSeqs: [0, 1].map((n) => SessionSeq(n)),
       },
-      { type: "turn/end", seq: 3, time: 4, data: { turn: 1, reason: { kind: "completed" } } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(3),
+        time: 4,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
     ]);
     const loaded = await b.ctx.sessionPersistence.load(m.id);
     const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
@@ -1587,13 +1650,13 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.ctx.sessionPersistence.append(m.id, [
       {
         type: "turn/start",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: { turn: 1 },
       },
       {
         type: "user/message",
-        seq: 1,
+        seq: SessionSeq(1),
         time: 2,
         data: createUserMessage({
           content: [{ type: "text", text: "hi" }],
@@ -1601,22 +1664,22 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
         }),
         surfaceOp: "append",
       },
-      { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
       {
         type: "assistant/chunk",
-        seq: 3,
+        seq: SessionSeq(3),
         time: 4,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
       },
       {
         type: "assistant/chunk",
-        seq: 4,
+        seq: SessionSeq(4),
         time: 5,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
       },
       {
         type: "assistant/message",
-        seq: 5,
+        seq: SessionSeq(5),
         time: 6,
         data: {
           turn: 1,
@@ -1628,10 +1691,15 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
           }),
         },
         surfaceOp: "append",
-        sourceEventSeqs: [1, 3, 4],
+        sourceEventSeqs: [1, 3, 4].map((n) => SessionSeq(n)),
       },
-      { type: "step/end", seq: 6, time: 7, data: { turn: 1, step: 1 } },
-      { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
+      { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(7),
+        time: 8,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
     ]);
     const loaded = await b.ctx.sessionPersistence.load(m.id);
     const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
@@ -1703,7 +1771,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     const m = meta("delta-readfrom");
     await b.ctx.sessionPersistence.create(m);
     await b.ctx.sessionPersistence.append(m.id, chunkedTurnLog());
-    const suffix = await b.ctx.sessionPersistence.readFrom(m.id, 3);
+    const suffix = await b.ctx.sessionPersistence.readFrom(m.id, SessionLogOffset(3));
     expect(suffix.events.map((e) => e.type)).toEqual(["assistant/message", "step/end", "turn/end"]);
     expect(suffix.events.map((e) => e.seq)).toEqual([3, 4, 5]);
     await b.dispose();
@@ -1720,19 +1788,19 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b1.ctx.sessionPersistence.append(m.id, [
       {
         type: "turn/start",
-        seq: 6,
+        seq: SessionSeq(6),
         time: 7,
         data: { turn: 2 },
       },
       {
         type: "assistant/chunk",
-        seq: 7,
+        seq: SessionSeq(7),
         time: 8,
         data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "gone" } },
       },
       {
         type: "assistant/chunk",
-        seq: 8,
+        seq: SessionSeq(8),
         time: 9,
         data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "gone" } },
       },
@@ -1765,18 +1833,18 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     const m = meta("ignorable-drop");
     await b.ctx.sessionPersistence.create(m);
     await b.ctx.sessionPersistence.append(m.id, [
-      { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       // Unknown plugin event marked ignorable: dropped, never persisted.
       {
         type: "plugin/test",
-        seq: 1,
+        seq: SessionSeq(1),
         time: 2,
         data: null,
         ignorable: true,
       } as unknown as SessionEvent,
       {
         type: "user/message",
-        seq: 2,
+        seq: SessionSeq(2),
         time: 3,
         data: createUserMessage({
           content: [{ type: "text", text: "hi" }],
@@ -1784,7 +1852,12 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
         }),
         surfaceOp: "append",
       },
-      { type: "turn/end", seq: 3, time: 4, data: { turn: 1, reason: { kind: "completed" } } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(3),
+        time: 4,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
     ]);
     // The ignorable event is absent from storage; survivors are dense.
     const probe = openDatabase(path, "wal");
@@ -1796,9 +1869,9 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     `)
       .all(m.id) as { f_sequence: number; f_original_seq: number; f_type: string }[];
     expect(rows).toEqual([
-      { f_sequence: 0, f_original_seq: 0, f_type: "turn/start" },
-      { f_sequence: 1, f_original_seq: 2, f_type: "user/message" },
-      { f_sequence: 2, f_original_seq: 3, f_type: "turn/end" },
+      { f_sequence: 0, f_original_seq: SessionSeq(0), f_type: "turn/start" },
+      { f_sequence: 1, f_original_seq: SessionSeq(2), f_type: "user/message" },
+      { f_sequence: 2, f_original_seq: SessionSeq(3), f_type: "turn/end" },
     ]);
     probe.close();
     const loaded = await b.ctx.sessionPersistence.load(m.id);
@@ -1815,7 +1888,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.ctx.sessionPersistence.append(m.id, [
       {
         type: "plugin/test",
-        seq: 0,
+        seq: SessionSeq(0),
         time: 1,
         data: null,
         ignorable: true,
@@ -1828,7 +1901,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     // so the next batch starts at upstream seq 1 and lands at dense seq 0.
     await b.ctx.sessionPersistence.append(
       m.id,
-      oneTurnLog().map((e) => ({ ...e, seq: e.seq + 1 })),
+      oneTurnLog().map((e) => ({ ...e, seq: SessionSeq(e.seq + 1) })),
     );
     expect(await b.ctx.sessionPersistence.list()).toHaveLength(1);
     const loaded = await b.ctx.sessionPersistence.load(m.id);
@@ -1844,17 +1917,17 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     // The assistant/message references the ignorable plugin event (upstream
     // seq 1), which is dropped at write time — sourceEventSeqs 不落库。
     await b.ctx.sessionPersistence.append(m.id, [
-      { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       {
         type: "plugin/test",
-        seq: 1,
+        seq: SessionSeq(1),
         time: 2,
         data: null,
         ignorable: true,
       } as unknown as SessionEvent,
       {
         type: "assistant/message",
-        seq: 2,
+        seq: SessionSeq(2),
         time: 3,
         data: {
           turn: 1,
@@ -1866,9 +1939,14 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
           }),
         },
         surfaceOp: "append",
-        sourceEventSeqs: [1],
+        sourceEventSeqs: [1].map((n) => SessionSeq(n)),
       },
-      { type: "turn/end", seq: 3, time: 4, data: { turn: 1, reason: { kind: "completed" } } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(3),
+        time: 4,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
     ]);
     const loaded = await b.ctx.sessionPersistence.load(m.id);
     const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
@@ -1891,10 +1969,10 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     const m = meta("compact-seam");
     await b.ctx.sessionPersistence.create(m);
     const log = [
-      { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       {
         type: "user/message",
-        seq: 1,
+        seq: SessionSeq(1),
         time: 2,
         data: createUserMessage({
           content: [{ type: "text", text: "hi" }],
@@ -1902,22 +1980,22 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
         }),
         surfaceOp: "append",
       },
-      { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
       {
         type: "assistant/chunk",
-        seq: 3,
+        seq: SessionSeq(3),
         time: 4,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
       },
       {
         type: "assistant/chunk",
-        seq: 4,
+        seq: SessionSeq(4),
         time: 5,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
       },
       {
         type: "assistant/message",
-        seq: 5,
+        seq: SessionSeq(5),
         time: 6,
         data: {
           turn: 1,
@@ -1929,16 +2007,21 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
           }),
         },
         surfaceOp: "append",
-        sourceEventSeqs: [3, 4],
+        sourceEventSeqs: [3, 4].map((n) => SessionSeq(n)),
       },
-      { type: "step/end", seq: 6, time: 7, data: { turn: 1, step: 1 } },
-      { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
-      { type: "turn/start", seq: 8, time: 9, data: { turn: 2 } },
-      { type: "step/start", seq: 9, time: 10, data: { turn: 2, step: 1 } },
-      { type: "compaction/start", seq: 10, time: 11, data: { turn: 2 } },
+      { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(7),
+        time: 8,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
+      { type: "turn/start", seq: SessionSeq(8), time: 9, data: { turn: 2 } },
+      { type: "step/start", seq: SessionSeq(9), time: 10, data: { turn: 2, step: 1 } },
+      { type: "compaction/start", seq: SessionSeq(10), time: 11, data: { turn: 2 } },
       {
         type: "compaction/summary",
-        seq: 11,
+        seq: SessionSeq(11),
         time: 12,
         data: {
           turn: 2,
@@ -1949,7 +2032,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
       },
       {
         type: "assistant/message",
-        seq: 12,
+        seq: SessionSeq(12),
         time: 13,
         data: {
           turn: 2,
@@ -1961,10 +2044,15 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
           }),
         },
         surfaceOp: { op: "replace", start: 1, end: 5 },
-        sourceEventSeqs: [1, 5],
+        sourceEventSeqs: [1, 5].map((n) => SessionSeq(n)),
       },
-      { type: "step/end", seq: 13, time: 14, data: { turn: 2, step: 1 } },
-      { type: "turn/end", seq: 14, time: 15, data: { turn: 2, reason: { kind: "completed" } } },
+      { type: "step/end", seq: SessionSeq(13), time: 14, data: { turn: 2, step: 1 } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(14),
+        time: 15,
+        data: { turn: 2, reason: { kind: "completed" } },
+      },
     ] as unknown as SessionEvent[];
     await b.ctx.sessionPersistence.append(m.id, log);
 
@@ -2011,10 +2099,10 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     const m = meta("cleanse-me");
     await b.ctx.sessionPersistence.create(m);
     const log = [
-      { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       {
         type: "user/message",
-        seq: 1,
+        seq: SessionSeq(1),
         time: 2,
         data: createUserMessage({
           content: [{ type: "text", text: "hi" }],
@@ -2022,22 +2110,22 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
         }),
         surfaceOp: "append",
       },
-      { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
       {
         type: "assistant/chunk",
-        seq: 3,
+        seq: SessionSeq(3),
         time: 4,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
       },
       {
         type: "assistant/chunk",
-        seq: 4,
+        seq: SessionSeq(4),
         time: 5,
         data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
       },
       {
         type: "assistant/message",
-        seq: 5,
+        seq: SessionSeq(5),
         time: 6,
         data: {
           turn: 1,
@@ -2050,13 +2138,18 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
         },
         surfaceOp: "append",
       },
-      { type: "step/end", seq: 6, time: 7, data: { turn: 1, step: 1 } },
-      { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
-      { type: "turn/start", seq: 8, time: 9, data: { turn: 2 } },
-      { type: "step/start", seq: 9, time: 10, data: { turn: 2, step: 1 } },
+      { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(7),
+        time: 8,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
+      { type: "turn/start", seq: SessionSeq(8), time: 9, data: { turn: 2 } },
+      { type: "step/start", seq: SessionSeq(9), time: 10, data: { turn: 2, step: 1 } },
       {
         type: "assistant/message",
-        seq: 10,
+        seq: SessionSeq(10),
         time: 11,
         data: {
           turn: 2,
@@ -2068,10 +2161,15 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
           }),
         },
         surfaceOp: { op: "replace", start: 1, end: 5 },
-        sourceEventSeqs: [1, 5],
+        sourceEventSeqs: [1, 5].map((n) => SessionSeq(n)),
       },
-      { type: "step/end", seq: 11, time: 12, data: { turn: 2, step: 1 } },
-      { type: "turn/end", seq: 12, time: 13, data: { turn: 2, reason: { kind: "completed" } } },
+      { type: "step/end", seq: SessionSeq(11), time: 12, data: { turn: 2, step: 1 } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(12),
+        time: 13,
+        data: { turn: 2, reason: { kind: "completed" } },
+      },
     ] as unknown as SessionEvent[];
     await b.ctx.sessionPersistence.append(m.id, log);
 
@@ -2313,7 +2411,7 @@ describe("surface field round-trip", () => {
           },
         }),
       },
-      { surfaceOp: "append", sourceEventSeqs: [2] },
+      { surfaceOp: "append", sourceEventSeqs: [2].map((n) => SessionSeq(n)) },
     );
     session.append("step/end", { turn: 1, step: 1 });
     session.append("turn/end", { turn: 1, reason: { kind: "completed" } });

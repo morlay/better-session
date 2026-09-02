@@ -4,8 +4,8 @@
  * 读取，本模块做纯投影——根与后代的确定、自有版本效果的扫描、节点归一。
  *
  * 规则（对齐 `dsh-message-edit` 的数据模型）：
- * - `parentSession` 构成版本树；`seedLength` 区分继承与自有后缀。
- * - 每个会话至多一个**自有** `session-branch/version` 事件（seq ≥ seedLength）。
+ * - `parentSession` 构成版本树；`inheritedEventCount` 区分继承与自有后缀。
+ * - 每个会话至多一个**自有** `session-branch/version` 事件（seq ≥ 继承长度）。
  * - 根节点（无 `parentSession`）不带版本效果。
  * - 版本效果 id 全局唯一；逆链（`inverse.sessionId`）必须指向树内父节点。
  *
@@ -21,6 +21,16 @@ import {
   type BranchVersionNode,
   type SessionBranchVersionEventEnvelope,
 } from "./types.ts";
+
+/**
+ * 版本树投影的输入快照：上游 {@link SessionPersistenceSnapshot} 之外携带
+ * 继承前缀长度（`listSnapshots` 的 RDB 实现额外返回该字段；结构兼容上游
+ * 类型，多出的字段不影响赋值）。
+ */
+export type BranchSnapshot = SessionPersistenceSnapshot & {
+  /** 继承前缀长度（`header.isSeeded` 时非零；否则 0）。 */
+  inheritedEventCount: number;
+};
 
 /**
  * 读取一个会话「自有后缀」事件的函数——live 会话传 `events.slice(seedLength)`，
@@ -40,7 +50,7 @@ export type OwnEventsReader = (
  * @param signal - 读取取消。
  */
 export async function buildTimeline(
-  snapshots: readonly SessionPersistenceSnapshot[],
+  snapshots: readonly BranchSnapshot[],
   readOwnEvents: OwnEventsReader,
   sessionId: SessionId,
   signal?: AbortSignal,
@@ -91,7 +101,7 @@ export async function buildTimeline(
     const node: BranchVersionNode = {
       sessionId: header.id,
       ...(header.parentSession === undefined ? {} : { parentSessionId: header.parentSession }),
-      seedLength: header.seedLength ?? 0,
+      seedLength: snapshot.inheritedEventCount ?? 0,
       createdAt: header.createdAt,
     };
     // 根节点不可能带版本效果；其余节点读自有后缀。

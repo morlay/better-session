@@ -34,18 +34,21 @@ import {
   type PersistenceBackend,
   type SessionLocation,
   type SessionPersistenceSnapshot,
+  type SessionStorageMetadata,
   type StoredPrefix,
   type StoredSuffix,
 } from "@deepseek-ai/dsh-session-persistence";
-import type {
-  SessionEvent,
-  SurfaceEventType,
-  SessionId,
-  SessionHeader,
+import {
+  SessionLogOffset,
+  SessionSeq,
+  type SessionEvent,
+  type SurfaceEventType,
+  type SessionId,
+  type SessionHeader,
 } from "@deepseek-ai/dsh-session";
 import { type Backend, type BackendTx, type EventInsert, type EventRow } from "./backend.ts";
 import { WriteGuard } from "./write-guard.ts";
-import { buildSeqMap, recomputeReplaceProvenance, rowToMeta, scanRows } from "./log.ts";
+import { buildSeqMap, recomputeReplaceProvenance, rowToMeta, scanRows, toJsonlArtifact } from "./log.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   eventDimensions,
@@ -56,6 +59,7 @@ import {
 import { SqliteBackend } from "./sqlite.ts";
 import { PostgresBackend } from "./postgres.ts";
 import { SessionBranchRdb } from "./branch.ts";
+import { registerSessionImport } from "./import.ts";
 
 export { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "./schema.ts";
 export { SessionBranchRdb, SessionBranchRdbProvider, locateTurnEnd } from "./branch.ts";
@@ -69,7 +73,7 @@ export { SessionBranchRdb, SessionBranchRdbProvider, locateTurnEnd } from "./bra
 export interface SessionPersistenceRdbInternals {
   readonly backend: Backend;
   readonly writeGuard: WriteGuard;
-  create(meta: SessionHeader): Promise<void>;
+  create(meta: SessionHeader, inheritedEventCount?: number): Promise<void>;
   append(id: SessionId, events: readonly SessionEvent[]): Promise<void>;
   load(id: SessionId): Promise<import("@deepseek-ai/dsh-session-persistence").SessionInspection>;
   inspect(
@@ -80,7 +84,7 @@ export interface SessionPersistenceRdbInternals {
     id: SessionId,
     fromSeq: number,
     signal?: AbortSignal,
-  ): Promise<{ meta: SessionHeader; events: SessionEvent[] }>;
+  ): Promise<import("@deepseek-ai/dsh-session-persistence").SessionEventSuffix>;
   listSnapshots(signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]>;
   readStoredRevision(
     id: SessionId,
@@ -175,8 +179,30 @@ export class SessionPersistenceRdb
    */
   override readonly name = "session-rdb";
 
-  /** One RDB database holds every session; there is no per-session raw artifact. */
-  override readonly supportsRawArtifacts = false;
+  /** RDB 行可导出为 JSONL raw artifact（`readRaw` 实现），供 session-log-export 消费。 */
+  override readonly supportsRawArtifacts = true;
+
+  /**
+   * 导出用 raw artifact：把 RDB 行转成 JSONL 文本（header 行 + 每事件一行，
+   * 与上游 JSONL 后端物理布局一致），供 `session-log-export` 的 zip 流消费。
+   * 会话不存在时返回 undefined。
+   */
+  override async readRaw(
+    id: SessionId,
+    signal?: AbortSignal,
+  ): Promise<import("@deepseek-ai/dsh-session-persistence").SessionRawArtifact | undefined> {
+    signal?.throwIfAborted();
+    await this.ready;
+    signal?.throwIfAborted();
+    const log = await this.readLog(id, {}, signal);
+    if (log === undefined) return undefined;
+    return {
+      meta: log.meta,
+      inheritedEventCount: SessionLogOffset(log.inheritedEventCount),
+      filename: "session.jsonl",
+      content: toJsonlArtifact(log.meta, log.inheritedEventCount, log.events),
+    };
+  }
 
   private readonly backend: Backend;
   private storeIdentity!: string;
@@ -235,6 +261,9 @@ export class SessionPersistenceRdb
     // session-branch（rewind / forkFrom / timeline）。Service 构造即注册
     // ctx.sessionBranch 并随 fiber 卸载自动回滚。
     new SessionBranchRdb(this.ctx);
+    // 导入端点：webServer + connection 就绪后注册 `/api/session.import`
+    // （zip → JSONL → 新 id 落库），与导出的 raw artifact 格式互为逆。
+    registerSessionImport(this.ctx, this);
   }
 
   private async init(): Promise<void> {
@@ -249,22 +278,25 @@ export class SessionPersistenceRdb
     return undefined;
   }
 
-  create(meta: SessionHeader): Promise<void> {
-    return this.coordinator.create(meta);
+  create(meta: SessionHeader, inheritedEventCount?: number): Promise<void> {
+    return this.coordinator.create(
+      meta,
+      inheritedEventCount === undefined ? undefined : SessionLogOffset(inheritedEventCount),
+    );
   }
 
   append(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
     return this.coordinator.append(id, events);
   }
 
-  load(id: SessionId): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }> {
+  load(id: SessionId): Promise<import("@deepseek-ai/dsh-session-persistence").SessionInspection> {
     return this.coordinator.load(id);
   }
 
   inspect(
     id: SessionId,
     signal?: AbortSignal,
-  ): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }> {
+  ): Promise<import("@deepseek-ai/dsh-session-persistence").SessionInspection> {
     return this.coordinator.inspect(id, signal);
   }
 
@@ -272,8 +304,10 @@ export class SessionPersistenceRdb
     id: SessionId,
     fromSeq: number,
     signal?: AbortSignal,
-  ): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
-    return this.coordinator.readFrom(id, fromSeq, signal);
+  ): Promise<import("@deepseek-ai/dsh-session-persistence").SessionEventSuffix> {
+    // 校验委托给 coordinator（其内部把非法 offset 转成 rejected promise）；
+    // 这里只做品牌转换，避免 cordis proxy 下同步 throw 逃逸。
+    return this.coordinator.readFrom(id, fromSeq as SessionLogOffset, signal);
   }
 
   /**
@@ -308,7 +342,11 @@ export class SessionPersistenceRdb
   ): Promise<StoredSuffix | undefined> {
     const log = await this.readLog(id, { fromSeq }, signal);
     if (log === undefined) return undefined;
-    return { meta: log.meta, events: log.events };
+    return {
+      meta: log.meta,
+      inheritedEventCount: SessionLogOffset(log.inheritedEventCount),
+      events: log.events,
+    };
   }
 
   /**
@@ -338,6 +376,7 @@ export class SessionPersistenceRdb
     recomputeReplaceProvenance(log.events);
     return {
       meta: log.meta,
+      inheritedEventCount: SessionLogOffset(log.inheritedEventCount),
       events: log.events,
       // The revision must identify exactly these values and match
       // readStoredRevision's representation (see listSnapshots).
@@ -381,6 +420,8 @@ export class SessionPersistenceRdb
   ): Promise<
     | {
         meta: SessionHeader;
+        /** 继承前缀长度（`meta.isSeeded` 时非零；否则 0）。 */
+        inheritedEventCount: number;
         events: SessionEvent[];
         tornFrom?: number;
         /** The session row's stable identity (see {@link listSnapshots}). */
@@ -414,6 +455,7 @@ export class SessionPersistenceRdb
     const { preserved, tornFrom } = scanRows(eventRows, options.fromSeq ?? 0, seqMap);
     return {
       meta,
+      inheritedEventCount: row.fSeedLength ?? 0,
       events: preserved,
       incarnation: row.fIncarnation,
       revision: row.fRevision,
@@ -448,19 +490,20 @@ export class SessionPersistenceRdb
    * refreshed on conflict), so a fresh row still starts at the initial head.
    */
   async appendBatch(
-    meta: SessionHeader,
+    storage: SessionStorageMetadata,
     events: readonly SessionEvent[],
     _isMaterialized: boolean,
   ): Promise<void> {
     await this.ready;
     const persisted = events.filter(isPersistedEvent);
     if (persisted.length === 0) return;
+    const meta = storage.meta;
     // fork 派生会话的 seed 复用源会话事件行（不复制）；消费后清除。
     const reuse = this.reuseEventIds.get(meta.id);
     if (reuse !== undefined) this.reuseEventIds.delete(meta.id);
     let confirmedHead = -1;
     await this.backend.transaction(async (tx) => {
-      await tx.upsertSession(meta, randomUUID());
+      await tx.upsertSession(storage, randomUUID());
       const head = await tx.getHead(meta.id);
       // Reject a second writer BEFORE re-numbering: each coordinator instance
       // maintains its own upstream cursor, so a second instance (or process)
@@ -492,11 +535,12 @@ export class SessionPersistenceRdb
    * stored rows == the balanced log.
    */
   async commitRepair(
-    meta: SessionHeader,
+    storage: SessionStorageMetadata,
     tornMarker: number | undefined,
     closers: readonly SessionEvent[],
   ): Promise<void> {
     await this.ready;
+    const meta = storage.meta;
     const persistedClosers = closers.filter(isPersistedEvent);
     if (tornMarker === undefined && persistedClosers.length === 0) return;
     await this.backend.transaction(async (tx) => {
@@ -562,7 +606,7 @@ export class SessionPersistenceRdb
       fOriginalSeq?: number;
     }> = [];
     for (const row of eventRows) {
-      const event = bySeq.get(row.fSequence);
+      const event = bySeq.get(SessionSeq(row.fSequence));
       if (event === undefined) continue; // torn tail fragment
       const surface = event as SessionEvent & { surfaceOp?: unknown };
       const newOp = surface.surfaceOp === undefined ? null : JSON.stringify(surface.surfaceOp);
@@ -598,8 +642,15 @@ export class SessionPersistenceRdb
     return rows.map(rowToMeta);
   }
 
-  /** List metadata with a source-qualified monotonic revision per session. */
-  async listSnapshots(signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]> {
+  /**
+   * List metadata with a source-qualified monotonic revision per session.
+   * 每个快照额外携带 `inheritedEventCount`（继承前缀长度）——结构兼容上游
+   * `SessionPersistenceSnapshot`，供 `@morlay/session-branch` 的版本树投影
+   * 区分继承与自有后缀。
+   */
+  async listSnapshots(
+    signal?: AbortSignal,
+  ): Promise<Array<SessionPersistenceSnapshot & { inheritedEventCount: number }>> {
     signal?.throwIfAborted();
     await this.ready;
     signal?.throwIfAborted();
@@ -610,6 +661,7 @@ export class SessionPersistenceRdb
       revision: SessionPersistenceRevision(
         `${this.storeIdentity}:incarnation:${row.fIncarnation}:revision:${row.fRevision}`,
       ),
+      inheritedEventCount: row.fSeedLength ?? 0,
     }));
   }
 
@@ -636,7 +688,7 @@ export class SessionPersistenceRdb
     return {
       backend: this.backend,
       writeGuard: this.writeGuard,
-      create: (meta) => this.create(meta),
+      create: (meta, inheritedEventCount) => this.create(meta, inheritedEventCount),
       append: (id, events) => this.append(id, events),
       load: (id) => this.load(id),
       inspect: (id, signal) => this.inspect(id, signal),

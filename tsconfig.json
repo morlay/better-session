@@ -17,7 +17,7 @@
     "isolatedModules": false,
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
-    "skipLibCheck": true,
+    "skipLibCheck": true
   },
-  "exclude": ["packages/**/lib", "vendor/**", "**/node_modules"],
+  "exclude": ["packages/**/dist", "vendor/**", "**/node_modules"]
 }

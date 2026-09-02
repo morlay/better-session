@@ -37,12 +37,12 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 实现层  @morlay/session-rdb                  RDB 持久化 + branch provider 双服务
 ```
 
-| 层       | 包                                        | 职责                                                                                       |
-| -------- | ----------------------------------------- | ------------------------------------------------------------------------------------------ |
-| 契约层   | `@morlay/session-branch`                  | `SessionBranchProvider` 抽象（rewind / forkFrom / readBranchPrefix）+ `SessionBranch` 服务 + `buildTimeline` 版本树投影 |
-| 编排层   | `@morlay/ui-conversation-message-actions` | `SessionEditor` 编排（edit / retry / fork 完整功能）+ client bundle（`conversation.chat.node` 渲染替换） |
-| 实现层   | `@morlay/session-rdb`                     | RDB 持久化（实现上游 `PersistenceBackend`）+ 分支 provider（实现 `SessionBranchProvider`），双服务闭环 |
-| 聚合     | `@morlay/better-session`                  | profile bundle：`cordis.patch.yml` 一次性装配以上全部到 web profile |
+| 层     | 包                                        | 职责                                                                                                                    |
+| ------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 契约层 | `@morlay/session-branch`                  | `SessionBranchProvider` 抽象（rewind / forkFrom / readBranchPrefix）+ `SessionBranch` 服务 + `buildTimeline` 版本树投影 |
+| 编排层 | `@morlay/ui-conversation-message-actions` | `SessionEditor` 编排（edit / retry / fork 完整功能）+ client bundle（`conversation.chat.node` 渲染替换）                |
+| 实现层 | `@morlay/session-rdb`                     | RDB 持久化（实现上游 `PersistenceBackend`）+ 分支 provider（实现 `SessionBranchProvider`），双服务闭环                  |
+| 聚合   | `@morlay/better-session`                  | profile bundle：`cordis.patch.yml` 一次性装配以上全部到 web profile                                                     |
 
 ## 核心设计
 
@@ -74,11 +74,11 @@ namespace 可覆盖为 PostgreSQL（`connectionString`）。
 
 ## 操作语义
 
-| 操作     | 路径                                                       | 会话 id |
-| -------- | ---------------------------------------------------------- | ------- |
-| `edit`   | 编辑已落定文本块 → `rewind` 截断 → `append` 重写 → 重放     | 不变    |
-| `retry`  | 重放该回合输入（带确认弹窗）                               | 不变    |
-| `fork`   | 从任意闭合边界派生新会话（纯 append，不触碰源会话）        | 新      |
+| 操作    | 路径                                                    | 会话 id |
+| ------- | ------------------------------------------------------- | ------- |
+| `edit`  | 编辑已落定文本块 → `rewind` 截断 → `append` 重写 → 重放 | 不变    |
+| `retry` | 重放该回合输入（带确认弹窗）                            | 不变    |
+| `fork`  | 从任意闭合边界派生新会话（纯 append，不触碰源会话）     | 新      |
 
 ## 与上游的关系
 

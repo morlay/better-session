@@ -16,15 +16,12 @@
     "url": "https://github.com/morlay/dsh-llm-openai-compatible.git"
   },
   "files": [
-    "lib",
+    "dist",
     "cordis.patch.yml"
   ],
   "type": "module",
   "exports": {
-    ".": {
-      "types": "./lib/index.d.mts",
-      "default": "./lib/index.mjs"
-    },
+    ".": "./dist/index.mjs",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },

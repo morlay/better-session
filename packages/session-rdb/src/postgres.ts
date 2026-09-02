@@ -15,7 +15,8 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { PgAsyncDatabase, PgAsyncTransaction, PgQueryResultHKT } from "drizzle-orm/pg-core";
-import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
+import type { SessionId } from "@deepseek-ai/dsh-session";
+import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import {
   type Backend,
   type BackendTx,
@@ -159,7 +160,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   /** Bind the {@link BackendTx} primitives to one drizzle PG transaction handle. */
   private txFor(tx: PgAsyncTransaction<THKT>): BackendTx {
     return {
-      upsertSession: (meta, incarnation) => this.upsertSession(tx, meta, incarnation),
+      upsertSession: (storage, incarnation) => this.upsertSession(tx, storage, incarnation),
       getHead: (id) => this.getHead(tx, id),
       insertEvents: (events) => this.insertEvents(tx, events),
       insertBridges: (rows) => this.insertBridges(tx, rows),
@@ -189,15 +190,15 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
 
   private async upsertSession(
     exec: PgAsyncDatabase<THKT>,
-    meta: SessionHeader,
+    storage: SessionStorageMetadata,
     incarnation: string,
   ): Promise<void> {
     await exec
       .insert(this.tables["t_sessions"])
-      .values(sessionInsertRow(meta, incarnation))
+      .values(sessionInsertRow(storage, incarnation))
       .onConflictDoUpdate({
         target: this.tables["t_sessions"].fSessionId,
-        set: sessionConflictRow(meta),
+        set: sessionConflictRow(storage),
       })
       .execute();
   }
@@ -218,12 +219,19 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     return head;
   }
 
+  /** 多行 INSERT 分批上限（与 SQLite 的绑定参数上限同源防护；PG 65535）。 */
+  private static readonly INSERT_BATCH_ROWS = 1000;
+
   private async insertEvents(exec: PgAsyncDatabase<THKT>, events: EventInsert[]): Promise<void> {
     if (events.length === 0) return;
-    await exec
-      .insert(this.tables["t_events"])
-      .values(events.map((event) => ({ ...event })))
-      .execute();
+    for (let i = 0; i < events.length; i += PostgresBackend.INSERT_BATCH_ROWS) {
+      await exec
+        .insert(this.tables["t_events"])
+        .values(
+          events.slice(i, i + PostgresBackend.INSERT_BATCH_ROWS).map((event) => ({ ...event })),
+        )
+        .execute();
+    }
   }
 
   private async insertBridges(
@@ -237,10 +245,12 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     }>,
   ): Promise<void> {
     if (rows.length === 0) return;
-    await exec
-      .insert(this.tables["t_session_events"])
-      .values(rows.map((row) => ({ ...row })))
-      .execute();
+    for (let i = 0; i < rows.length; i += PostgresBackend.INSERT_BATCH_ROWS) {
+      await exec
+        .insert(this.tables["t_session_events"])
+        .values(rows.slice(i, i + PostgresBackend.INSERT_BATCH_ROWS).map((row) => ({ ...row })))
+        .execute();
+    }
   }
 
   private async updateHead(

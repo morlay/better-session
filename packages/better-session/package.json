@@ -22,12 +22,9 @@
   ],
   "type": "module",
   "exports": {
-    "./invariant": {
-      "types": "./lib/invariant.d.mts",
-      "default": "./lib/invariant.mjs"
-    },
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    ".": "./dist/invariant.mjs",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "scripts": {
     "build": "pnpm exec tsdown",

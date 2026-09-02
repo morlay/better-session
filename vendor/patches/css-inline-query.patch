@@ -1,0 +1,105 @@
+diff --git a/packages/client/tsdown.client.ts b/packages/client/tsdown.client.ts
+index d6d8bad..0954619 100644
+--- a/packages/client/tsdown.client.ts
++++ b/packages/client/tsdown.client.ts
+@@ -500,10 +500,15 @@ function clientConfig(id: string, entry: string): UserConfig {
+       },
+     }, tscSourceMapPlugin(), {
+       name: 'dsh-css-modules-inline',
+-      resolveId(source: string, importer: string | undefined) {
+-        if (!source.endsWith('.module.css')) return null
+-        const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
+-        return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
++      resolveId: {
++        // Rolldown strips the import query before default-order hooks run and
++        // re-appends it to the returned id; pre keeps the raw specifier intact.
++        order: 'pre' as const,
++        handler(source: string, importer: string | undefined) {
++          if (!source.endsWith('.module.css')) return null
++          const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
++          return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
++        },
+       },
+       async load(virtualId: string) {
+         if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
+@@ -525,11 +530,14 @@ function clientConfig(id: string, entry: string): UserConfig {
+       },
+     }, {
+       name: 'dsh-css-text-inline',
+-      resolveId(source: string, importer: string | undefined) {
+-        if (!source.endsWith(`.css${INLINE_CSS_QUERY}`)) return null
+-        const stylesheet = source.slice(0, -INLINE_CSS_QUERY.length)
+-        const abs = importer !== undefined ? sourceAssetPath(stylesheet, importer) : stylesheet
+-        return INLINE_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
++      resolveId: {
++        order: 'pre' as const,
++        handler(source: string, importer: string | undefined) {
++          if (!source.endsWith(`.css${INLINE_CSS_QUERY}`)) return null
++          const stylesheet = source.slice(0, -INLINE_CSS_QUERY.length)
++          const abs = importer !== undefined ? sourceAssetPath(stylesheet, importer) : stylesheet
++          return INLINE_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
++        },
+       },
+       async load(virtualId: string) {
+         if (!virtualId.startsWith(INLINE_CSS_VIRTUAL_PREFIX)) return null
+@@ -541,10 +549,13 @@ function clientConfig(id: string, entry: string): UserConfig {
+       },
+     }, {
+       name: 'dsh-css-global-inline',
+-      resolveId(source: string, importer: string | undefined) {
+-        if (!source.endsWith('.css') || source.endsWith('.module.css')) return null
+-        const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
+-        return GLOBAL_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
++      resolveId: {
++        order: 'pre' as const,
++        handler(source: string, importer: string | undefined) {
++          if (!source.endsWith('.css') || source.endsWith('.module.css')) return null
++          const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
++          return GLOBAL_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
++        },
+       },
+       async load(virtualId: string) {
+         if (!virtualId.startsWith(GLOBAL_CSS_VIRTUAL_PREFIX)) return null
+diff --git a/scripts/client-bundle-css.spec.ts b/scripts/client-bundle-css.spec.ts
+index b426e54..4adef76 100644
+--- a/scripts/client-bundle-css.spec.ts
++++ b/scripts/client-bundle-css.spec.ts
+@@ -10,7 +10,10 @@ import { clientBundle } from '../packages/client/tsdown.client.ts'
+ 
+ interface CssPlugin {
+   name: string
+-  resolveId?: (source: string, importer?: string) => string | null
++  resolveId?: {
++    order: 'pre'
++    handler: (source: string, importer?: string) => string | null
++  }
+   load?: (this: { addWatchFile(id: string): void }, id: string) => Promise<string | null>
+ }
+ 
+@@ -35,7 +38,7 @@ describe('client bundle CSS Modules', () => {
+       const importer = join(root, 'index.ts')
+       await writeFile(stylesheet, '.root { color: red; }\n')
+       const plugin = cssPlugin('dsh-css-modules-inline')
+-      const virtualId = plugin.resolveId?.('./Fixture.module.css', importer)
++      const virtualId = plugin.resolveId?.handler('./Fixture.module.css', importer)
+       if (typeof virtualId !== 'string' || plugin.load === undefined) {
+         throw new Error('CSS Modules plugin hooks are incomplete')
+       }
+@@ -59,7 +62,7 @@ describe('client bundle global CSS', () => {
+       const importer = join(root, 'index.ts')
+       await writeFile(stylesheet, 'body { color: red; }\n')
+       const plugin = cssPlugin('dsh-css-global-inline')
+-      const virtualId = plugin.resolveId?.('./base.css', importer)
++      const virtualId = plugin.resolveId?.handler('./base.css', importer)
+       if (typeof virtualId !== 'string' || plugin.load === undefined) {
+         throw new Error('global CSS plugin hooks are incomplete')
+       }
+@@ -82,7 +85,7 @@ describe('client bundle global CSS', () => {
+       const importer = join(root, 'index.ts')
+       await writeFile(stylesheet, 'body { color: red; }\n')
+       const plugin = cssPlugin('dsh-css-text-inline')
+-      const virtualId = plugin.resolveId?.('./base.css?inline', importer)
++      const virtualId = plugin.resolveId?.handler('./base.css?inline', importer)
+       if (typeof virtualId !== 'string' || plugin.load === undefined) {
+         throw new Error('inline CSS plugin hooks are incomplete')
+       }

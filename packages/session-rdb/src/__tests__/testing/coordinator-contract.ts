@@ -13,7 +13,13 @@ import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { describe, expect, it, vi } from "vitest";
 import { Context, type Fiber } from "@deepseek-ai/cordis";
 import { scopeTarget } from "@deepseek-ai/dsh-scope";
-import SessionStore, { SESSION_FORMAT_VERSION, Session, SessionId } from "@deepseek-ai/dsh-session";
+import SessionStore, {
+  SESSION_FORMAT_VERSION,
+  Session,
+  SessionId,
+  SessionLogOffset,
+  SessionSeq,
+} from "@deepseek-ai/dsh-session";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { meta, oneTurnLog, appendLog } from "./contract.ts";
 
@@ -48,18 +54,18 @@ function send(session: Session, events: readonly SessionEvent[]): void {
 /** A valid persisted log from immediately before messages gained wrappers and identities. */
 function legacyMessageLog(): SessionEvent[] {
   return [
-    { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+    { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
     {
       type: "user/message",
-      seq: 1,
+      seq: SessionSeq(1),
       time: 2,
       data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
       surfaceOp: "append",
     },
-    { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+    { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
     {
       type: "assistant/message",
-      seq: 3,
+      seq: SessionSeq(3),
       time: 4,
       data: {
         turn: 1,
@@ -71,13 +77,13 @@ function legacyMessageLog(): SessionEvent[] {
     },
     {
       type: "tool/call",
-      seq: 4,
+      seq: SessionSeq(4),
       time: 5,
       data: { turn: 1, step: 1, callId: "call-1", name: "read", arguments: "{}" },
     },
     {
       type: "tool/result",
-      seq: 5,
+      seq: SessionSeq(5),
       time: 6,
       data: {
         turn: 1,
@@ -91,7 +97,7 @@ function legacyMessageLog(): SessionEvent[] {
     },
     {
       type: "tool/result",
-      seq: 6,
+      seq: SessionSeq(6),
       time: 8,
       data: {
         turn: 1,
@@ -103,8 +109,13 @@ function legacyMessageLog(): SessionEvent[] {
       sourceEventSeqs: [5],
       surfaceOp: { op: "replace", start: 5, end: 5 },
     },
-    { type: "step/end", seq: 7, time: 9, data: { turn: 1, step: 1 } },
-    { type: "turn/end", seq: 8, time: 10, data: { turn: 1, reason: { kind: "completed" } } },
+    { type: "step/end", seq: SessionSeq(7), time: 9, data: { turn: 1, step: 1 } },
+    {
+      type: "turn/end",
+      seq: SessionSeq(8),
+      time: 10,
+      data: { turn: 1, reason: { kind: "completed" } },
+    },
   ] as unknown as SessionEvent[];
 }
 
@@ -121,27 +132,37 @@ function preReactLoopLog(): SessionEvent[] {
   return [
     {
       type: "turn/start",
-      seq: 0,
+      seq: SessionSeq(0),
       time: 1,
       data: { turn: 1, trigger: { kind: "message", source: { kind: "user" } } },
     },
-    { type: "user/message", seq: 1, time: 2, data: prompt, surfaceOp: "append" },
-    { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+    { type: "user/message", seq: SessionSeq(1), time: 2, data: prompt, surfaceOp: "append" },
+    { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
     {
       type: "steering/message",
-      seq: 3,
+      seq: SessionSeq(3),
       time: 4,
       data: { turn: 1, message: steering },
       surfaceOp: "append",
     },
-    { type: "step/end", seq: 4, time: 5, data: { turn: 1, step: 1 } },
-    { type: "turn/end", seq: 5, time: 6, data: { turn: 1, reason: { kind: "completed" } } },
-    { type: "turn/start", seq: 6, time: 7, data: { turn: 2, trigger: { kind: "retry" } } },
-    { type: "step/start", seq: 7, time: 8, data: { turn: 2, step: 1 } },
-    { type: "step/end", seq: 8, time: 9, data: { turn: 2, step: 1 } },
+    { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
     {
       type: "turn/end",
-      seq: 9,
+      seq: SessionSeq(5),
+      time: 6,
+      data: { turn: 1, reason: { kind: "completed" } },
+    },
+    {
+      type: "turn/start",
+      seq: SessionSeq(6),
+      time: 7,
+      data: { turn: 2, trigger: { kind: "retry" } },
+    },
+    { type: "step/start", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
+    { type: "step/end", seq: SessionSeq(8), time: 9, data: { turn: 2, step: 1 } },
+    {
+      type: "turn/end",
+      seq: SessionSeq(9),
       time: 10,
       data: {
         turn: 2,
@@ -154,41 +175,51 @@ function preReactLoopLog(): SessionEvent[] {
     },
     {
       type: "turn/start",
-      seq: 10,
+      seq: SessionSeq(10),
       time: 11,
       data: { turn: 3, trigger: { kind: "message", source: { kind: "user" } } },
     },
-    { type: "turn/end", seq: 11, time: 12, data: { turn: 3, reason: { kind: "aborted" } } },
+    {
+      type: "turn/end",
+      seq: SessionSeq(11),
+      time: 12,
+      data: { turn: 3, reason: { kind: "aborted" } },
+    },
     {
       type: "turn/start",
-      seq: 12,
+      seq: SessionSeq(12),
       time: 13,
       data: { turn: 4, trigger: { kind: "message", source: { kind: "user" } } },
     },
-    { type: "turn/end", seq: 13, time: 14, data: { turn: 4, reason: { kind: "disposed" } } },
+    {
+      type: "turn/end",
+      seq: SessionSeq(13),
+      time: 14,
+      data: { turn: 4, reason: { kind: "disposed" } },
+    },
     {
       type: "turn/start",
-      seq: 14,
+      seq: SessionSeq(14),
       time: 15,
       data: { turn: 5, trigger: { kind: "message", source: { kind: "user" } } },
     },
-    { type: "step/start", seq: 15, time: 16, data: { turn: 5, step: 1 } },
-    { type: "step/end", seq: 16, time: 17, data: { turn: 5, step: 1 } },
+    { type: "step/start", seq: SessionSeq(15), time: 16, data: { turn: 5, step: 1 } },
+    { type: "step/end", seq: SessionSeq(16), time: 17, data: { turn: 5, step: 1 } },
     {
       type: "turn/end",
-      seq: 17,
+      seq: SessionSeq(17),
       time: 18,
       data: { turn: 5, reason: { kind: "error", step: 1, message: "old thrown value" } },
     },
     {
       type: "turn/start",
-      seq: 18,
+      seq: SessionSeq(18),
       time: 19,
       data: { turn: 6, trigger: { kind: "message", source: { kind: "user" } } },
     },
     {
       type: "turn/end",
-      seq: 19,
+      seq: SessionSeq(19),
       time: 20,
       data: {
         turn: 6,
@@ -207,13 +238,13 @@ function preReactLoopLog(): SessionEvent[] {
     },
     {
       type: "turn/start",
-      seq: 20,
+      seq: SessionSeq(20),
       time: 21,
       data: { turn: 7, trigger: { kind: "message", source: { kind: "user" } } },
     },
     {
       type: "turn/end",
-      seq: 21,
+      seq: SessionSeq(21),
       time: 22,
       data: {
         turn: 7,
@@ -329,7 +360,7 @@ export function runCoordinatorContract(
         const header = meta(id, WORK);
         const start: SessionEvent = {
           type: "turn/start",
-          seq: 0,
+          seq: SessionSeq(0),
           time: 1,
           data: { turn: 1 },
         };
@@ -372,7 +403,7 @@ export function runCoordinatorContract(
       }
     });
 
-    it("round-trips the seed boundary (seedLength) through persistence", async () => {
+    it("round-trips the seed boundary (inheritedEventCount) through persistence", async () => {
       // A forked child records how many leading events were inherited via the seed; the
       // boundary must survive a reload (so a resume/replay can tell the inherited prefix from
       // the child's own events). JSONL stores it in the header; SQLite uses `seed_length`.
@@ -384,18 +415,21 @@ export function runCoordinatorContract(
           Object.assign(
             (inner: Context) => {
               session = inner.sessions.create(SessionId("forked-child"), {
-                meta: { cwd: WORK, seedLength: 3 },
+                seed: oneTurnLog().slice(0, 3),
+                meta: { cwd: WORK, isSeeded: true },
+                inheritedEventCount: SessionLogOffset(3),
               });
             },
             { inject: ["sessions"] },
           ),
         );
-        send(session, oneTurnLog());
+        send(session, oneTurnLog().slice(3));
         await ctx.sessions.flush(session);
         await sessionFiber.dispose();
 
         const loaded = await ctx.sessionPersistence.load(SessionId("forked-child"));
-        expect(loaded.meta.seedLength).toBe(3);
+        expect(loaded.meta.isSeeded).toBe(true);
+        expect(loaded.inheritedEventCount).toBe(3);
       } finally {
         await fiber.dispose();
         await fix.cleanup();
@@ -519,7 +553,12 @@ export function runCoordinatorContract(
           ]);
           expect(messages.every((message) => Object.isFrozen(message))).toBe(true);
 
-          const resumed = Session.create(id, snapshot.events, snapshot.meta);
+          const resumed = Session.create(
+            id,
+            snapshot.events,
+            snapshot.meta,
+            snapshot.inheritedEventCount,
+          );
           expect(resumed.deriveMessages().map((message) => message.id)).toEqual([
             `legacy-message:${id}:1`,
             `legacy-message:${id}:3`,
@@ -527,10 +566,10 @@ export function runCoordinatorContract(
           ]);
         }
 
-        const replacementSuffix = await ctx.sessionPersistence.readFrom(id, 6);
+        const replacementSuffix = await ctx.sessionPersistence.readFrom(id, SessionLogOffset(6));
         expect(replacementSuffix.events[0]).toMatchObject({
           type: "tool/result",
-          seq: 6,
+          seq: SessionSeq(6),
           data: { message: { id: `legacy-message:${id}:5` } },
         });
       } finally {
@@ -551,7 +590,7 @@ export function runCoordinatorContract(
 
         const snapshots = [
           await ctx.sessionPersistence.inspect(id),
-          await ctx.sessionPersistence.readFrom(id, 0),
+          await ctx.sessionPersistence.readFrom(id, SessionLogOffset(0)),
           await ctx.sessionPersistence.load(id),
         ];
         for (const snapshot of snapshots) {
@@ -604,17 +643,22 @@ export function runCoordinatorContract(
             },
           ]);
 
-          const resumed = Session.create(id, snapshot.events, snapshot.meta);
+          const resumed = Session.create(
+            id,
+            snapshot.events,
+            snapshot.meta,
+            snapshot.inheritedEventCount,
+          );
           expect(resumed.deriveMessages().map((message) => message.content)).toEqual([
             [{ type: "text", text: "old prompt" }],
             [{ type: "text", text: "old steering" }],
           ]);
         }
 
-        const suffix = await ctx.sessionPersistence.readFrom(id, 3);
+        const suffix = await ctx.sessionPersistence.readFrom(id, SessionLogOffset(3));
         expect(suffix.events[0]).toMatchObject({
           type: "user/message",
-          seq: 3,
+          seq: SessionSeq(3),
           data: { id: legacySteering.data.message.id },
         });
         expect(
@@ -628,7 +672,7 @@ export function runCoordinatorContract(
         await ctx.sessionPersistence.append(flatId, [
           {
             type: "steering/message",
-            seq: 0,
+            seq: SessionSeq(0),
             time: 1,
             data: {
               turn: 1,
@@ -650,10 +694,10 @@ export function runCoordinatorContract(
         const extendedId = SessionId("current-extended-turn-end");
         await ctx.sessionPersistence.create(meta(extendedId, WORK));
         await ctx.sessionPersistence.append(extendedId, [
-          { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+          { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
           {
             type: "turn/end",
-            seq: 1,
+            seq: SessionSeq(1),
             time: 2,
             data: { turn: 1, reason: { kind: "extension-reason" } },
           } as unknown as SessionEvent,
@@ -677,7 +721,7 @@ export function runCoordinatorContract(
         await ctx.sessionPersistence.append(id, [
           {
             type: "user/message",
-            seq: 0,
+            seq: SessionSeq(0),
             time: 1,
             surfaceOp: "append",
             data: {
@@ -701,7 +745,7 @@ export function runCoordinatorContract(
             id: "invalid-old-turn-start",
             event: {
               type: "turn/start",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               data: { turn: 1, trigger: null },
             } as unknown as SessionEvent,
@@ -711,7 +755,7 @@ export function runCoordinatorContract(
             id: "invalid-old-steering",
             event: {
               type: "steering/message",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               surfaceOp: "append",
               data: { turn: 1, content: [], source: { kind: "user" }, extra: true },
@@ -722,7 +766,7 @@ export function runCoordinatorContract(
             id: "invalid-old-steering-data",
             event: {
               type: "steering/message",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               surfaceOp: "append",
               data: null,
@@ -733,7 +777,7 @@ export function runCoordinatorContract(
             id: "invalid-old-turn-end",
             event: {
               type: "turn/end",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               data: { turn: 1, reason: { kind: "completed", extra: true } },
             } as unknown as SessionEvent,
@@ -743,7 +787,7 @@ export function runCoordinatorContract(
             id: "invalid-old-turn-end-reason",
             event: {
               type: "turn/end",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               data: { turn: 1, reason: null },
             } as unknown as SessionEvent,
@@ -753,7 +797,7 @@ export function runCoordinatorContract(
             id: "unsupported-intermediate-turn-end-step",
             event: {
               type: "turn/end",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               data: { turn: 1, step: 1, reason: { kind: "completed" } },
             } as unknown as SessionEvent,
@@ -763,7 +807,7 @@ export function runCoordinatorContract(
             id: "invalid-old-turn-end-aborted",
             event: {
               type: "turn/end",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               data: { turn: 1, reason: { kind: "aborted", extra: true } },
             } as unknown as SessionEvent,
@@ -773,7 +817,7 @@ export function runCoordinatorContract(
             id: "invalid-old-turn-end-disposed",
             event: {
               type: "turn/end",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               data: { turn: 1, reason: { kind: "disposed", extra: true } },
             } as unknown as SessionEvent,
@@ -783,7 +827,7 @@ export function runCoordinatorContract(
             id: "invalid-old-turn-end-error-step",
             event: {
               type: "turn/end",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               data: { turn: 1, reason: { kind: "error", step: -1, message: "bad step" } },
             } as unknown as SessionEvent,
@@ -793,7 +837,7 @@ export function runCoordinatorContract(
             id: "invalid-old-turn-end-error-code",
             event: {
               type: "turn/end",
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               data: { turn: 1, reason: { kind: "error", step: 0, message: "bad code", code: 1 } },
             } as unknown as SessionEvent,
@@ -807,9 +851,9 @@ export function runCoordinatorContract(
           await expect(ctx.sessionPersistence.inspect(malformedId)).rejects.toThrow(
             malformed.message,
           );
-          await expect(ctx.sessionPersistence.readFrom(malformedId, 0)).rejects.toThrow(
-            malformed.message,
-          );
+          await expect(
+            ctx.sessionPersistence.readFrom(malformedId, SessionLogOffset(0)),
+          ).rejects.toThrow(malformed.message);
         }
 
         for (const type of ["tool/result"] as const) {
@@ -818,7 +862,7 @@ export function runCoordinatorContract(
           await ctx.sessionPersistence.append(malformedId, [
             {
               type,
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               surfaceOp: "append",
               data: { message: null },
@@ -834,7 +878,7 @@ export function runCoordinatorContract(
         await ctx.sessionPersistence.append(pluginId, [
           {
             type: "plugin/test",
-            seq: 0,
+            seq: SessionSeq(0),
             time: 1,
             data: null,
             // An ignorable event's loss cannot affect reconstruction (envelope
@@ -844,7 +888,9 @@ export function runCoordinatorContract(
           } as unknown as SessionEvent,
         ]);
         await expect(ctx.sessionPersistence.inspect(pluginId)).rejects.toThrow(/not found/);
-        await expect(ctx.sessionPersistence.readFrom(pluginId, 0)).rejects.toThrow(/not found/);
+        await expect(
+          ctx.sessionPersistence.readFrom(pluginId, SessionLogOffset(0)),
+        ).rejects.toThrow(/not found/);
 
         // Contrast: an unknown type WITHOUT the ignorable marker is a REQUIRED
         // event — it is persisted (loss would affect reconstruction) and the
@@ -854,7 +900,7 @@ export function runCoordinatorContract(
         await ctx.sessionPersistence.append(requiredId, [
           {
             type: "plugin/required",
-            seq: 0,
+            seq: SessionSeq(0),
             time: 1,
             data: null,
           } as unknown as SessionEvent,
@@ -869,15 +915,15 @@ export function runCoordinatorContract(
           await ctx.sessionPersistence.append(missingContentId, [
             {
               type,
-              seq: 0,
+              seq: SessionSeq(0),
               time: 1,
               surfaceOp: "append",
               data: {},
             } as unknown as SessionEvent,
           ]);
-          await expect(ctx.sessionPersistence.readFrom(missingContentId, 0)).rejects.toThrow(
-            "lacks an identified message",
-          );
+          await expect(
+            ctx.sessionPersistence.readFrom(missingContentId, SessionLogOffset(0)),
+          ).rejects.toThrow("lacks an identified message");
         }
       } finally {
         await fiber.dispose();
@@ -896,7 +942,7 @@ export function runCoordinatorContract(
         const p = ctx.sessionPersistence.append(m.id, events);
         // Mutate the caller's array AND an event object after the call but before
         // the queued op runs: the snapshot taken at call time must shield the copy.
-        events.push({ type: "turn/start", seq: 6, time: 99, data: { turn: 2 } });
+        events.push({ type: "turn/start", seq: SessionSeq(6), time: 99, data: { turn: 2 } });
         if (userMsg?.type === "user/message") {
           (userMsg.data as { content: unknown[] }).content = [{ type: "text", text: "MUTATED" }];
         }
@@ -1354,7 +1400,7 @@ export function runCoordinatorContract(
         const id = SessionId("claim-exact");
         const completeSeed = [
           ...oneTurnLog(),
-          { type: "session/end-seed", seq: 6, time: 7, data: {} },
+          { type: "session/end-seed", seq: SessionSeq(6), time: 7, data: {} },
         ] as SessionEvent[];
         await ctx.sessionPersistence.create(meta(id, WORK));
         await ctx.sessionPersistence.append(id, completeSeed);
@@ -1388,10 +1434,10 @@ export function runCoordinatorContract(
               cont = inner.sessions.create(SessionId("claim"), {
                 seed: [
                   ...events,
-                  { type: "turn/start", seq: 6, time: 7, data: { turn: 2 } },
+                  { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
                   {
                     type: "turn/end",
-                    seq: 7,
+                    seq: SessionSeq(7),
                     time: 8,
                     data: { turn: 2, reason: { kind: "completed" } },
                   },
@@ -1499,8 +1545,13 @@ export function runCoordinatorContract(
       const second = await freshCtx(fix);
       try {
         await second.ctx.sessionPersistence.append(SessionId("adopt-append"), [
-          { type: "turn/start", seq: 6, time: 7, data: { turn: 2 } },
-          { type: "turn/end", seq: 7, time: 8, data: { turn: 2, reason: { kind: "completed" } } },
+          { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
+          {
+            type: "turn/end",
+            seq: SessionSeq(7),
+            time: 8,
+            data: { turn: 2, reason: { kind: "completed" } },
+          },
         ]);
         const loaded = await second.ctx.sessionPersistence.load(SessionId("adopt-append"));
         expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -1571,7 +1622,7 @@ export function runCoordinatorContract(
       const fix = await makeFixture();
       const { ctx, fiber } = await freshCtx(fix);
       try {
-        const m = { version: 99, id: SessionId("v99"), createdAt: 1, cwd: WORK };
+        const m = { version: 99, id: SessionId("v99"), createdAt: 1, cwd: WORK, isSeeded: false };
         await ctx.sessionPersistence.create(m);
         await ctx.sessionPersistence.append(m.id, oneTurnLog());
         await expect(ctx.sessionPersistence.load(m.id)).rejects.toThrow(/log format/);
@@ -1591,6 +1642,7 @@ export function runCoordinatorContract(
           createdAt: 1,
           cwd: WORK,
           parentSession: SessionId("the-parent"),
+          isSeeded: false,
         };
         await ctx.sessionPersistence.create(m);
         await ctx.sessionPersistence.append(m.id, oneTurnLog());
@@ -1648,8 +1700,8 @@ export function runCoordinatorContract(
         await first.ctx.sessionPersistence.append(m.id, oneTurnLog()); // committed 0..5 (balanced)
         // A second turn whose real events are durable but never closed (open turn).
         await first.ctx.sessionPersistence.append(m.id, [
-          { type: "turn/start", seq: 6, time: 7, data: { turn: 2 } },
-          { type: "step/start", seq: 7, time: 8, data: { turn: 2, step: 1 } },
+          { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
+          { type: "step/start", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
         ]);
       } finally {
         await first.fiber.dispose();
@@ -1683,8 +1735,13 @@ export function runCoordinatorContract(
         // The repair is durable: the next append continues at the balanced length
         // (seq 10) and a reload round-trips identically.
         await second.ctx.sessionPersistence.append(SessionId("torn"), [
-          { type: "turn/start", seq: 10, time: 9, data: { turn: 3 } },
-          { type: "turn/end", seq: 11, time: 10, data: { turn: 3, reason: { kind: "completed" } } },
+          { type: "turn/start", seq: SessionSeq(10), time: 9, data: { turn: 3 } },
+          {
+            type: "turn/end",
+            seq: SessionSeq(11),
+            time: 10,
+            data: { turn: 3, reason: { kind: "completed" } },
+          },
         ]);
         const reloaded = await second.ctx.sessionPersistence.load(SessionId("torn"));
         expect(reloaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);

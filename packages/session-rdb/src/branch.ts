@@ -175,6 +175,48 @@ export function truncateLiveSession(session: Session, newLength: number): void {
 }
 
 /**
+ * 用导入的事件整体替换 live 会话的内存 log 并重置全部派生缓存（覆盖导入
+ * 的 host 端同步：rewind(-1) 已把 live log 截断为空，DB 由 append 写入，
+ * 此处把同一批事件灌回 live 内存，使 `observeSession` 的 live 快照与 DB
+ * 一致——否则 UI 刷新重读仍命中空快照）。与 {@link truncateLiveSession}
+ * 同模式：不发布事件、不重复落库；`surfaceManager` 全量重折叠复位。
+ * @param session - live 会话。
+ * @param events - 导入事件（稠密 seq 0..n-1）。
+ */
+export function replaceLiveSessionLog(session: Session, events: readonly SessionEvent[]): void {
+  const s = session as unknown as {
+    log: SessionEvent[];
+    eventsSnapshot?: unknown;
+    headerFold?: unknown;
+    headerFoldSeq: number;
+    contextFold?: unknown;
+    contextFoldSeq: number;
+    derived: unknown[];
+    derivedNodes: number;
+    derivedGeneration: number;
+    surfaceManager: {
+      _state: { nodes: number[]; replaceGeneration: number };
+      _lastProcessedSeq: number;
+      _pendingPlan?: unknown;
+      baseSeq: number;
+    };
+  };
+  s.log.length = 0;
+  s.log.push(...events);
+  s.eventsSnapshot = undefined;
+  s.headerFold = undefined;
+  s.headerFoldSeq = 0;
+  s.contextFold = undefined;
+  s.contextFoldSeq = 0;
+  s.derived = [];
+  s.derivedNodes = 0;
+  s.derivedGeneration = 0;
+  s.surfaceManager._state = { nodes: [], replaceGeneration: 0 };
+  s.surfaceManager._lastProcessedSeq = s.surfaceManager.baseSeq - 1;
+  s.surfaceManager._pendingPlan = undefined;
+}
+
+/**
  * RDB 分支数据层实现（`SessionBranchProvider`）。与 `SessionPersistenceRdb`
  * 共享同一数据库连接（`Backend`）与 coordinator 写路径。
  */
@@ -245,7 +287,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
           ? { cwd: source.meta.cwd }
           : {}),
       parentSession: sourceId,
-      seedLength: prefix.length,
+      isSeeded: true,
       ...(meta.agentPreset !== undefined
         ? { agentPreset: meta.agentPreset }
         : source.meta.agentPreset !== undefined
@@ -267,7 +309,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       if (eventId !== undefined) reuse.set(event.seq, eventId);
     }
     internals.registerReuseEventIds(childId, reuse);
-    await this.persistence.create(childMeta);
+    await this.persistence.create(childMeta, prefix.length);
     if (seed.length > 0) await this.persistence.append(childId, seed);
     return childId;
   }
@@ -373,7 +415,8 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
         // agent 驻留不重建，其 `phase.lastTurn` 仍是编辑前的值——不重置的话
         // 重放（followup）会继续递增产生**新**轮次号（如重试 turn 2 得到
         // turn 3），而不是复用目标轮号。
-        const lastTurn = live.events.findLast((e) => e.type === "turn/start")?.data.turn ?? 0;
+        const lastTurn =
+          live.snapshotEvents().findLast((e) => e.type === "turn/start")?.data.turn ?? 0;
         const phase = (agent as unknown as { phase?: { lastTurn?: number } }).phase;
         if (phase !== undefined) phase.lastTurn = lastTurn;
       }
@@ -405,7 +448,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
           createdAt: meta.createdAt,
           ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
           ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
-          ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
+          isSeeded: meta.isSeeded,
           ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
           ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
           ...(meta.agentPreset !== undefined ? { agentPreset: meta.agentPreset } : {}),
@@ -547,8 +590,8 @@ export class SessionBranchRdb extends SessionBranch {
     let cursor = state.cursor;
     // ignorable 是下游信封扩展（上游 SessionEvent 无此字段），结构化读取。
     while (
-      (live.events[cursor] as (SessionEvent & { ignorable?: unknown }) | undefined)?.ignorable ===
-      true
+      (live.snapshotEvents()[cursor] as (SessionEvent & { ignorable?: unknown }) | undefined)
+        ?.ignorable === true
     )
       cursor += 1;
     state.cursor = cursor;
@@ -562,7 +605,7 @@ export class SessionBranchRdb extends SessionBranch {
     // cold timeline 退化为 lineage 骨架（无效果详情）。
     const readOwnEvents = async (id: SessionId, fromSeq: number, s?: AbortSignal) => {
       const live = this.ctx.sessions.get(id);
-      if (live !== undefined) return live.events.slice(fromSeq);
+      if (live !== undefined) return live.snapshotEvents().slice(fromSeq);
       return (await persistence.readFrom(id, fromSeq, s)).events;
     };
     return buildTimeline(snapshots, readOwnEvents, sessionId, signal);

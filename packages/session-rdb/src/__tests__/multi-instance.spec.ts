@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Context } from "@deepseek-ai/cordis";
-import { SessionStore, SessionId } from "@deepseek-ai/dsh-session";
+import { SessionStore, SessionId, SessionSeq } from "@deepseek-ai/dsh-session";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { EmptySettings } from "./testing/helpers.ts";
@@ -36,13 +36,13 @@ function oneTurn(offset: number): SessionEvent[] {
   return [
     {
       type: "turn/start",
-      seq: offset + 0,
+      seq: SessionSeq(offset + 0),
       time: 1,
       data: { turn: 1 },
     },
     {
       type: "user/message",
-      seq: offset + 1,
+      seq: SessionSeq(offset + 1),
       time: 2,
       data: createUserMessage({
         content: [{ type: "text", text: `msg${offset}` }],
@@ -52,7 +52,7 @@ function oneTurn(offset: number): SessionEvent[] {
     },
     {
       type: "turn/end",
-      seq: offset + 2,
+      seq: SessionSeq(offset + 2),
       time: 3,
       data: { turn: 1, reason: { kind: "completed" } },
     },
@@ -66,8 +66,20 @@ describe("multi-instance repro", () => {
     const b2 = await mount(path);
     const id = SessionId("shared-id");
     // 同时 create 同 id：两个 coordinator 都不知道对方（DB 都还没有行）。
-    const c1 = b1.ctx.sessionPersistence.create({ id, version: 0, createdAt: 1, cwd: "/a" });
-    const c2 = b2.ctx.sessionPersistence.create({ id, version: 0, createdAt: 1, cwd: "/b" });
+    const c1 = b1.ctx.sessionPersistence.create({
+      id,
+      version: 0,
+      createdAt: 1,
+      isSeeded: false,
+      cwd: "/a",
+    });
+    const c2 = b2.ctx.sessionPersistence.create({
+      id,
+      version: 0,
+      createdAt: 1,
+      isSeeded: false,
+      cwd: "/b",
+    });
     await Promise.all([c1, c2]);
 
     // 两个实例并发 append 各自的一轮 turn（各自 coordinator 的 cursor 都是 0）。
@@ -90,8 +102,18 @@ describe("multi-instance repro", () => {
     const path = await freshDbPath();
     const b1 = await mount(path);
     const b2 = await mount(path);
-    const a1 = b1.ctx.sessionPersistence.create({ id: SessionId("i1"), version: 0, createdAt: 1 });
-    const a2 = b2.ctx.sessionPersistence.create({ id: SessionId("i2"), version: 0, createdAt: 1 });
+    const a1 = b1.ctx.sessionPersistence.create({
+      id: SessionId("i1"),
+      version: 0,
+      createdAt: 1,
+      isSeeded: false,
+    });
+    const a2 = b2.ctx.sessionPersistence.create({
+      id: SessionId("i2"),
+      version: 0,
+      createdAt: 1,
+      isSeeded: false,
+    });
     await Promise.all([a1, a2]);
     await Promise.all([
       b1.ctx.sessionPersistence.append(SessionId("i1"), oneTurn(0)),
@@ -115,8 +137,8 @@ describe("multi-instance repro", () => {
     const b2 = await mount(path);
     const id = SessionId("interleaved");
     await Promise.all([
-      b1.ctx.sessionPersistence.create({ id, version: 0, createdAt: 1 }),
-      b2.ctx.sessionPersistence.create({ id, version: 0, createdAt: 1 }),
+      b1.ctx.sessionPersistence.create({ id, version: 0, createdAt: 1, isSeeded: false }),
+      b2.ctx.sessionPersistence.create({ id, version: 0, createdAt: 1, isSeeded: false }),
     ]);
     // 两实例轮流交错写：b1 写第一轮，b2 必须被拒绝（它从未读过这个 log，
     // 却要写一个已有行的 session）；随后 b1 的下一轮正常续写。
@@ -144,7 +166,12 @@ describe("multi-instance repro", () => {
   it("an instance that LOADED the session may append (authorized continuation); the stale writer is rejected", async () => {
     const path = await freshDbPath();
     const b1 = await mount(path);
-    await b1.ctx.sessionPersistence.create({ id: SessionId("auth"), version: 0, createdAt: 1 });
+    await b1.ctx.sessionPersistence.create({
+      id: SessionId("auth"),
+      version: 0,
+      createdAt: 1,
+      isSeeded: false,
+    });
     await b1.ctx.sessionPersistence.append(SessionId("auth"), oneTurn(0)); // b1: head 0..2
 
     // b2 明确 load 该 session（授权续接）：b2 的记录 head = 2 == 磁盘 head。

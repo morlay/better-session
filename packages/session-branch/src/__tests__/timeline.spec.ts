@@ -5,10 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { SessionEvent, SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
-import {
-  SessionPersistenceRevision,
-  type SessionPersistenceSnapshot,
-} from "@deepseek-ai/dsh-session-persistence";
+import { SessionPersistenceRevision } from "@deepseek-ai/dsh-session-persistence";
 import {
   SessionBranchError,
   SESSION_BRANCH_VERSION_SCHEMA,
@@ -21,13 +18,22 @@ function header(id: string, overrides: Partial<SessionHeader> = {}): SessionHead
     version: 0,
     id: id as SessionId,
     createdAt: 0,
+    isSeeded: false,
     ...overrides,
   };
 }
 
-function snapshot(id: string, overrides: Partial<SessionHeader> = {}): SessionPersistenceSnapshot {
+function snapshot(
+  id: string,
+  overrides: Partial<SessionHeader> = {},
+  inheritedEventCount = 0,
+): import("../timeline.ts").BranchSnapshot {
   const h = header(id, overrides);
-  return { header: h, revision: SessionPersistenceRevision(`test:${id}:r0`) };
+  return {
+    header: h,
+    revision: SessionPersistenceRevision(`test:${id}:r0`),
+    inheritedEventCount,
+  };
 }
 
 function versionEvent(seq: number, event: SessionBranchVersionEvent): SessionEvent {
@@ -61,7 +67,7 @@ describe("buildTimeline", () => {
   it("folds own version effects from the non-inherited suffix", async () => {
     const snapshots = [
       snapshot("a"),
-      snapshot("b", { parentSession: "a" as SessionId, seedLength: 3 }),
+      snapshot("b", { parentSession: "a" as SessionId, isSeeded: true }, 3),
     ];
     const own = async (id: SessionId, fromSeq: number): Promise<SessionEvent[]> =>
       id === "b" && fromSeq === 3 ? [versionEvent(3, pair("b", "a"))] : [];
@@ -75,7 +81,7 @@ describe("buildTimeline", () => {
   it("rejects a version whose inverse does not name its parent", async () => {
     const snapshots = [
       snapshot("a"),
-      snapshot("b", { parentSession: "a" as SessionId, seedLength: 0 }),
+      snapshot("b", { parentSession: "a" as SessionId, isSeeded: true }, 0),
     ];
     const broken = {
       schemaVersion: SESSION_BRANCH_VERSION_SCHEMA,
@@ -91,7 +97,7 @@ describe("buildTimeline", () => {
   it("rejects a session carrying multiple own version effects", async () => {
     const snapshots = [
       snapshot("a"),
-      snapshot("b", { parentSession: "a" as SessionId, seedLength: 0 }),
+      snapshot("b", { parentSession: "a" as SessionId, isSeeded: true }, 0),
     ];
     const own = async (): Promise<SessionEvent[]> => [
       versionEvent(0, pair("b1", "a")),

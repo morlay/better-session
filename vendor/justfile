@@ -7,8 +7,11 @@ patch:
     rm -rf apps/cli/tests/profiles/acp/cordis.yml
     rm -rf packages/subagent/subagent-codex packages/subagent/subagent-claude-code
     sd '^.*subagent-(?:claude-code|codex).*$' '' tsconfig.host.json
+    git apply ../patches/css-inline-query.patch
 
 [working-directory("deepseek-harness")]
 build:
+    pnpm self-update 12
+    pnpm install
     pnpm run build
-    rm -rf node_modules
+    fd -I -t d node_modules -x rm -rf

@@ -17,6 +17,8 @@
  */
 
 import type { SessionEvent, SessionHeader, SessionId, SurfaceOp } from "@deepseek-ai/dsh-session";
+import { SessionSeq, encodeSeqRanges, packChunkRuns } from "@deepseek-ai/dsh-session";
+import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import type { EventRow, SessionRow } from "./backend.ts";
 
 /**
@@ -34,7 +36,7 @@ export function rowToMeta(row: SessionRow): SessionHeader {
     createdAt: row.fCreatedAt,
     ...(row.fCwd !== null ? { cwd: row.fCwd } : {}),
     ...(row.fParentSession !== null ? { parentSession: row.fParentSession as SessionId } : {}),
-    ...(row.fSeedLength !== null ? { seedLength: row.fSeedLength } : {}),
+    isSeeded: row.fSeedLength !== null,
     ...(row.fOrigin !== null ? { origin: row.fOrigin as "subagent" } : {}),
     ...(row.fDelegationDepth === null ? {} : { delegationDepth: row.fDelegationDepth }),
   };
@@ -45,10 +47,11 @@ export function rowToMeta(row: SessionRow): SessionHeader {
  * （空事件 id、seq -1）+ materialization identity（`f_incarnation`）+ revision 0。
  * 方言无关的纯映射——SQLite 与 PostgreSQL 后端的 `upsertSession` 共用，列名
  * 与 `src/entities/sessions.ts` 对齐（改一处即两方言生效）。`f_id` serial 由
- * 数据库生成，不在映射内。
+ * 数据库生成，不在映射内。`f_seed_length` 持久化继承前缀长度（`isSeeded`
+ * 为 true 时非空；否则 NULL）。
  */
 export function sessionInsertRow(
-  meta: SessionHeader,
+  storage: SessionStorageMetadata,
   incarnation: string,
 ): {
   fSessionId: string;
@@ -64,6 +67,7 @@ export function sessionInsertRow(
   fIncarnation: string;
   fRevision: number;
 } {
+  const meta = storage.meta;
   return {
     fSessionId: meta.id,
     fHeadEventId: "",
@@ -72,7 +76,7 @@ export function sessionInsertRow(
     fCreatedAt: meta.createdAt,
     fCwd: meta.cwd ?? null,
     fParentSession: meta.parentSession ?? null,
-    fSeedLength: meta.seedLength ?? null,
+    fSeedLength: meta.isSeeded ? storage.inheritedEventCount : null,
     fOrigin: meta.origin ?? null,
     fDelegationDepth: meta.delegationDepth ?? null,
     fIncarnation: incarnation,
@@ -86,7 +90,7 @@ export function sessionInsertRow(
  * （`f_incarnation`/`f_revision`）。方言无关，两后端共用（见
  * {@link sessionInsertRow}）。
  */
-export function sessionConflictRow(meta: SessionHeader): {
+export function sessionConflictRow(storage: SessionStorageMetadata): {
   fVersion: number;
   fCreatedAt: number;
   fCwd: string | null;
@@ -95,12 +99,13 @@ export function sessionConflictRow(meta: SessionHeader): {
   fOrigin: string | null;
   fDelegationDepth: number | null;
 } {
+  const meta = storage.meta;
   return {
     fVersion: meta.version,
     fCreatedAt: meta.createdAt,
     fCwd: meta.cwd ?? null,
     fParentSession: meta.parentSession ?? null,
-    fSeedLength: meta.seedLength ?? null,
+    fSeedLength: meta.isSeeded ? storage.inheritedEventCount : null,
     fOrigin: meta.origin ?? null,
     fDelegationDepth: meta.delegationDepth ?? null,
   };
@@ -119,7 +124,11 @@ export function sessionConflictRow(meta: SessionHeader): {
  */
 export function remapSurfaceOp(op: SurfaceOp, remap: (seq: number) => number): SurfaceOp {
   if (op === "append") return op;
-  return { op: "replace", start: remap(op.start), end: remap(op.end) };
+  return {
+    op: "replace",
+    start: SessionSeq(remap(op.start)),
+    end: SessionSeq(remap(op.end)),
+  };
 }
 
 /**
@@ -315,4 +324,52 @@ export function scanRows(
   return preserved.length < rows.length
     ? { preserved, tornFrom: base + preserved.length }
     : { preserved };
+}
+
+/**
+ * 把一行事件序列化为 JSONL 存储记录：`sourceEventSeqs` 压缩为区间数组
+ * （与上游 JSONL 后端的 `encodeProvenanceForStorage` 一致），`assistant/chunk`
+ * 连续段打包为 chunk 行（`packChunkRuns`，与上游 `packChunks: true` 布局一致）。
+ * @param event - 待序列化的事件。
+ * @returns 存储记录（JSON 序列化前的对象）。
+ */
+function toStorageRecord(record: import("@deepseek-ai/dsh-session").StorageRecord): unknown {
+  const withSeqs = record as import("@deepseek-ai/dsh-session").StorageRecord & {
+    sourceEventSeqs?: unknown;
+  };
+  if (withSeqs.sourceEventSeqs === undefined) return record;
+  return { ...record, sourceEventSeqs: encodeSeqRanges(withSeqs.sourceEventSeqs as never) };
+}
+
+/**
+ * 把 RDB 会话行转成 JSONL 文本（`session-log-export` 的 raw artifact 格式）：
+ * 首行是 `type: 'session'` 的 header 记录（`seedLength` 携带继承前缀长度），
+ * 之后每行一个存储记录。与上游 JSONL 后端 `toHeaderLine` + `eventLines`
+ * 的物理布局一致，导出 zip 的媒体引用扫描（`imageRefsInArtifact`）按行
+ * `JSON.parse` 即可工作。
+ * @param meta - 会话 header。
+ * @param inheritedEventCount - 继承前缀长度。
+ * @param events - 会话事件（稠密 seq，已含崩溃修复 closers）。
+ * @returns JSONL 文本。
+ */
+export function toJsonlArtifact(
+  meta: SessionHeader,
+  inheritedEventCount: number,
+  events: readonly SessionEvent[],
+): string {
+  const header = {
+    type: "session",
+    version: meta.version,
+    id: meta.id,
+    createdAt: meta.createdAt,
+    ...(meta.cwd === undefined ? {} : { cwd: meta.cwd }),
+    ...(meta.parentSession === undefined ? {} : { parentSession: meta.parentSession }),
+    ...(meta.isSeeded ? { seedLength: inheritedEventCount } : {}),
+    ...(meta.origin === undefined ? {} : { origin: meta.origin }),
+    delegationDepth: meta.delegationDepth ?? 0,
+    ...(meta.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset }),
+  };
+  const lines = [JSON.stringify(header)];
+  for (const record of packChunkRuns(events)) lines.push(JSON.stringify(toStorageRecord(record)));
+  return lines.join("\n");
 }

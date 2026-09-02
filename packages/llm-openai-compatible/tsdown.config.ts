@@ -1,10 +1,18 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/adapter.ts", "src/serialize.ts", "src/translate.ts"],
+  entry: {
+    index: "./src/index.ts",
+  },
+  exports: {
+    packageJson: true,
+    customExports: {
+      "./cordis.patch.yml": "./cordis.patch.yml",
+    },
+  },
   format: ["esm"],
-  outDir: "lib",
-  dts: true,
-  sourcemap: false,
-  platform: "node",
+  deps: {
+    onlyBundle: false,
+  },
+  clean: true,
 });

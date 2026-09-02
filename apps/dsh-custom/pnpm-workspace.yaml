@@ -1,0 +1,18 @@
+# nodeLinker hoisted：扁平闭包，供 SEA 打包直接复制。
+# autoInstallPeers=true：dsh-app-boot 等核心包把运行时必需的依赖
+# （cordis-plugin-group、dsh-invariants 等）声明为 peerDependencies，
+# 闭包缺它们时 SEA 打包会把裸包名 import 留在 blob 里，启动即崩。
+# allowBuilds（pnpm 11）：默认不跑依赖的构建脚本，原生模块在此显式放行。
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: true
+
+allowBuilds:
+  "@deepseek-ai/dsh-subprocess-local": true
+  "@google/genai": true
+  esbuild: true
+  koffi: true
+  node-pty: true
+  protobufjs: true
