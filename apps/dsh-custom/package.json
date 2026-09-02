@@ -4,9 +4,11 @@
   "private": true,
   "files": [
     "icon.svg",
+    "justfile",
     "cordis.patch.yml"
   ],
   "dependencies": {
+    "@deepseek-ai/cordis-plugin-group": "workspace:^",
     "@deepseek-ai/dsh": "workspace:^",
     "@morlay/better-session": "workspace:^",
     "@morlay/dsh-llm-openai-compatible": "workspace:^"

@@ -166,6 +166,9 @@ importers:
 
   apps/dsh-custom:
     dependencies:
+      '@deepseek-ai/cordis-plugin-group':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/vendor/group
       '@deepseek-ai/dsh':
         specifier: workspace:^
         version: link:../../vendor/deepseek-harness/apps/cli
@@ -21756,7 +21759,7 @@ snapshots:
       - supports-color
       - typescript
 
-  '@deepseek-ai/dsh-web-app@file:vendor/deepseek-harness/packages/bundle/web-app(b848c2286acc53865eb516f50a424ed2)':
+  '@deepseek-ai/dsh-web-app@file:vendor/deepseek-harness/packages/bundle/web-app(f425fa1af40102aa90bb35b69f8351a0)':
     dependencies:
       '@deepseek-ai/cordis': file:vendor/deepseek-harness/vendor/cordis(@deepseek-ai/cordis-plugin-include@file:vendor/deepseek-harness/vendor/include)(@deepseek-ai/cordis-plugin-loader@file:vendor/deepseek-harness/vendor/loader)
       '@deepseek-ai/cordis-plugin-loader': file:vendor/deepseek-harness/vendor/loader(@deepseek-ai/cordis@file:vendor/deepseek-harness/vendor/cordis)(node-addon-require-builtin@0.1.5)
@@ -22207,7 +22210,7 @@ snapshots:
       - ws
       - zod
 
-  '@deepseek-ai/dsh@file:vendor/deepseek-harness/apps/cli(65086e70d7d7dbfe47a0758b223d215d)':
+  '@deepseek-ai/dsh@file:vendor/deepseek-harness/apps/cli(f5b3530a6bbbd4559a57e33b62647761)':
     dependencies:
       '@deepseek-ai/cordis': file:vendor/deepseek-harness/vendor/cordis(@deepseek-ai/cordis-plugin-include@file:vendor/deepseek-harness/vendor/include)(@deepseek-ai/cordis-plugin-loader@file:vendor/deepseek-harness/vendor/loader)
       '@deepseek-ai/cordis-plugin-hmr': file:vendor/deepseek-harness/vendor/hmr(@deepseek-ai/cordis-plugin-timer@file:vendor/deepseek-harness/vendor/timer(@deepseek-ai/cordis@file:vendor/deepseek-harness/vendor/cordis))(@deepseek-ai/cordis@file:vendor/deepseek-harness/vendor/cordis)
@@ -22271,7 +22274,7 @@ snapshots:
       '@deepseek-ai/dsh-tool-todo': file:vendor/deepseek-harness/packages/todo/tool-todo(eb7feb3a4392d49c30acae3b35f4183b)
       '@deepseek-ai/dsh-tool-web': file:vendor/deepseek-harness/packages/web/tool-web(7a6de513bb8eaa5b1ac5a5223d061ee5)
       '@deepseek-ai/dsh-tool-workflow': file:vendor/deepseek-harness/packages/workflow/tool-workflow(94e50dc58950edc6a17a5bae309dcd1f)
-      '@deepseek-ai/dsh-web-app': file:vendor/deepseek-harness/packages/bundle/web-app(b848c2286acc53865eb516f50a424ed2)
+      '@deepseek-ai/dsh-web-app': file:vendor/deepseek-harness/packages/bundle/web-app(f425fa1af40102aa90bb35b69f8351a0)
       '@deepseek-ai/dsh-webhook': file:vendor/deepseek-harness/packages/webhook/webhook(7355c2b99d8cfdb4432d0af2368dc9ff)
       '@deepseek-ai/dsh-webhook-github': file:vendor/deepseek-harness/packages/webhook/webhook-github(597866a9c6831fce80980b0776349ffe)
       '@deepseek-ai/dsh-workflow-worker-thread': file:vendor/deepseek-harness/packages/workflow/workflow-worker-thread(515aff0b1ee325ea2a105322dbdf8a28)
