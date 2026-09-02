@@ -1,7 +1,3 @@
-/**
- * `WriteGuard` 状态机直接单测：并发写者检测的时序契约（never-read /
- * confirmed-absence / confirmed head），不再需要端到端双实例堆栈即可覆盖。
- */
 import { describe, expect, it } from "vitest";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import { WriteGuard } from "../write-guard.ts";

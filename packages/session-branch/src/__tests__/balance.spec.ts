@@ -1,9 +1,3 @@
-/**
- * rewind 保留前缀平衡化（balanceRewindPrefix）的纯逻辑测试：真实 agent-loop
- * 顺序（step/start 在 user/message 之前）下 exclusive 截断残留的孤儿
- * step/start 被剔除，闭合轮次与配对 step 原样保留。
- */
-
 import { describe, expect, it } from "vitest";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { balanceRewindPrefix } from "../index.ts";

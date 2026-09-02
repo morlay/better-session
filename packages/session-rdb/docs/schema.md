@@ -13,8 +13,9 @@
 - `SCHEMA_VERSION` 是**破坏性变更门禁**：表结构变更（列增删、列语义变化）
   必须 bump；`openDatabase` 对非当前版本**拒绝打开**（不迁移）。
 - 表结构级升级由**一次性迁移脚本**处理（`scripts/migrate-v1-to-v2.mts`，
-  重建表 + 数据搬运，可复用 legacy-clean 的解析逻辑）；`clean & reload`
-  只处理**同版本内**的数据格式差异（见 [legacy-clean.md](legacy-clean.md)）。
+  重建表 + 数据搬运，可复用 legacy-clean 的解析逻辑）；同版本内的数据
+  格式差异（含 surface 语义损坏）在**导出时修复**（导出即修复，见
+  [legacy-clean.md](legacy-clean.md)）。
 - 本设计相对 v1 的破坏性变更：`t_events` 删 `f_source_event_seqs` /
   `f_surface_op` 列、`f_kind` 语义从「= type」改为「事件种类」、`t_events`
   加 `f_type` 列、`t_session_events` 加 `f_original_seq` / `f_surface_op`
@@ -162,8 +163,8 @@ session-rdb:
 **孤儿事件行清理**：rewind / torn-tail 物理删除 / 会话删除（CASCADE 删桥接行）
 后，无任何桥接行引用的 `t_events` 行成为孤儿。清理策略：
 
-- **惰性 GC**：`cleanseSession`（每会话修复）顺带删除该会话不再引用的孤儿
-  事件行（`DELETE FROM t_events WHERE f_event_id NOT IN (SELECT f_event_id
+- **惰性 GC**：rewind / 会话删除路径顺带删除该会话不再引用的孤儿事件行
+  （`DELETE FROM t_events WHERE f_event_id NOT IN (SELECT f_event_id
 FROM t_session_events)`，经 `t_session_events.f_event_id` 索引）；
 - 不做全局定时 GC（多实例共享数据库时跨实例引用不可知，惰性清理只处理
   本会话可见的孤儿）。

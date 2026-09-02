@@ -37,15 +37,6 @@ function contentParts(content: readonly unknown[]): {
   return { text: texts.join(""), images, rest };
 }
 
-/**
- * Display projection of reference forms in a user bubble (free geometry — no
- * textarea alignment constraint here); everything else stays plain text. The
- * logged model text remains the single truth; this is presentation only.
- * Plain-text `/name` / `@name` word-boundary tokens decorate (the sent text
- * IS the reference — the bubble uses the same plainest token
- * scan as the composer, minus the lexicon: sent tokens were validated at
- * compose time, so shape alone decorates).
- */
 function projectUserText(text: string): ReactNode {
   const re = /(^|\s)([/@][\w-]+)(?=\s|$)/g;
   const parts: ReactNode[] = [];
@@ -72,7 +63,6 @@ function projectUserText(text: string): ReactNode {
   return <>{parts}</>;
 }
 
-/** Right-aligned bubble shared by user and steering rows. */
 function UserStyleBubble({
   content,
   renderMessageImages,
@@ -81,7 +71,7 @@ function UserStyleBubble({
 }: {
   content: readonly unknown[];
   renderMessageImages: RenderMessageImages;
-  /** Optional IconActions (or similar) below the bubble; receives the joined text. */
+
   actions?: (text: string) => ReactNode;
   t: ChatViewSlotProps["t"];
 }): ReactNode {
@@ -111,7 +101,6 @@ function UserStyleBubble({
   );
 }
 
-/** User and admitted-steering keyed Chat renderer. */
 export const UserMessageNodeView = memo(function UserMessageNodeView({
   node,
   renderMessageImages,

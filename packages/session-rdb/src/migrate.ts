@@ -1,44 +1,8 @@
-/**
- * SQLite v1 → v2 表结构迁移（启动时自动执行 + 手动脚本共用）。
- *
- * v1 表结构（旧坐标模型）：
- * - `t_events`：`f_kind`（= 上游 type）、`f_original_seq`、`f_source_event_seqs`、
- *   `f_surface_op`（上游坐标 provenance 落库）；
- * - `t_session_events`：`(f_session_id, f_event_id, f_sequence)`。
- *
- * v2 表结构（新坐标模型）：
- * - `t_events`：`f_type`（上游 type）+ `f_kind`（事件种类）+ `f_role` +
- *   `f_name` + `f_action_id`，无 `f_original_seq` / `f_source_event_seqs` /
- *   `f_surface_op`；
- * - `t_session_events`：`(f_session_id, f_event_id, f_sequence, f_original_seq,
- *   f_surface_op)`。
- *
- * 迁移（裸 SQL 事务内，最小变更）：
- * 1. 建 v2 表（临时名）；
- * 2. 逐行搬运 `t_events`：`f_type` = 旧 `f_kind`，`f_kind`/`f_role`/`f_name`/
- *    `f_action_id` 经 `eventDimensions` 重算（解析 `f_data`），`f_data` /
- *    `f_created_at` 原样；
- * 3. 逐行搬运 `t_session_events`：`f_original_seq` / `f_surface_op` 从旧
- *    `t_events` 对应行取（按 `f_event_id` join）；
- * 4. 删旧表、重命名新表；
- * 5. `user_version` = 2。
- *
- * @module @morlay/session-rdb/migrate
- */
-
 import { DatabaseSync } from "node:sqlite";
 import { eventDimensions } from "./schema.ts";
 
-/** v2 schema 版本（与 `SCHEMA_VERSION` 一致；此处避免循环依赖）。 */
 export const SCHEMA_VERSION_V2 = 2;
 
-/**
- * 迁移一个 v1 SQLite 数据库到 v2。调用方负责持有写锁（启动初始化事务 /
- * 手动脚本的 BEGIN IMMEDIATE 内）。
- * @param db - 打开的 SQLite 连接（v1 库）。
- * @returns 迁移的事件数；库已是 v2 时返回 0（no-op）。
- * @throws 库版本不是 1 或 2、或数据损坏时抛错（事务由调用方回滚）。
- */
 export function migrateSqliteV1ToV2(db: DatabaseSync): number {
   const { user_version: onDisk } = db.prepare("PRAGMA user_version").get() as {
     user_version: number;

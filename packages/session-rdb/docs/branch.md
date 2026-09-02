@@ -50,10 +50,14 @@ rewind / retry / fork 的持久化闭环。
 3. **事务内截断**：`deleteBridgeTail(toBoundary + 1)` + head 游标回退（
    `getPrevBridge` 或初始 `-1`）+ `bumpRevision`——与 `commitRepair` 的事务
    模式同构，Abort 整体回滚。**只删桥接行**，事件行保留（全局实体，可能被
-   其他会话引用）；
+   其他会话引用）；截断进入继承前缀（或清空）时把 `f_seed_length` **收缩**
+   到保留事件数（只收缩、不扩张）——否则存储出现「继承前缀超过存储事件数」
+   的矛盾，上游 load 拒绝（见 [legacy-clean.md](legacy-clean.md)）；
 4. **同步 coordinator 状态**：rewind 后 `load(id)`——revision 变化使
    `isPreparedSourceCurrent` 失效 → 重新 adopt → `state.cursor` 与新尾部一致；
-   截断到闭合 turn/end 后 log 平衡，load 的 repair 为 no-op；
+   截断到闭合 turn/end 后 log 平衡，load 的 repair 为 no-op；`f_seed_length`
+   收缩同时同步 coordinator 状态的 `storage.inheritedEventCount`（否则下一次
+   append 的 upsert 会把旧值覆盖回去）；
 5. **更新 `WriteGuard` 确认 head**：下一次 append 的并发写入者校验以截断后
    head 为基准。
 

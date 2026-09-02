@@ -1,8 +1,3 @@
-/**
- * v1 → v2 迁移脚本测试：构造 v1 表结构（旧坐标模型）→ 跑迁移 → 验证 v2
- * 表结构与数据正确（f_type/f_kind/f_role/f_name/f_action_id 重算、
- * f_original_seq/f_surface_op 迁移到桥接行）。
- */
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
@@ -27,7 +22,6 @@ async function freshDbPath(): Promise<string> {
   return join(dir, "sessions.db");
 }
 
-/** 构造 v1 表结构 + 一行事件 + 一行桥接。 */
 function createV1Database(path: string): void {
   const db = new DatabaseSync(path);
   db.exec(`
@@ -92,7 +86,6 @@ function createV1Database(path: string): void {
   db.close();
 }
 
-/** 跑迁移脚本（子进程，独立于测试进程的模块状态）。 */
 function runMigration(path: string): void {
   const script = fileURLToPath(new URL("../../scripts/migrate-v1-to-v2.mts", import.meta.url));
   execFileSync(process.execPath, ["--import", "tsx", script, path], {

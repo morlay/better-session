@@ -46,11 +46,9 @@ export type {
   SessionEditorResult,
 } from "./types.ts";
 
-/** 闭合轮次折叠（纯函数，供编辑面枚举与测试）。 */
 export { closedTurns, editableMessages, retryableTurns };
 export { SESSION_BRANCH_VERSION_SCHEMA } from "@morlay/session-branch";
 
-/** 版本树投影别名（透传 `@morlay/session-branch`）。 */
 export type { BranchTimeline, SessionBranchVersionEvent } from "@morlay/session-branch";
 
 declare module "@deepseek-ai/cordis" {
@@ -58,8 +56,6 @@ declare module "@deepseek-ai/cordis" {
     sessionEditor: SessionEditor;
   }
 }
-
-/** —— agent 驱动的 duck-typed 接口（不硬依赖 @deepseek-ai/dsh-agent） —— */
 
 export interface EditorAgent {
   readonly session: Session;
@@ -84,21 +80,19 @@ export interface EditorAgentRegistry {
     };
     agentOptions?: { provider: string; model: string; maxTokens?: number };
   }): Promise<EditorAgentHandle>;
-  /** 从已持久化会话恢复 agent（`AgentRegistry.resume`；create 对已持久化会话失败）。 */
+
   resume(options: {
     resumeSessionId: SessionId;
     agentOptions?: { provider: string; model: string; maxTokens?: number };
   }): Promise<EditorAgentHandle>;
 }
 
-/** —— 闭合轮次扫描（纯函数） —— */
-
 interface ClosedTurn {
   turn: number;
   startSeq: number;
-  /** 闭合轮次的 `turn/end` seq；未闭合轮次为 undefined。 */
+
   endSeq?: number;
-  /** 是否已闭合（有 `turn/end`）。未闭合轮次的 user 消息仍可编辑。 */
+
   closed: boolean;
   user?: SessionEvent<"user/message">;
   assistants: SessionEvent<"assistant/message">[];
@@ -130,8 +124,8 @@ function closedTurns(events: readonly SessionEvent[]): ClosedTurn[] {
       current = undefined;
     }
   }
-  // 未闭合轮次（log 尾部没有 turn/end）也保留：其 user 消息已 append 落定，
-  // 编辑时 rewind 到该消息（exclusive drop）重放即可。
+  // 未闭合轮次（无 turn/end）也保留：user 消息已落定，编辑时 rewind 到该
+  // 消息（exclusive drop）重放即可。
   if (current !== undefined) result.push({ ...current, closed: false });
   return result;
 }
@@ -191,7 +185,7 @@ function editableMessages(turns: readonly ClosedTurn[]): EditableMessageBlock[] 
         });
       }
     }
-    // 未闭合轮次的助手消息是流式 partial，不可编辑（服务端拒绝）。
+    // 未闭合轮次的助手消息是流式 partial，不可编辑。
     if (!turn.closed) continue;
     for (const event of turn.assistants) {
       for (const [blockIndex, block] of event.data.message.content.entries()) {
@@ -213,8 +207,7 @@ function editableMessages(turns: readonly ClosedTurn[]): EditableMessageBlock[] 
 
 function retryableTurns(turns: readonly ClosedTurn[]): RetryableTurn[] {
   return turns.flatMap((turn): RetryableTurn[] =>
-    // 未闭合轮次不可重试（无已落定回复可重生成；UI 的 retry 按钮也要求
-    // turn 已闭合）。
+    // 未闭合轮次无已落定回复可重生成，不可重试。
     turn.user === undefined || !turn.closed
       ? []
       : [
@@ -254,21 +247,14 @@ function assistantReplacement(
   }) as AssistantMessage;
 }
 
-/** —— 版本效果与派生计划 —— */
-
 interface OperationPlan {
-  /** 目标轮 startSeq（`before` 锚定用；派生点 = 该轮之前最后一个 turn/end）。 */
   anchorSeq: number;
-  /**
-   * 未闭合轮次 user 编辑：rewind 边界 = 该 user 消息 seq（exclusive——drop
-   * 该消息及其后，由编辑版重放替换）。闭合轮次编辑不设置（boundary 走
-   * 前一轮 turn/end 的 inclusive 语义）。
-   */
+
   rewindBoundary?: number;
   version: SessionBranchVersionEvent;
-  /** 助手块编辑：以编辑后内容构造的完整手工闭合回合。 */
+
   manualTurn?: { turn: number; user: UserMessage; assistant: AssistantMessage };
-  /** 排队重放的用户输入（truncate = 目标轮输入；preserve = 目标轮起全部）。 */
+
   queuedUsers: UserMessage[];
 }
 
@@ -310,8 +296,8 @@ function editPlan(operation: EditOperation, turns: readonly ClosedTurn[]): Opera
     const later = operation.cascade === "preserve" ? downstreamUsers(turns, turnIndex + 1) : [];
     return {
       anchorSeq: turn.startSeq,
-      // 未闭合轮次：rewind 到该 user 消息（exclusive drop 该消息及其后），
-      // 由编辑版重放替换；闭合轮次走前一轮 turn/end 的 inclusive 语义。
+      // 未闭合轮次：rewind 到该 user 消息（exclusive drop），由编辑版替换；
+      // 闭合轮次走前一轮 turn/end 的 inclusive 语义。
       ...(turn.closed ? {} : { rewindBoundary: event.seq }),
       version: pairVersionEffect(operation.sessionId, {
         operation: "edit",
@@ -327,7 +313,7 @@ function editPlan(operation: EditOperation, turns: readonly ClosedTurn[]): Opera
     };
   }
 
-  // 未闭合轮次的助手消息是流式 partial，没有最终内容可编辑。
+  // 未闭合轮次的助手消息是流式 partial，无最终内容可编辑。
   if (!turn.closed)
     throw new SessionBranchError("未闭合轮次的助手消息不可编辑。", "INVALID_BOUNDARY");
   const before = event.data.message.content[operation.blockIndex];
@@ -381,7 +367,7 @@ function retryPlan(operation: RetryOperation, turns: readonly ClosedTurn[]): Ope
 function rerollPlan(operation: RerollOperation, turns: readonly ClosedTurn[]): OperationPlan {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
-    // 未闭合轮次没有已落定的助手回复可重生成。
+    // 未闭合轮次无已落定的助手回复可重生成。
     if (turn?.user === undefined || !turn.closed) continue;
     const target = turn.assistants.findLast((event) =>
       event.data.message.content.some(isTextualBlock),
@@ -400,8 +386,6 @@ function rerollPlan(operation: RerollOperation, turns: readonly ClosedTurn[]): O
   }
   throw new SessionBranchError("当前会话没有可重生成的已落定助手回复。", "INVALID_BOUNDARY");
 }
-
-/** —— 种子事件构造（本地纯事件构造器；Session 构造时统一验证） —— */
 
 function appendLogSeedEvent(
   events: SessionEvent[],
@@ -458,32 +442,18 @@ function appendManualTurn(
   });
 }
 
-/**
- * 把派生 seed 后缀落地到 **live** 会话。上游 `Session.append` 不保留
- * `ignorable` 标记（只保留 type/data/surface 元数据），而版本效果事件必须
- * 保持 ignorable（live log 保留、不落 canonical log），因此：
- * - ignorable 事件（版本效果）直接 push 内存 log（不发布 `session/event`；
- *   服务端语义事件，客户端无需感知；surfaceManager 对非 surface 事件 fold
- *   无副作用）；
- * - 其余事件（手工回合 manualTurn）走 `append`（surface 校验 + 发布）。
- * 后续统一由 write-behind flush 落盘（RDB 稠密化时过滤 ignorable）。
- */
 function appendSeedSuffixLive(session: Session, seedSuffix: readonly SessionEvent[]): void {
   for (const event of seedSuffix) {
-    // 版本效果事件由本项目构造并打 ignorable 标记（上游 SessionEvent 类型
-    // 无此字段，故 duck-type 读取）。它由本项目在拼接 seed 时经
-    // appendLogSeedEvent 显式补齐，运行时存在；此处只判「是否为版本效果」。
+    // 版本效果事件携带 ignorable 标记（上游类型无此字段，duck-type 读取）。
     const ignorable = (event as { ignorable?: boolean }).ignorable === true;
     if (ignorable) {
       const s = session as unknown as {
         log: SessionEvent[];
         eventsSnapshot?: unknown;
       };
-      // 版本效果：ignorable 语义（live log 保留、不落 canonical log）。
-      // session.append 不保留 ignorable 标记，因此直接 push 内存 log（不发布
-      // session/event；服务端语义事件，客户端无需感知；surfaceManager 对非
-      // surface 事件 fold 无副作用）。seq 按 log 续接重编号（seedSuffix 内部
-      // 编号从 0 起，与截断后 live log 不对齐）。
+      // ignorable 语义：live log 保留、不落 canonical log。session.append 不
+      // 保留 ignorable 标记，因此直接 push 内存 log（不发布）；seq 按 log
+      // 续接重编号（seedSuffix 内部编号从 0 起）。
       s.log.push({ ...event, seq: s.log.length } as SessionEvent);
       s.eventsSnapshot = undefined;
       continue;
@@ -510,23 +480,16 @@ function appendSeedSuffixLive(session: Session, seedSuffix: readonly SessionEven
   }
 }
 
-/** —— 编排服务 —— */
-
-/**
- * `ctx.sessionEditor`：rewind / retry / fork 的完整功能编排。
- * 组合 `ctx.sessionBranch`（provider 抽象）与可选的 `agents` 服务。
- */
 export class SessionEditor extends Service {
   static inject = ["sessionBranch", "sessionPersistence", "sessions"];
 
   constructor(ctx: Context) {
     super(ctx, "sessionEditor");
-    // HTTP 路由随类构造注册（dsh 用 default 类插件，apply 函数不被调用）。
-    // bundles 顺序保证 webserver（ctx.n）先于本类实例化。
+    // HTTP 路由随类构造注册（dsh 用 default 类插件，apply 不被调用）；
+    // bundles 顺序保证 webserver 先于本类实例化。
     registerHttpRoutes(ctx);
   }
 
-  /** 定位 `atSeq` 锚定的闭合边界（透传 provider）。 */
   readBranchPrefix(
     id: SessionId,
     atSeq?: number,
@@ -536,7 +499,6 @@ export class SessionEditor extends Service {
     return this.ctx.sessionBranch.readBranchPrefix(id, atSeq, mode, signal);
   }
 
-  /** 从持久化源派生新会话（透传 provider；不驱动 agent）。 */
   fork(
     sourceId: SessionId,
     atSeq?: number,
@@ -555,45 +517,26 @@ export class SessionEditor extends Service {
     );
   }
 
-  /** 截断式回退：原会话回退到闭合边界（透传 provider）。 */
   rewind(id: SessionId, toBoundary: number, signal?: AbortSignal) {
     return this.ctx.sessionBranch.rewind(id, toBoundary, signal);
   }
 
-  /**
-   * 清洗一个会话的 surface/provenance 坐标为稠密空间（透传 sessionBranch）。
-   * 历史加载失败（坐标混叠导致 seed 校验失败）时调用,清洗后重新加载即可。
-   * `cleanseSession` 是 rdb 实现层新增的服务面（契约层 `SessionBranch`
-   * 没有此方法）,经运行时访问。
-   */
-  cleanseSession(sessionId: SessionId, signal?: AbortSignal): Promise<{ changed: number }> {
-    const branch = this.ctx.sessionBranch as unknown as {
-      cleanseSession(id: SessionId, signal?: AbortSignal): Promise<{ changed: number }>;
-    };
-    return branch.cleanseSession(sessionId, signal);
-  }
-
-  /** 完整版本树投影（透传 provider 组合）。 */
   timeline(sessionId: SessionId, signal?: AbortSignal): Promise<BranchTimeline> {
     return this.ctx.sessionBranch.timeline(sessionId, signal);
   }
 
-  /** 编辑一个已落定文本块并从其轮次边界分支。 */
   edit(operation: EditOperation, signal?: AbortSignal): Promise<SessionEditorResult> {
     return this.branchOperation(operation, signal);
   }
 
-  /** 重生成最后一条已落定助手回复。 */
   reroll(operation: RerollOperation, signal?: AbortSignal): Promise<SessionEditorResult> {
     return this.branchOperation(operation, signal);
   }
 
-  /** 重试任意历史回合。 */
   retry(operation: RetryOperation, signal?: AbortSignal): Promise<SessionEditorResult> {
     return this.branchOperation(operation, signal);
   }
 
-  /** 可编辑消息块枚举（Timeline 编辑面）。 */
   async editableMessages(
     sessionId: SessionId,
     signal?: AbortSignal,
@@ -602,13 +545,11 @@ export class SessionEditor extends Service {
     return editableMessages(closedTurns(events));
   }
 
-  /** 可重试回合枚举（Timeline 重试面）。 */
   async retryableTurns(sessionId: SessionId, signal?: AbortSignal): Promise<RetryableTurn[]> {
     const events = await this.readEvents(sessionId, signal);
     return retryableTurns(closedTurns(events));
   }
 
-  /** 执行一个分支式操作（edit / reroll / retry）。 */
   private async branchOperation(
     operation: EditOperation | RerollOperation | RetryOperation,
     signal?: AbortSignal,
@@ -622,23 +563,19 @@ export class SessionEditor extends Service {
         : operation.action === "retry"
           ? retryPlan(operation, turns)
           : rerollPlan(operation, turns);
-    // rewind 前解析模型配置：就地编辑可能截断掉最后的 request/header
-    // （编辑第一轮 boundary = -1 会清空全部），重放 agent 需要 provider/model。
+    // rewind 前解析模型配置：就地编辑可能截断最后的 request/header
+    // （编辑第一轮 boundary = -1 清空全部），重放 agent 需要 provider/model。
     const headerConfig = events.findLast((event) => event.type === "request/header")?.data.header
       .config;
 
-    // 派生 seed 后缀：版本效果 + 可选手工回合。版本事件对核心是 ignorable
-    // （上游不认识；branch 层后端特判保留），保证非 branch 读者可安全跳过。
+    // 派生 seed 后缀：版本效果 + 可选手工回合。版本事件对核心是 ignorable，
+    // 保证非 branch 读者可安全跳过。
     const seedSuffix: SessionEvent[] = [];
     appendLogSeedEvent(seedSuffix, "session-branch/version", plan.version, true);
     if (plan.manualTurn !== undefined) appendManualTurn(seedSuffix, plan.manualTurn);
 
-    // 就地编辑：不创建新会话、不改变 session id。先 rewind 截断原会话到
-    // 目标轮之前的闭合边界（抛弃后续事件），再把版本效果与重放输入
-    // append 回同一会话，最后（可选）驱动 agent 重放排队输入。
-    // 未闭合轮次 user 编辑：rewind 边界 = 该 user 消息 seq（exclusive drop
-    // 该消息及其后，由编辑版重放替换）；闭合轮次编辑走前一轮 turn/end 的
-    // inclusive 语义。
+    // 就地编辑：不创建新会话、不改变 id。先 rewind 截断到目标轮之前的闭合
+    // 边界，再 append 版本效果与重放输入，最后（可选）驱动 agent 重放。
     const turnIndex = turns.findIndex((turn) => turn.startSeq === plan.anchorSeq);
     const boundary =
       plan.rewindBoundary !== undefined
@@ -650,19 +587,14 @@ export class SessionEditor extends Service {
     await this.ctx.sessionBranch.rewind(operation.sessionId, boundary, signal);
     if (seedSuffix.length > 0) {
       if (live !== undefined) {
-        // live：落地内存 log（版本效果 ignorable 保留、manualTurn 走 append），
-        // 同步 coordinator cursor 后显式 flush（版本效果 push 不发布、不进
-        // 缓冲，cursor 会落后 log——不 sync 则 manualTurn 的 seq 校验错位）。
+        // live：版本效果 push 内存 log（ignorable 保留）、manualTurn 走 append，
+        // 同步 cursor 后显式 flush（push 不发布、不进缓冲，cursor 会落后）。
         appendSeedSuffixLive(live, seedSuffix);
         this.ctx.sessionBranch.syncLiveCursor(operation.sessionId);
         await this.ctx.sessions.flush(live);
       } else {
-        // rewind 后保留的事件数：turn/end inclusive = boundary + 1；
-        // user/message exclusive = boundary（该消息被 drop，由编辑版替换）。
-        // 与 rdb rewind 一致地平衡化：exclusive 截断可能残留未配对的
-        // step/start（真实 agent-loop 的 step/start 在 user/message 之前），
-        // 续写 seq 必须从平衡后的保留前缀续接，否则落盘 log 对 token meter
-        // 重放非法（孤儿 step/start 使后续 step/start 报错）。
+        // cold：续写 seq 从平衡后的保留前缀接续（exclusive 截断可能残留
+        // 孤儿 step/start，落盘 log 对 token meter 重放非法）。
         const rawKeepLength = boundary + (plan.rewindBoundary === undefined ? 1 : 0);
         const keepLength = balanceRewindPrefix(events.slice(0, rawKeepLength)).length;
         const renumbered = seedSuffix.map(
@@ -677,7 +609,7 @@ export class SessionEditor extends Service {
     }
 
     // 可选增强：agent 驱动（重放排队用户输入）。缺失 agents 服务时退化为
-    // 已 durable 的就地版本——可随时继续输入。
+    // 已 durable 的就地版本。
     const queuedTurns = await this.driveAgent(
       operation.sessionId,
       plan.queuedUsers,
@@ -687,22 +619,19 @@ export class SessionEditor extends Service {
     return {
       sessionId: operation.sessionId,
       queuedTurns,
-      // live 标记：操作后是否仍有 live owner（driveAgent 可能 resume 出 agent）。
+      // 操作后是否仍有 live owner（driveAgent 可能 resume 出 agent）。
       live: this.ctx.sessions.get(operation.sessionId) !== undefined,
     };
   }
 
-  /** 读取会话事件：live 优先，否则走持久化原始读取（不含合成 closers）。 */
   private async readEvents(
     sessionId: SessionId,
     signal?: AbortSignal,
   ): Promise<readonly SessionEvent[]> {
     const live = this.ctx.sessions.get(sessionId);
     if (live !== undefined) return live.snapshotEvents();
-    // cold：读原始事件（`loadStored`，scanRows 只做 torn-tail 切割、不补
-    // closers）。`inspect` 会经 coordinator 的 `prepareCore` 给未闭合 log
-    // 补合成 step/end + turn/end——未闭合轮次被掩盖成闭合，编辑未闭合轮次
-    // 的 user 消息会走错边界。
+    // cold：读原始事件（loadStored 不补 closers）——inspect 会把未闭合 log
+    // 补成闭合，编辑未闭合轮次的 user 消息会走错边界。
     const branch = this.ctx.sessionBranch as unknown as {
       readRawEvents(
         id: SessionId,
@@ -712,14 +641,6 @@ export class SessionEditor extends Service {
     return (await branch.readRawEvents(sessionId, signal)).events;
   }
 
-  /**
-   * 可选 agent 驱动：优先复用现有 live agent（用户会话驻留——rewind 已截断
-   * 其 session 内存，followup 会基于截断后历史重放），否则 `resume` 已持久化
-   * 会话。模型配置来自 branchOperation 在 rewind 前解析的 `headerConfig`
-   * （rewind 可能截断 request/header）；缺失时回退到当前 events。无 agents
-   * 服务、无可用模型路由或恢复失败时退化为持久化版本（已 durable）。
-   * 返回实际排队的输入数。
-   */
   private async driveAgent(
     sessionId: SessionId,
     queuedUsers: readonly UserMessage[],
@@ -733,7 +654,7 @@ export class SessionEditor extends Service {
     const provider = headerConfig?.provider ?? "";
     const model = headerConfig?.model ?? "";
     if (provider.length === 0 || model.length === 0) {
-      // 兜底：从当前会话 events 解析（headerConfig 未由调用方提供时）。
+      // 兜底：从当前会话 events 解析（headerConfig 未提供时）。
       const events = await this.readEvents(sessionId, signal);
       const config = events.findLast((event) => event.type === "request/header")?.data.header
         .config;
@@ -751,7 +672,6 @@ export class SessionEditor extends Service {
     return this.queueThroughAgent(sessionId, queuedUsers, signal, provider, model);
   }
 
-  /** 经 live agent（复用）或 resume（重建）排队重放输入；返回排队数。 */
   private async queueThroughAgent(
     sessionId: SessionId,
     queuedUsers: readonly UserMessage[],
@@ -761,8 +681,8 @@ export class SessionEditor extends Service {
   ): Promise<number> {
     const agents = this.ctx.get("agents") as EditorAgentRegistry | undefined;
     if (agents === undefined) return 0;
-    // 现有 live agent（用户会话驻留）：直接排队输入——就地编辑后其 session
-    // 内存已被 rewind 截断，followup 基于截断后历史重放，不改 id、不重建。
+    // 现有 live agent：直接排队输入（其 session 内存已被 rewind 截断，
+    // followup 基于截断后历史重放，不改 id、不重建）。
     const existing = agents.get(sessionId);
     if (existing !== undefined) {
       for (const message of queuedUsers) existing.followup(message);
@@ -770,8 +690,7 @@ export class SessionEditor extends Service {
       return queuedUsers.length;
     }
     // cold：resume 已持久化会话（create 会因「已存在持久化日志」失败）。
-    // resume 后 agent 驻留（与用户发消息后的正常状态一致），不 dispose——
-    // dispose 会把 session 从 store 移除，破坏客户端打开的窗口。
+    // resume 后 agent 驻留，不 dispose（dispose 会破坏客户端打开的窗口）。
     const handle = await agents
       .resume({ resumeSessionId: sessionId, agentOptions: { provider, model } })
       .catch((error: unknown) => {
@@ -793,7 +712,7 @@ export default SessionEditor;
 
 // ---------------------------------------------------------------------------
 // HTTP 面（host）：GET /session-editor（timeline 投影）/ POST /session-editor
-// （edit | reroll | retry | rewind | fork）。参考 dsh-message-edit 的同源端点。
+// （edit | reroll | retry | rewind | fork）。
 // ---------------------------------------------------------------------------
 
 interface HttpRequestLike {
@@ -819,7 +738,6 @@ interface HttpServerLike {
 
 declare module "@deepseek-ai/cordis" {
   interface Context {
-    /** dsh web 的 HTTP route carrier（@deepseek-ai/dsh-host-webserver，`WebRoute` 协议）。 */
     webServer: HttpServerLike;
   }
 }
@@ -888,10 +806,8 @@ function decodeOperation(value: unknown): SessionEditorOperation {
           ? {}
           : { childSessionId: sessionIdOf(record["childSessionId"]) }),
       };
-    case "cleanse":
-      return { action: "cleanse", sessionId };
     default:
-      throw new TypeError("action 必须是 edit、reroll、retry、rewind、fork 或 cleanse。");
+      throw new TypeError("action 必须是 edit、reroll、retry、rewind 或 fork。");
   }
 }
 
@@ -922,7 +838,6 @@ function respondJson(response: HttpResponseLike, status: number, value: unknown)
   response.end(JSON.stringify(value));
 }
 
-/** GET 投影：timeline + 编辑/重试面。 */
 async function readTimeline(
   editor: SessionEditor,
   sessionId: SessionId,
@@ -974,10 +889,6 @@ async function runOperation(
         ),
         queuedTurns: 0,
       };
-    case "cleanse": {
-      const { changed } = await editor.cleanseSession(operation.sessionId);
-      return { sessionId: operation.sessionId, queuedTurns: 0, changed };
-    }
   }
 }
 
@@ -1011,7 +922,6 @@ async function handleRoute(
   }
 }
 
-/** 注册同源 HTTP 路由（`ctx.webServer` 由 dsh web 的 webserver 包提供；缺失时跳过）。 */
 function registerHttpRoutes(ctx: Context): void {
   const webServer = ctx.get("webServer") as HttpServerLike | undefined;
   if (webServer === undefined) return;

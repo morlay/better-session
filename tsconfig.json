@@ -1,23 +1,4 @@
 {
-  "compilerOptions": {
-    "module": "nodenext",
-    "target": "esnext",
-    "types": [],
-    "sourceMap": false,
-    "declaration": true,
-    "declarationMap": false,
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "rewriteRelativeImportExtensions": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "strict": true,
-    "jsx": "react-jsx",
-    "verbatimModuleSyntax": false,
-    "isolatedModules": false,
-    "noUncheckedSideEffectImports": true,
-    "moduleDetection": "force",
-    "skipLibCheck": true
-  },
-  "exclude": ["packages/**/dist", "vendor/**", "**/node_modules"]
+  "extends": ["devkit/tsconfig.json"],
+  "exclude": ["vendor/**", "packages/*/dist/*"]
 }

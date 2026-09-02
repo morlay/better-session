@@ -16,8 +16,10 @@ import type {
   SurfaceEventType,
 } from "@deepseek-ai/dsh-session";
 import SessionPersistenceSqlite, { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "../index.ts";
+import { parseJsonlArtifact } from "../import.ts";
 import {
   buildSeqMap,
+  findSurfaceRepairs,
   recomputeReplaceProvenance,
   remapShadowedRange,
   remapSurfaceOp,
@@ -60,13 +62,6 @@ async function freshDbPath(): Promise<string> {
   return join(dir, "sessions.db");
 }
 
-/**
- * Hand-insert one event as an events + session_events pair (the backend's write
- * path always keeps them in step; a bridge row without an event row never
- * joins). Used to fabricate on-disk states (legacy logs, torn tails) that the
- * normal append path cannot produce.
- * @returns the minted event id (the bridge row's parent for the next event).
- */
 function insertEventRow(
   db: DatabaseSync,
   sessionId: string,
@@ -81,25 +76,13 @@ function insertEventRow(
       (f_event_id, f_parent_id, f_type, f_kind, f_role, f_name, f_action_id, f_encoding,
        f_data, f_created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    eventId,
-    parentId,
-    kind,
-    "",
-    "",
-    "",
-    "",
-    "json",
-    JSON.stringify(data),
-    seq + 1,
-  );
+  `).run(eventId, parentId, kind, "", "", "", "", "json", JSON.stringify(data), seq + 1);
   db.prepare(
     "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_original_seq, f_surface_op) VALUES (?, ?, ?, ?, ?)",
   ).run(sessionId, eventId, seq, seq, null);
   return eventId;
 }
 
-/** A context with the session store + SQLite backend, plus a teardown. */
 async function backend(path = ":memory:"): Promise<{ ctx: Context; dispose: () => Promise<void> }> {
   const ctx = new Context();
   await ctx.plugin(EmptySettings);
@@ -677,6 +660,216 @@ describe("rowToEvent", () => {
       end: 4048,
     });
     expect(claim).toEqual({ start: 15, end: 4048 });
+  });
+});
+
+describe("findSurfaceRepairs", () => {
+  function toolResult(
+    seq: number,
+    text: string,
+    extra: Partial<SessionEvent> = {},
+    messageId?: string,
+  ): SessionEvent {
+    const message = createMessage({
+      role: "user",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: ToolCallId("call-1"),
+          content: [{ type: "text", text }],
+          isError: false,
+        },
+      ],
+      source: { kind: "tool", callId: ToolCallId("call-1") },
+    });
+    return {
+      type: "tool/result",
+      seq: SessionSeq(seq),
+      time: seq,
+      data: {
+        turn: 1,
+        step: 1,
+        // 真实重写继承原 message 的 id（上游 replacementStart 语义）。
+        message: messageId === undefined ? message : { ...message, id: messageId },
+      },
+      ...extra,
+    } as SessionEvent;
+  }
+
+  it("degrades an invalid tool/result replace to append (the reported load failure)", () => {
+    // 用户报告的损坏样式：seq 4556 的 tool/result replace 指向的当前 surface
+    // 节点不是 tool/result（上游 assertToolResultRewrite 校验失败）。
+    const events: SessionEvent[] = [
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
+      {
+        type: "assistant/message",
+        seq: SessionSeq(3),
+        time: 4,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        surfaceOp: "append",
+      } as SessionEvent,
+      { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(5),
+        time: 6,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
+      // 非法 tool/result replace：range [1,3] 的当前 surface 节点是
+      // user/message @1 + assistant/message @3，不是 tool/result。
+      toolResult(6, "pruned", {
+        surfaceOp: { op: "replace", start: SessionSeq(1), end: SessionSeq(3) },
+      }),
+    ];
+    const repairs = findSurfaceRepairs(events);
+    expect([...repairs.degradeToAppend]).toEqual([6]);
+    expect(repairs.addAppendMarker.size).toBe(0);
+    expect(repairs.clearSurfaceOp.size).toBe(0);
+  });
+
+  it("keeps a valid tool/result content-only rewrite untouched", () => {
+    const original = toolResult(5, "full result", { surfaceOp: "append" }, "msg-1");
+    const replacement = toolResult(
+      6,
+      "pruned",
+      { surfaceOp: { op: "replace", start: SessionSeq(5), end: SessionSeq(5) } },
+      "msg-1",
+    );
+    const events: SessionEvent[] = [
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
+      {
+        type: "assistant/message",
+        seq: SessionSeq(3),
+        time: 4,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [
+              { type: "tool-call", id: ToolCallId("call-1"), name: "read", arguments: "{}" },
+            ],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        surfaceOp: "append",
+      } as SessionEvent,
+      { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
+      original,
+      replacement,
+    ];
+    const repairs = findSurfaceRepairs(events);
+    expect(repairs.degradeToAppend.size).toBe(0);
+    expect(repairs.addAppendMarker.size).toBe(0);
+    expect(repairs.clearSurfaceOp.size).toBe(0);
+  });
+
+  it("degrades a replace whose range is not in the current surface", () => {
+    const events: SessionEvent[] = [
+      {
+        type: "user/message",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "assistant/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        // range 起点 9 不在当前 surface（只有 0、1）。
+        surfaceOp: { op: "replace", start: 9, end: 1 },
+      } as SessionEvent,
+    ];
+    const repairs = findSurfaceRepairs(events);
+    expect([...repairs.degradeToAppend]).toEqual([1]);
+  });
+
+  it("marks surface-eligible events missing surfaceOp and clears it on non-eligible events", () => {
+    const events: SessionEvent[] = [
+      {
+        type: "user/message",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
+        // 缺 surfaceOp（surface-eligible 事件必须携带）。
+      } as SessionEvent,
+      {
+        type: "turn/end",
+        seq: SessionSeq(1),
+        time: 2,
+        data: { turn: 1, reason: { kind: "completed" } },
+        // 非 surface-eligible 事件携带 surfaceOp。
+        surfaceOp: "append",
+      } as SessionEvent,
+    ];
+    const repairs = findSurfaceRepairs(events);
+    expect([...repairs.addAppendMarker]).toEqual([0]);
+    expect([...repairs.clearSurfaceOp]).toEqual([1]);
+    expect(repairs.degradeToAppend.size).toBe(0);
+  });
+
+  it("degrades a malformed surfaceOp shape", () => {
+    const events: SessionEvent[] = [
+      {
+        type: "user/message",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "assistant/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        // 畸形 replace：start 是字符串。
+        surfaceOp: { op: "replace", start: "1", end: 0 },
+      } as unknown as SessionEvent,
+    ];
+    const repairs = findSurfaceRepairs(events);
+    expect([...repairs.degradeToAppend]).toEqual([1]);
   });
 });
 
@@ -1342,7 +1535,6 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
   });
 });
 
-/** A one-turn log with a delta stream between step/start and assistant/message. */
 function chunkedTurnLog(): SessionEvent[] {
   return [
     {
@@ -1400,15 +1592,6 @@ function chunkedTurnLog(): SessionEvent[] {
   ];
 }
 
-/**
- * Mirror of `@deepseek-ai/dsh-token-meter`'s `foldSurfaceProjection` — the
- * package is not resolvable from the configured registry, so the compact-seam
- * regression test reproduces its O(1) shadow-price fold contract inline. The
- * estimator is a constant stand-in; only the claim protocol is under test
- * (a `compaction/summary` / `compaction/prune` arms a claim for its exact
- * `shadowedRange`, the immediately following surface `replace` must consume
- * that exact range, and a mismatch fails loud with the reported message).
- */
 function mirrorSurfaceTokensFold(
   claim: { start: number; end: number; tokens: number } | undefined,
   event: SessionEvent,
@@ -2090,13 +2273,14 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.dispose();
   });
 
-  it("cleanseSession rewrites upstream-coordinate provenance into dense space", async () => {
+  it("readRaw exports upstream-coordinate provenance remapped into dense space", async () => {
     // append 时事件 seq 是上游坐标,replace 的 sourceEventSeqs 引用上游 seq
-    // (delta 被过滤后稠密重编号)——存储即「旧数据」样式。清洗把它一次性
-    // 重写为稠密坐标,之后读取无需再对齐。
+    // (delta 被过滤后稠密重编号)——存储即「旧数据」样式。导出（readRaw）在
+    // 序列化前重算 provenance 并重映射坐标,产出的 artifact 无需任何修复即可
+    // 导入加载。
     const path = await freshDbPath();
     const b = await backend(path);
-    const m = meta("cleanse-me");
+    const m = meta("export-provenance");
     await b.ctx.sessionPersistence.create(m);
     const log = [
       { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
@@ -2179,26 +2363,202 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     const rowBefore = (await backendApi.getEventRows(m.id)).find((r) => r.fSequence === 8)!;
     expect(rowBefore.fSurfaceOp).toBe(JSON.stringify({ op: "replace", start: 1, end: 5 }));
 
-    // 读取时经 f_original_seq 映射重映射到稠密坐标。
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const replacement = loaded.events.find((e) => e.type === "assistant/message" && e.seq === 8)!;
+    // 导出即修复：artifact 中 replace 已是稠密坐标,provenance 已重算。
+    const raw = await persistence.readRaw(m.id);
+    expect(raw).toBeDefined();
+    const parsed = parseJsonlArtifact(raw!.content);
+    const replacement = parsed.events.find((e) => e.type === "assistant/message" && e.seq === 8)!;
     expect((replacement as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
-    // replace 的 provenance 读取时重计算（sourceEventSeqs 不落库）。
     expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
 
-    // 清洗:重写为稠密坐标。
-    const { changed } = await persistence.cleanseSession(m.id);
-    expect(changed).toBeGreaterThan(0);
-
-    const rowAfter = (await backendApi.getEventRows(m.id)).find((r) => r.fSequence === 8)!;
-    expect(rowAfter.fSurfaceOp).toBe(JSON.stringify({ op: "replace", start: 1, end: 3 }));
-
-    // 清洗后仍可正常加载,且无需启发式即得稠密视图。
-    const reloaded = await b.ctx.sessionPersistence.load(m.id);
+    // 导入 artifact 后无需任何修复即可完整加载。
+    const importedId = `session-imported` as SessionId;
+    await persistence.create(
+      { ...parsed.meta, id: importedId },
+      parsed.inheritedEventCount as unknown as number,
+    );
+    await persistence.append(importedId, parsed.events);
+    const reloaded = await b.ctx.sessionPersistence.load(importedId);
     const replacementAfter = reloaded.events.find(
       (e) => e.type === "assistant/message" && e.seq === 8,
     )!;
     expect((replacementAfter as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
+    await b.dispose();
+  });
+
+  it("readRaw repairs invalid tool/result surface replacements so the artifact loads", async () => {
+    // 用户报告的损坏样式：tool/result replace 指向的当前 surface 节点不是
+    // tool/result（上游 assertToolResultRewrite 校验失败）——load 抛
+    // "invalid seed event ... must target a current tool/result"。导出
+    // （readRaw）把该 replace 降级为 append,产出的 artifact 导入后即可加载。
+    const path = await freshDbPath();
+    const b = await backend(path);
+    const m = meta("export-tool-result");
+    await b.ctx.sessionPersistence.create(m);
+    const callId = ToolCallId("call-1");
+    const log = [
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: createUserMessage({
+          content: [{ type: "text", text: "hi" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      },
+      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
+      {
+        type: "assistant/message",
+        seq: SessionSeq(3),
+        time: 4,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "tool-call", id: callId, name: "read", arguments: "{}" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        surfaceOp: "append",
+      },
+      { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
+      {
+        type: "tool/result",
+        seq: SessionSeq(5),
+        time: 6,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "user",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: callId,
+                content: [{ type: "text", text: "pruned" }],
+                isError: false,
+              },
+            ],
+            source: { kind: "tool", callId },
+          }),
+        },
+        // 非法 replace：range [1,1] 的当前 surface 节点是 user/message @1，
+        // 不是 tool/result（上游 assertToolResultRewrite 校验失败）。
+        surfaceOp: { op: "replace", start: 1, end: 1 },
+      },
+      {
+        type: "turn/end",
+        seq: SessionSeq(6),
+        time: 7,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
+    ] as unknown as SessionEvent[];
+    await b.ctx.sessionPersistence.append(m.id, log);
+
+    // 源会话：seed 校验失败（历史加载失败）。
+    await expect(b.ctx.sessionPersistence.load(m.id)).rejects.toThrow(
+      /invalid seed event at index 5: tool\/result surface replacement must target a current tool\/result/,
+    );
+
+    // 导出即修复：非法 replace 降级为 append,artifact 完备可用。
+    const persistence = b.ctx.sessionPersistence as SessionPersistenceSqlite;
+    const raw = await persistence.readRaw(m.id);
+    expect(raw).toBeDefined();
+    const parsed = parseJsonlArtifact(raw!.content);
+    const result = parsed.events.find((e) => e.type === "tool/result")!;
+    expect((result as SurfaceEvent).surfaceOp).toBe("append");
+
+    // 导入 artifact 后无需任何修复即可完整加载。
+    const importedId = `session-imported` as SessionId;
+    await persistence.create(
+      { ...parsed.meta, id: importedId },
+      parsed.inheritedEventCount as unknown as number,
+    );
+    await persistence.append(importedId, parsed.events);
+    const loaded = await b.ctx.sessionPersistence.load(importedId);
+    const importedResult = loaded.events.find((e) => e.type === "tool/result")!;
+    expect((importedResult as SurfaceEvent).surfaceOp).toBe("append");
+    expect(loaded.events.at(-1)?.type).toBe("turn/end");
+    await b.dispose();
+  });
+
+  it("readRaw repairs without mutating storage (export-time repair is view-only)", async () => {
+    // 导出即修复只作用于导出视图,不落库——写路径零转换不变量不变：导出前后
+    // 存储行（f_surface_op / f_original_seq）与 revision 完全一致。
+    const path = await freshDbPath();
+    const b = await backend(path);
+    const m = meta("export-view-only");
+    await b.ctx.sessionPersistence.create(m);
+    // 带 assistant/chunk 的 log：chunk 落盘被过滤，后续事件稠密重编号
+    // （f_original_seq ≠ f_sequence）——导出会重映射坐标，但不写回存储。
+    const log = [
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: createUserMessage({
+          content: [{ type: "text", text: "hi" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      },
+      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
+      {
+        type: "assistant/chunk",
+        seq: SessionSeq(3),
+        time: 4,
+        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
+      },
+      {
+        type: "assistant/chunk",
+        seq: SessionSeq(4),
+        time: 5,
+        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
+      },
+      {
+        type: "assistant/message",
+        seq: SessionSeq(5),
+        time: 6,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        surfaceOp: "append",
+      },
+      { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(7),
+        time: 8,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
+    ] as unknown as SessionEvent[];
+    await b.ctx.sessionPersistence.append(m.id, log);
+
+    const persistence = b.ctx.sessionPersistence as SessionPersistenceSqlite;
+    const backendApi = persistence.internals().backend;
+    const rowsBefore = await backendApi.getEventRows(m.id);
+    const revisionBefore = await persistence.readStoredRevision(m.id);
+
+    // 导出（含修复）不落库。
+    const raw = await persistence.readRaw(m.id);
+    expect(raw).toBeDefined();
+    const rowsAfter = await backendApi.getEventRows(m.id);
+    expect(rowsAfter).toEqual(rowsBefore);
+    expect(await persistence.readStoredRevision(m.id)).toBe(revisionBefore);
+
+    // 存储视图不变：读取仍经 f_original_seq 映射重映射。
+    const loaded = await b.ctx.sessionPersistence.load(m.id);
+    expect(loaded.events.at(-1)?.type).toBe("turn/end");
     await b.dispose();
   });
 });

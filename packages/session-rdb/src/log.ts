@@ -1,31 +1,8 @@
-/**
- * 会话 log 的表示转换：把持久化行（`t_sessions` / joined `t_session_events` +
- * `t_events` 行）转换为上游 `SessionHeader` / `SessionEvent`，以及反向的
- * 分类/映射辅助。全部为方言无关的纯函数，无 I/O——测试直接单测（见
- * `tests/rdb.spec.ts`）。
- *
- * 坐标模型（单一稠密坐标 + 读时集中转换）：`t_session_events.f_sequence` 是
- * 稠密持久化 seq（瞬时事件 `assistant/chunk` 与 ignorable 不入库，幸存事件
- * 稠密重编号）；`f_original_seq` 记录上游 seq。写路径零转换（`f_data` 完整
- * 原始 data、`f_surface_op` 原始坐标原样落库）；读取时经 `buildSeqMap`
- * （上游→稠密映射）把 `replace` 范围与 compact 计量事件的 `shadowedRange`
- * 重映射回稠密 seq 空间，`recomputeReplaceProvenance` 对 replace 事件重计算
- * `sourceEventSeqs`（不落库）。`scanRows` 实现崩溃尾部语义（torn tail 切割
- * + 提交区损坏拒绝）。
- *
- * @module @morlay/session-rdb/log
- */
-
 import type { SessionEvent, SessionHeader, SessionId, SurfaceOp } from "@deepseek-ai/dsh-session";
 import { SessionSeq, encodeSeqRanges, packChunkRuns } from "@deepseek-ai/dsh-session";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import type { EventRow, SessionRow } from "./backend.ts";
 
-/**
- * Reconstruct the {@link SessionHeader} from a `t_sessions` row.
- * @param row - the `t_sessions` table row.
- * @returns the header, `NULL` columns mapped to omitted optional fields.
- */
 export function rowToMeta(row: SessionRow): SessionHeader {
   if (!Number.isSafeInteger(row.fCreatedAt) || row.fCreatedAt < 0) {
     throw new Error("stored session createdAt must be a non-negative safe integer");
@@ -42,14 +19,6 @@ export function rowToMeta(row: SessionRow): SessionHeader {
   };
 }
 
-/**
- * `t_sessions` 的 INSERT 列值：`SessionHeader` 的持久化字段 + 初始 head 游标
- * （空事件 id、seq -1）+ materialization identity（`f_incarnation`）+ revision 0。
- * 方言无关的纯映射——SQLite 与 PostgreSQL 后端的 `upsertSession` 共用，列名
- * 与 `src/entities/sessions.ts` 对齐（改一处即两方言生效）。`f_id` serial 由
- * 数据库生成，不在映射内。`f_seed_length` 持久化继承前缀长度（`isSeeded`
- * 为 true 时非空；否则 NULL）。
- */
 export function sessionInsertRow(
   storage: SessionStorageMetadata,
   incarnation: string,
@@ -84,12 +53,6 @@ export function sessionInsertRow(
   };
 }
 
-/**
- * `t_sessions` 的 ON CONFLICT 更新列值：只刷新 header 列，保留 head 游标
- * （`f_head_event_id`/`f_head_sequence`）与 materialization identity
- * （`f_incarnation`/`f_revision`）。方言无关，两后端共用（见
- * {@link sessionInsertRow}）。
- */
 export function sessionConflictRow(storage: SessionStorageMetadata): {
   fVersion: number;
   fCreatedAt: number;
@@ -111,17 +74,6 @@ export function sessionConflictRow(storage: SessionStorageMetadata): {
   };
 }
 
-/**
- * Remap a stored {@link SurfaceOp} from upstream seqs to dense persisted seqs.
- * An `append` op carries no seqs; a positional `replace`'s `start`/`end` name
- * surface nodes by UPSTREAM seq and must follow the upstream→persisted map
- * when delta filtering re-numbered the log — otherwise the replacement range
- * is looked up against DENSE seqs and the surface fold rejects the log
- * ("start seq N not found in surface").
- * @param op - the stored surface op (original coordinates).
- * @param remap - upstream→persisted seq mapping.
- * @returns the remapped surface op.
- */
 export function remapSurfaceOp(op: SurfaceOp, remap: (seq: number) => number): SurfaceOp {
   if (op === "append") return op;
   return {
@@ -131,20 +83,6 @@ export function remapSurfaceOp(op: SurfaceOp, remap: (seq: number) => number): S
   };
 }
 
-/**
- * The compact metering events (`compaction/summary`, `compaction/prune`) carry the
- * token-meter's shadow-price claim in `data.shadowedRange`: the inclusive
- * surface-node seqs of the range the IMMEDIATELY following surface `replace`
- * shadows. The range names surface nodes by UPSTREAM seq, so it must follow
- * the replace's `surfaceOp` through the same upstream→persisted map — the
- * fold compares claim and replacement ranges for exact equality, and an
- * un-remapped claim (upstream) next to a remapped replacement range (dense)
- * makes replay fail loud ("token surface: replace ... has no adjacent shadow
- * price").
- * @param range - the stored shadowed range (upstream seqs).
- * @param remap - upstream→persisted seq mapping.
- * @returns the remapped shadowed range.
- */
 export function remapShadowedRange(
   range: { start: number; end: number },
   remap: (seq: number) => number,
@@ -152,16 +90,6 @@ export function remapShadowedRange(
   return { start: remap(range.start), end: remap(range.end) };
 }
 
-/**
- * Reconstruct a {@link SessionEvent} from a joined row. `f_data` is the
- * complete original data (turn/step included); the bridge row's `f_surface_op`
- * (original coordinates) is remapped to dense seqs through `seqMap`; the
- * compact metering events' `shadowedRange` follows the same map.
- * @param row - the joined `t_session_events` + `t_events` row.
- * @param seqMap - upstream→persisted seq map (per session).
- * @returns the reconstructed event; throws when a JSON column fails to parse
- *   ({@link scanRows} treats that as a hole, not corruption, in the tail).
- */
 export function rowToEvent(row: EventRow, seqMap: ReadonlyMap<number, number>): SessionEvent {
   const remap = (seq: number): number => seqMap.get(seq) ?? seq;
   const surfaceOp =
@@ -169,10 +97,7 @@ export function rowToEvent(row: EventRow, seqMap: ReadonlyMap<number, number>): 
       ? remapSurfaceOp(JSON.parse(row.fSurfaceOp) as SurfaceOp, remap)
       : undefined;
   const data = JSON.parse(row.fData) as SessionEvent["data"];
-  // `compaction/summary` / `compaction/prune` are plugin-merged types whose
-  // metering data is not part of the core `SessionEventMap`; narrow through a
-  // structural view to remap the shadow-price claim's range (see
-  // {@link remapShadowedRange}).
+  // compaction 事件的 shadowedRange 是插件合并字段，经结构化视图重映射。
   if (row.fType === "compaction/summary" || row.fType === "compaction/prune") {
     const metering = data as unknown as { shadowedRange?: { start: number; end: number } };
     if (metering.shadowedRange !== undefined) {
@@ -188,23 +113,6 @@ export function rowToEvent(row: EventRow, seqMap: ReadonlyMap<number, number>): 
   } as SessionEvent;
 }
 
-/**
- * Build the upstream→persisted seq map for one session's persisted events
- * (only meaningful when delta filtering re-numbered the log).
- *
- * A session re-opened by resume (or forked) persists the seed segment and the
- * new segment in ONE log: the seed rows keep the PARENT session's upstream seqs
- * while the resumed rows carry the child session's own upstream seqs, which
- * renumber from the seed boundary and therefore OVERLAP the parent space. The
- * FIRST mapping wins so a seed-segment event's provenance reference resolves to
- * the seed-space row it actually derived from (rows are ordered by persisted
- * seq, so the seed segment always precedes the resumed one); the resumed
- * segment's references are unique within their own space unless they point at a
- * shared value, which only the parent could have produced first.
- * @param rows - one session's seq rows (upstream + persisted), ordered by seq
- *   ascending (only the two seq columns are needed).
- * @returns map from `f_original_seq` to `f_sequence` (first occurrence wins).
- */
 export function buildSeqMap(
   rows: readonly Pick<EventRow, "fSequence" | "fOriginalSeq">[],
 ): Map<number, number> {
@@ -215,24 +123,8 @@ export function buildSeqMap(
   return map;
 }
 
-/**
- * The event types that produce model-visible surface nodes (mirror of the
- * upstream `SURFACE_EVENT_TYPES`); only these can appear in a replace's
- * shadowed range, so only their seqs may be merged into provenance.
- */
 const SURFACE_EVENT_TYPES = new Set(["user/message", "assistant/message", "tool/result"]);
 
-/**
- * Recompute `sourceEventSeqs` for every surface `replace` event in a complete
- * dense log. `sourceEventSeqs` is not persisted; the upstream Session seed
- * validation requires a replace's provenance to include every surface node it
- * shadows (`assertProvenance`'s shadowed check). The recomputed set = every
- * SURFACE node seq inside the (dense) replace range — it satisfies the
- * coverage check by construction, references only earlier events (range nodes
- * precede the replace), and is strictly increasing after sort/dedup.
- * @param events - a session's dense event list (contiguous seqs), read in
- *   full; mutated in place.
- */
 export function recomputeReplaceProvenance(events: SessionEvent[]): void {
   for (const event of events) {
     const raw = event as SessionEvent & { surfaceOp?: unknown; sourceEventSeqs?: number[] };
@@ -255,26 +147,149 @@ export function recomputeReplaceProvenance(events: SessionEvent[]): void {
   }
 }
 
-/**
- * Find the preserved prefix of ordered event rows. Fully written rows in an
- * interrupted final turn remain in the prefix. The first unparsable row or seq
- * gap after the last `turn/end` marks a tolerated torn tail; the same hole in
- * the committed region rejects.
- *
- * @param rows - one session's event rows, ordered by persisted seq ascending.
- * @param base - the persisted seq the first row is expected to carry; `0` for
- *   a whole log, the requested `fromSeq` for a suffix read (`loadStoredFrom`).
- * @param seqMap - upstream→persisted seq map forwarded to {@link rowToEvent}.
- * @returns the preserved event prefix, plus `tornFrom` — the persisted seq the
- *   physical delete starts at — when a torn tail exists.
- */
+function isEventSeqLike(value: unknown): value is number {
+  return (
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && !Object.is(value, -0)
+  );
+}
+
+function isDeepEqualJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => isDeepEqualJson(item, b[i]));
+  }
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  const aKeys = Object.keys(a as Record<string, unknown>);
+  const bRecord = b as Record<string, unknown>;
+  if (aKeys.length !== Object.keys(bRecord).length) return false;
+  return aKeys.every(
+    (key) =>
+      Object.hasOwn(bRecord, key) &&
+      isDeepEqualJson((a as Record<string, unknown>)[key], bRecord[key]),
+  );
+}
+
+function toolResultRewriteContentOnly(original: SessionEvent, replacement: SessionEvent): boolean {
+  const originalData = original.data as Record<string, unknown>;
+  const replacementData = replacement.data as Record<string, unknown>;
+  const originalMessage = originalData["message"] as { content?: unknown } | undefined;
+  const replacementMessage = replacementData["message"] as { content?: unknown } | undefined;
+  const originalContent = Array.isArray(originalMessage?.content)
+    ? originalMessage.content
+    : undefined;
+  const replacementContent = Array.isArray(replacementMessage?.content)
+    ? replacementMessage.content
+    : undefined;
+  if (originalContent === undefined || replacementContent === undefined) return false;
+  const originalRest = {
+    ...originalData,
+    message: {
+      ...originalMessage,
+      content: [{ ...(originalContent[0] as Record<string, unknown>), content: null }],
+    },
+  };
+  const replacementRest = {
+    ...replacementData,
+    message: {
+      ...replacementMessage,
+      content: [{ ...(replacementContent[0] as Record<string, unknown>), content: null }],
+    },
+  };
+  return isDeepEqualJson(originalRest, replacementRest);
+}
+
+export function findSurfaceRepairs(events: readonly SessionEvent[]): {
+  degradeToAppend: Set<number>;
+  addAppendMarker: Set<number>;
+  clearSurfaceOp: Set<number>;
+} {
+  const nodes: number[] = [];
+  const degradeToAppend = new Set<number>();
+  const addAppendMarker = new Set<number>();
+  const clearSurfaceOp = new Set<number>();
+  for (const event of events) {
+    const raw = event as SessionEvent & { surfaceOp?: unknown };
+    const op = raw.surfaceOp;
+    if (op === undefined) {
+      if (SURFACE_EVENT_TYPES.has(event.type)) {
+        addAppendMarker.add(event.seq);
+        nodes.push(event.seq);
+      }
+      continue;
+    }
+    if (op === "append") {
+      if (SURFACE_EVENT_TYPES.has(event.type)) nodes.push(event.seq);
+      else clearSurfaceOp.add(event.seq);
+      continue;
+    }
+    if (!SURFACE_EVENT_TYPES.has(event.type)) {
+      clearSurfaceOp.add(event.seq);
+      continue;
+    }
+    const replace =
+      typeof op === "object" && op !== null && !Array.isArray(op)
+        ? (op as Record<string, unknown>)
+        : undefined;
+    const start = replace?.["start"];
+    const end = replace?.["end"];
+    const shapeOk =
+      replace !== undefined &&
+      replace["op"] === "replace" &&
+      isEventSeqLike(start) &&
+      isEventSeqLike(end);
+    const startIdx = shapeOk ? nodes.indexOf(start as number) : -1;
+    const endIdx = shapeOk ? nodes.indexOf(end as number) : -1;
+    const rangeOk = shapeOk && startIdx !== -1 && endIdx !== -1 && startIdx <= endIdx;
+    let rewriteOk = true;
+    if (rangeOk && event.type === "tool/result") {
+      const shadowed = nodes.slice(startIdx, endIdx + 1);
+      if (shadowed.length !== 1) {
+        rewriteOk = false;
+      } else {
+        const original = events[shadowed[0]!];
+        rewriteOk =
+          original?.type === "tool/result" && toolResultRewriteContentOnly(original, event);
+      }
+    }
+    if (!rangeOk || !rewriteOk) {
+      degradeToAppend.add(event.seq);
+      nodes.push(event.seq);
+      continue;
+    }
+    nodes.splice(startIdx, endIdx - startIdx + 1, event.seq);
+  }
+  return { degradeToAppend, addAppendMarker, clearSurfaceOp };
+}
+
+export function repairSurfaceOps(events: SessionEvent[]): void {
+  const repairs = findSurfaceRepairs(events);
+  if (
+    repairs.degradeToAppend.size === 0 &&
+    repairs.addAppendMarker.size === 0 &&
+    repairs.clearSurfaceOp.size === 0
+  ) {
+    return;
+  }
+  for (const event of events) {
+    const raw = event as SessionEvent & { surfaceOp?: unknown };
+    if (repairs.degradeToAppend.has(event.seq)) {
+      raw.surfaceOp = "append";
+    } else if (repairs.addAppendMarker.has(event.seq)) {
+      raw.surfaceOp = "append";
+    } else if (repairs.clearSurfaceOp.has(event.seq)) {
+      delete raw.surfaceOp;
+    }
+  }
+}
+
 export function scanRows(
   rows: readonly EventRow[],
   base = 0,
   seqMap: ReadonlyMap<number, number> = new Map(),
 ): { preserved: SessionEvent[]; tornFrom?: number } {
-  // Pass 1: parse each row's data; a row whose data is not valid JSON is a hole.
-  // (The seq/type COLUMNS are always present even when `data` is corrupt.)
+  // Pass 1：解析每行 data；JSON 非法的行是洞（seq/type 列即使在 data 损坏
+  // 时也存在）。
   interface Parsed {
     ok: boolean;
     event?: SessionEvent;
@@ -287,8 +302,7 @@ export function scanRows(
     }
   });
 
-  // The last index that is a valid `turn/end` — holes through a closed turn
-  // are always committed corruption.
+  // 最后一个合法 turn/end 的索引——洞在闭合轮内一律是已提交损坏。
   let lastTurnEnd = -1;
   for (let i = parsed.length - 1; i >= 0; i--) {
     if (parsed[i]?.ok && rows[i]?.fType === "turn/end") {
@@ -297,8 +311,8 @@ export function scanRows(
     }
   }
 
-  // Preserve the contiguous prefix, including a complete interrupted turn;
-  // holes through the last committed boundary throw, while later holes stop.
+  // 保留连续前缀（含完整的中断轮）；最后一个已提交边界之前的洞抛错，
+  // 之后的洞停止（torn tail）。
   const preserved: SessionEvent[] = [];
   for (let i = 0; i < rows.length; i++) {
     const p = parsed[i];
@@ -307,32 +321,24 @@ export function scanRows(
         throw new Error(
           `corrupt session log: unparsable committed event at seq ${rows[i]?.fSequence}`,
         );
-      break; // torn tail fragment after the last turn/end — stop, tolerate
+      break; // 最后一个 turn/end 之后的 torn tail 片段——停止、容忍
     }
     if (p.event.seq !== base + i) {
       if (i <= lastTurnEnd)
         throw new Error(
           `corrupt session log: seq gap in committed region (expected ${base + i}, got ${p.event.seq})`,
         );
-      break; // gap after the last turn/end — torn tail, stop
+      break; // 最后一个 turn/end 之后的 seq 空洞——torn tail，停止
     }
     preserved.push(p.event);
   }
 
-  // Any rows past the preserved prefix are a never-committed torn tail; their
-  // first seq is the deletion point for load's physical repair.
+  // 保留前缀之外的行是未提交的 torn tail；其首个 seq 是物理删除起点。
   return preserved.length < rows.length
     ? { preserved, tornFrom: base + preserved.length }
     : { preserved };
 }
 
-/**
- * 把一行事件序列化为 JSONL 存储记录：`sourceEventSeqs` 压缩为区间数组
- * （与上游 JSONL 后端的 `encodeProvenanceForStorage` 一致），`assistant/chunk`
- * 连续段打包为 chunk 行（`packChunkRuns`，与上游 `packChunks: true` 布局一致）。
- * @param event - 待序列化的事件。
- * @returns 存储记录（JSON 序列化前的对象）。
- */
 function toStorageRecord(record: import("@deepseek-ai/dsh-session").StorageRecord): unknown {
   const withSeqs = record as import("@deepseek-ai/dsh-session").StorageRecord & {
     sourceEventSeqs?: unknown;
@@ -341,17 +347,6 @@ function toStorageRecord(record: import("@deepseek-ai/dsh-session").StorageRecor
   return { ...record, sourceEventSeqs: encodeSeqRanges(withSeqs.sourceEventSeqs as never) };
 }
 
-/**
- * 把 RDB 会话行转成 JSONL 文本（`session-log-export` 的 raw artifact 格式）：
- * 首行是 `type: 'session'` 的 header 记录（`seedLength` 携带继承前缀长度），
- * 之后每行一个存储记录。与上游 JSONL 后端 `toHeaderLine` + `eventLines`
- * 的物理布局一致，导出 zip 的媒体引用扫描（`imageRefsInArtifact`）按行
- * `JSON.parse` 即可工作。
- * @param meta - 会话 header。
- * @param inheritedEventCount - 继承前缀长度。
- * @param events - 会话事件（稠密 seq，已含崩溃修复 closers）。
- * @returns JSONL 文本。
- */
 export function toJsonlArtifact(
   meta: SessionHeader,
   inheritedEventCount: number,

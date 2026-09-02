@@ -1,7 +1,3 @@
-/**
- * 多 session 并发复现测试（临时）：验证多个 session 同时写入时是否损坏。
- * 全部走冷路径（dispose 后重新 mount load），真正验证 DB 中的稠密 log。
- */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +28,6 @@ async function mount(path: string): Promise<{ ctx: Context; dispose: () => Promi
   return { ctx, dispose: () => fiber.dispose() };
 }
 
-/** 一个完整 turn（含 delta 流），返回后该 session 的 turn 是关闭的。 */
 function appendTurn(s: Session, round: number): void {
   void round;
   s.append("turn/start", { turn: 1 });

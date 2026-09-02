@@ -1,14 +1,3 @@
-/**
- * Serialize harness messages into the AI SDK `LanguageModelV4Prompt` and merge
- * profile sampling defaults into call options for
- * `@ai-sdk/openai-compatible`. Request-level `GenerateOptions` wins, profile
- * values fill in, and anything still undefined is omitted so the provider's
- * own default applies. `topK` and the wire `reasoning_effort` spelling travel
- * through `providerOptions["openai-compatible"]`, which the provider
- * transparently forwards into the request body.
- * @module dsh-llm-openai-compatible/serialize
- */
-
 import {
   LlmError,
   contentHasImage,
@@ -27,23 +16,18 @@ import type {
 import { Buffer } from "node:buffer";
 import type { ReasoningEffort, ResolvedModelProfile, ResolvedProviderProfile } from "./adapter.ts";
 
-/** Lead-in text of the user message that follows tool-result images. */
 const TOOL_RESULT_IMAGE_TEXT = "Attached image(s) from tool result:";
 
-/** A user-message content part the adapter understands. */
 type UserContentPart = Extract<LanguageModelV4Prompt[number], { role: "user" }>["content"][number];
 
-/** Provider-specific options the adapter forwards into the request body. */
 export type OpenAICompatibleProviderOptions = SharedV4ProviderOptions & {
   "openai-compatible"?: {
-    /** Exact wire `reasoning_effort` spelling; absence omits the field. */
     reasoningEffort?: string;
-    /** Non-standard `top_k` sampling knob, sent only to gateways that accept it. */
+
     top_k?: number;
   };
 };
 
-/** The per-call options resolved from one harness request and provider profile. */
 export interface OpenAICompatibleCallOptions {
   prompt: LanguageModelV4Prompt;
   maxOutputTokens?: number;
@@ -57,20 +41,6 @@ export interface OpenAICompatibleCallOptions {
   providerOptions?: OpenAICompatibleProviderOptions;
 }
 
-/**
- * Resolve one reasoning effort to its wire spelling for the exact model.
- * `off` (and a `null` wire spelling) means *omit the field* — the provider
- * default applies; every other declared effort sends its configured value.
- * An effort the model does not declare fails here, before any network I/O:
- * that is where a bad request-level effort AND a bad profile default both
- * belong (describing a model must never throw, but executing a request must).
- * @param model - the configured model descriptor, or `undefined` for an
- *   unlisted model id (which carries no reasoning declaration).
- * @param effort - the resolved effort to send, or `undefined` to send none.
- * @returns the wire `reasoning_effort` value, or `undefined` to omit the field.
- * @throws LlmError `UNSUPPORTED_REASONING_EFFORT` when the model does not
- *   declare the effort.
- */
 export function resolveReasoningWire(
   model: ResolvedModelProfile | undefined,
   effort: ResolvedProviderProfile["reasoning"] | undefined,
@@ -95,7 +65,6 @@ export function resolveReasoningWire(
   return wire;
 }
 
-/** Join the text blocks of a message (used for user/tool-result content). */
 function flattenText(blocks: readonly ContentBlock[]): string {
   return blocks
     .filter((block) => block.type === "text")
@@ -103,7 +72,6 @@ function flattenText(blocks: readonly ContentBlock[]): string {
     .join("");
 }
 
-/** Reject core image content before any text-flattening path can silently erase it. */
 function assertTextOnly(blocks: readonly ContentBlock[]): void {
   if (contentHasImage(blocks)) {
     throw new LlmError(
@@ -113,7 +81,6 @@ function assertTextOnly(blocks: readonly ContentBlock[]): void {
   }
 }
 
-/** Reject roles whose wire format cannot carry image input. */
 function assertSupportedImageRoles(messages: readonly Message[]): void {
   for (const message of messages) {
     if (message.role !== "user" && contentHasImage(message.content)) {
@@ -125,7 +92,6 @@ function assertSupportedImageRoles(messages: readonly Message[]): void {
   }
 }
 
-/** Resolve one durable image into its transient data-URL file part. */
 async function imagePart(
   block: Extract<ContentBlock, { type: "image" }>,
   attachments: AttachmentStore,
@@ -150,7 +116,6 @@ async function imagePart(
   }
 }
 
-/** Serialize one assistant message into prompt parts, recording tool names by call id. */
 function assistantParts(
   message: Message,
   toolNames: Map<string, string>,
@@ -185,7 +150,6 @@ function assistantParts(
   return parts;
 }
 
-/** Convert user blocks into prompt parts, resolving images through the resolver. */
 async function userParts(
   blocks: readonly ContentBlock[],
   resolveImage:
@@ -220,18 +184,6 @@ async function userParts(
   return parts;
 }
 
-/**
- * Serialize the conversation into the AI SDK prompt. `tool-result` blocks
- * become standalone `{role: "tool"}` messages; the harness puts each tool
- * result in its own user-role message, so a mixed user message contributes
- * its text first and its tool results as separate wire messages after.
- * Tool-result images cannot ride a tool message, so they are buffered and
- * flushed into the next user message (or a dedicated one at the end).
- * @param messages - the harness conversation, in order.
- * @param resolveImage - image resolver for the image-capable path, or `undefined` for text-only.
- * @param signal - cancellation for attachment reads.
- * @returns the AI SDK prompt; order preserved.
- */
 async function serializePrompt(
   messages: readonly Message[],
   resolveImage:
@@ -307,7 +259,6 @@ async function serializePrompt(
   return prompt;
 }
 
-/** Serialize tool schemas to AI SDK function tools. */
 function serializeTools(options: GenerateOptions): LanguageModelV4FunctionTool[] | undefined {
   const tools = options.tools?.map((tool): LanguageModelV4FunctionTool => ({
     type: "function",
@@ -318,7 +269,6 @@ function serializeTools(options: GenerateOptions): LanguageModelV4FunctionTool[]
   return tools !== void 0 && tools.length > 0 ? tools : void 0;
 }
 
-/** Merge profile sampling defaults under request-level values into call options. */
 function callOptionsWithPrompt(
   options: GenerateOptions,
   profile: ResolvedProviderProfile,
@@ -355,13 +305,6 @@ function callOptionsWithPrompt(
   };
 }
 
-/**
- * Build the full call options for text-only content.
- * @param options - the harness request.
- * @param profile - resolved provider profile.
- * @param model - configured model descriptor, or `undefined` for unlisted ids.
- * @returns the AI SDK call options (settings + prompt + provider options).
- */
 export async function serializeCallOptions(
   options: GenerateOptions,
   profile: ResolvedProviderProfile,
@@ -373,16 +316,6 @@ export async function serializeCallOptions(
   return callOptionsWithPrompt(options, profile, model, [...system, ...prompt]);
 }
 
-/**
- * Build one image-capable request while keeping durable bytes out of session
- * messages. Oversized oldest images become deterministic text before any
- * attachment read.
- * @param options - the harness request containing image-capable user content.
- * @param profile - resolved provider profile.
- * @param model - configured model descriptor, or `undefined` for unlisted ids.
- * @param images - the attachment resolver, request bound, and cancellation.
- * @returns the fully materialized call options.
- */
 export async function serializeCallOptionsWithImages(
   options: GenerateOptions,
   profile: ResolvedProviderProfile,

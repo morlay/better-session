@@ -9,3 +9,5 @@ node_modules/
 .pnpm-store/
 .scratch/
 .turbo/
+
+tsconfig.tsbuildinfo

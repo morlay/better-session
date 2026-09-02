@@ -6,6 +6,7 @@ export default defineConfig({
   },
   exports: {
     packageJson: true,
+    devExports: true,
     customExports: {
       "./cordis.patch.yml": "./cordis.patch.yml",
     },

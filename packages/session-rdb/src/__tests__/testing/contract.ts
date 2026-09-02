@@ -1,13 +1,3 @@
-/**
- * Reusable contract test for any {@link SessionPersistence} backend. A backend
- * package imports {@link runPersistenceContract} and calls it with a factory
- * that yields a fresh, empty backend (and a teardown), so every backend is held
- * to the same append-only / contiguous-seq / lazy-materialization / crash
- * semantics. The JSONL backend's own spec adds file-specific tests on top.
- *
- * @module @deepseek-ai/dsh-session-persistence/tests/contract
- */
-
 import { describe, expect, it } from "vitest";
 import {
   SESSION_FORMAT_VERSION,
@@ -27,13 +17,11 @@ import type {
 import { ToolCallId, MessageId, createMessage, freezeMessage } from "@deepseek-ai/dsh-llm";
 import type { SessionPersistence } from "@deepseek-ai/dsh-session-persistence";
 
-/** A backend under test plus its teardown. */
 export interface ContractBackend {
   persistence: SessionPersistence;
   dispose: () => Promise<void>;
 }
 
-/** Build a minimal {@link SessionHeader} for a session id. */
 export function meta(id: string, cwd?: string): SessionHeader {
   return {
     version: SESSION_FORMAT_VERSION,
@@ -44,7 +32,6 @@ export function meta(id: string, cwd?: string): SessionHeader {
   };
 }
 
-/** A well-formed one-turn event log (contiguous seqs from 0). */
 export function oneTurnLog(): SessionEvent[] {
   return [
     { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
@@ -91,11 +78,6 @@ export function oneTurnLog(): SessionEvent[] {
   ];
 }
 
-/**
- * Append recorded events to a live session while forwarding surface metadata verbatim. The broad
- * `SessionEvent` union makes the typed marker optional, but the runtime guard must still reject a
- * surface event whose fixture omitted it; this helper never synthesizes a default.
- */
 export function appendLog(session: Session, events: readonly SessionEvent[]): void {
   for (const e of events) {
     const se = e as SessionEvent<SurfaceEventType>;
@@ -111,10 +93,6 @@ export function appendLog(session: Session, events: readonly SessionEvent[]): vo
   }
 }
 
-/**
- * Run the backend-agnostic contract suite. `make()` MUST return a fresh, empty
- * backend each call.
- */
 export function runPersistenceContract(name: string, make: () => Promise<ContractBackend>): void {
   describe(`SessionPersistence contract: ${name}`, () => {
     it("round-trips a session: create + append → load returns identical meta and byte-identical events", async () => {

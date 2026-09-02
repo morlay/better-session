@@ -7,11 +7,16 @@
     "justfile",
     "cordis.patch.yml"
   ],
+  "type": "module",
+  "exports": {
+    "./package.json": "./package.json"
+  },
   "dependencies": {
-    "@deepseek-ai/cordis-plugin-group": "workspace:^",
-    "@deepseek-ai/dsh": "workspace:^",
     "@morlay/better-session": "workspace:^",
     "@morlay/dsh-llm-openai-compatible": "workspace:^"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "workspace:^"
   },
   "dsh": {
     "profile": {

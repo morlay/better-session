@@ -1,12 +1,3 @@
-/**
- * 从方言无关的表描述生成 SQLite 的 drizzle `sqliteTable` 对象。查询的类型
- * 安全由调用方的手写行接口（`backend.ts` 的 `SessionRow` / `EventRow` /
- * `EventInsert`）与显式投影兜底——drizzle 无法从运行时构建的列映射保留
- * 精确的列类型。
- *
- * @module @morlay/session-rdb/entities/to-sqlite
- */
-
 import { sql } from "drizzle-orm";
 import {
   check as sqliteCheck,
@@ -21,13 +12,11 @@ import {
 } from "drizzle-orm/sqlite-core";
 import { toProperty, type ColumnDef, type TableDef } from "../entities/types.ts";
 
-/** 构建过程中共享的目标表注册表（供列级 `references` 闭包延迟解析）。 */
 type TableRegistry = Record<string, AnySQLiteTable>;
 
 function buildColumn(c: ColumnDef, tables: TableRegistry): SQLiteColumnBuilder {
-  // 具体 builder 类型（SQLiteIntegerBuilder / SQLiteTextBuilder）与基类
-  // `SQLiteColumnBuilder` 在方法层面不兼容（泛型逆变），构建阶段用宽松类型
-  // 合并，返回时收窄为基类；查询的类型安全由手写行接口兜底。
+  // 具体 builder 类型与基类在方法层面不兼容（泛型逆变），构建阶段用宽松
+  // 类型合并，返回时收窄为基类；查询类型安全由手写行接口兜底。
   let col: any;
   switch (c.type) {
     case "text":
@@ -56,7 +45,6 @@ function buildColumn(c: ColumnDef, tables: TableRegistry): SQLiteColumnBuilder {
   return col as SQLiteColumnBuilder;
 }
 
-/** 由表描述构建 SQLite drizzle 表对象（按传入顺序；外键目标须先构建）。 */
 export function toSqliteSchema(defs: readonly TableDef[]): Record<string, AnySQLiteTable> {
   const tables: TableRegistry = {};
   for (const def of defs) {

@@ -1,5 +1,2 @@
-dev *args:
-    dsh-web-desktopify dev . {{ args }}
-
-bundle *args:
-    dsh-web-desktopify bundle . {{ args }}
+dev:
+    pnpm exec tsx ./tool/dev.ts

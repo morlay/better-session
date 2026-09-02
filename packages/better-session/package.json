@@ -17,14 +17,23 @@
     "url": "https://github.com/morlay/better-session.git"
   },
   "files": [
+    "dist",
+    "src",
     "cordis.patch.yml",
-    "README.md"
+    "!**/__tests__"
   ],
   "type": "module",
   "exports": {
-    ".": "./dist/invariant.mjs",
+    ".": "./src/invariant.ts",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/invariant.mjs",
+      "./package.json": "./package.json",
+      "./cordis.patch.yml": "./cordis.patch.yml"
+    }
   },
   "scripts": {
     "build": "pnpm exec tsdown",

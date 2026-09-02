@@ -1,8 +1,3 @@
-/**
- * 版本树投影（buildTimeline）的纯逻辑测试：树构造、自有版本效果扫描、
- * 逆链校验与错误路径。不依赖真实持久化后端。
- */
-
 import { describe, expect, it } from "vitest";
 import type { SessionEvent, SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { SessionPersistenceRevision } from "@deepseek-ai/dsh-session-persistence";

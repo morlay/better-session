@@ -1,8 +1,3 @@
-/**
- * Session 导入测试：JSONL 解析（header / chunk 展开 / provenance 展开 /
- * 损坏拒绝）、zip 解压，以及与导出（`toJsonlArtifact`）的 round-trip 落库。
- */
-
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
@@ -43,7 +38,6 @@ async function freshDbPath(): Promise<string> {
   return join(dir, "sessions.sqlite");
 }
 
-/** 一个含 delta 与 provenance 的真实形状 log（导出侧会打包 chunk 行）。 */
 function richLog(): SessionEvent[] {
   return [
     { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
@@ -217,14 +211,26 @@ describe("parseJsonlArtifact", () => {
     expect(() =>
       parseJsonlArtifact(
         [
-          JSON.stringify({ type: "session", version: 0, id: 42, createdAt: 1000, delegationDepth: 0 }),
+          JSON.stringify({
+            type: "session",
+            version: 0,
+            id: 42,
+            createdAt: 1000,
+            delegationDepth: 0,
+          }),
         ].join("\n"),
       ),
     ).toThrow(/invalid header/);
     expect(() =>
       parseJsonlArtifact(
         [
-          JSON.stringify({ type: "session", version: 0, id: "s", createdAt: 1000, delegationDepth: 0 }),
+          JSON.stringify({
+            type: "session",
+            version: 0,
+            id: "s",
+            createdAt: 1000,
+            delegationDepth: 0,
+          }),
           "not-json",
         ].join("\n"),
       ),
@@ -235,11 +241,39 @@ describe("parseJsonlArtifact", () => {
     expect(() =>
       parseJsonlArtifact(
         [
-          JSON.stringify({ type: "session", version: 0, id: "s", createdAt: 1000, delegationDepth: 0 }),
+          JSON.stringify({
+            type: "session",
+            version: 0,
+            id: "s",
+            createdAt: 1000,
+            delegationDepth: 0,
+          }),
           JSON.stringify({ type: "turn/start", seq: 1, time: 1, data: { turn: 1 } }),
         ].join("\n"),
       ),
     ).toThrow(/seq gap/);
+  });
+
+  it("shrinks a seedLength that exceeds the event count (self-consistent import)", () => {
+    // 历史损坏样式：fork 派生会话的 seedLength 残留但事件全被删光（rewind
+    // 未收缩）。导入必须收缩到事件数——否则落库后上游 load 把
+    // 「继承前缀超过存储事件数」当损坏拒绝。
+    const parsed = parseJsonlArtifact(
+      [
+        JSON.stringify({
+          type: "session",
+          version: 0,
+          id: "bad",
+          createdAt: 1000,
+          parentSession: "parent",
+          seedLength: 46847,
+          delegationDepth: 1,
+        }),
+      ].join("\n"),
+    );
+    expect(parsed.meta.isSeeded).toBe(true);
+    expect(Number(parsed.inheritedEventCount)).toBe(0);
+    expect(parsed.events).toHaveLength(0);
   });
 });
 
@@ -254,7 +288,9 @@ describe("parseImportZip", () => {
 
   it("rejects a corrupt zip and a zip without the artifact", () => {
     expect(() => parseImportZip(strToU8("not a zip"))).toThrow(/not a valid ZIP/);
-    expect(() => parseImportZip(zipSync({ other: strToU8("x") }))).toThrow(/missing session\.jsonl/);
+    expect(() => parseImportZip(zipSync({ other: strToU8("x") }))).toThrow(
+      /missing session\.jsonl/,
+    );
   });
 });
 
@@ -274,19 +310,24 @@ describe("import round-trip through the backend", () => {
       const big = oneTurnLog();
       for (let turn = 1; turn < 2000; turn++) {
         big.push(
-          ...oneTurnLog().map((e) => ({
-            ...e,
-            seq: SessionSeq(e.seq + big.length),
-            time: e.time + turn * 10,
-            data: { ...e.data, turn },
-          }) as SessionEvent),
+          ...oneTurnLog().map(
+            (e) =>
+              ({
+                ...e,
+                seq: SessionSeq(e.seq + big.length),
+                time: e.time + turn * 10,
+                data: { ...e.data, turn },
+              }) as SessionEvent,
+          ),
         );
       }
       await p.append(m.id, big);
 
       const raw = await p.readRaw(m.id);
       expect(raw).toBeDefined();
-      const parsed = parseImportZip(zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }));
+      const parsed = parseImportZip(
+        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+      );
       const id = await persistImport(p, undefined, parsed);
       const loaded = await p.load(id);
       expect(loaded.events).toHaveLength(parsed.events.length);
@@ -336,7 +377,9 @@ describe("import round-trip through the backend", () => {
         "turn/end",
       ]);
       expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-      expect((loaded.events[3] as SessionEvent & { sourceEventSeqs?: unknown }).sourceEventSeqs).toBeUndefined();
+      expect(
+        (loaded.events[3] as SessionEvent & { sourceEventSeqs?: unknown }).sourceEventSeqs,
+      ).toBeUndefined();
       const source = await p.load(m.id);
       expect(source.events).toEqual(loaded.events);
     } finally {
@@ -362,7 +405,9 @@ describe("import round-trip through the backend", () => {
       await p.append(childMeta.id, [...seed, ...richLog().slice(3)]);
 
       const raw = await p.readRaw(childMeta.id);
-      const parsed = parseImportZip(zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }));
+      const parsed = parseImportZip(
+        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+      );
       expect(parsed.meta.isSeeded).toBe(true);
       expect(parsed.inheritedEventCount).toBe(3);
     } finally {
@@ -393,7 +438,9 @@ describe("import round-trip through the backend", () => {
       expect(live.snapshotEvents()).toHaveLength(7);
 
       const raw = await p.readRaw(src.id);
-      const parsed = parseImportZip(zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }));
+      const parsed = parseImportZip(
+        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+      );
       // 覆盖：rewind(-1) 清空 target（真实 branch 服务同步 coordinator
       // cursor 与内存 log）后追加导入事件。
       const branch = ctx.get("sessionBranch") as unknown as {
@@ -439,7 +486,9 @@ describe("import round-trip through the backend", () => {
       await p.create(src);
       await p.append(src.id, oneTurnLog());
       const raw = await p.readRaw(src.id);
-      const parsed = parseImportZip(zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }));
+      const parsed = parseImportZip(
+        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+      );
 
       const id = await persistImport(p, undefined, parsed);
       expect(id).not.toBe(src.id);

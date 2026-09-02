@@ -1,12 +1,3 @@
-/**
- * Translate AI SDK `LanguageModelV4StreamPart`s (as produced by
- * `@ai-sdk/openai-compatible`'s `doStream`) into the harness `StreamChunk`
- * protocol. One stateful harness block per text, reasoning, or tool-call
- * index; `block-end`s, `usage`, and `finish` are all deferred to the stream's
- * `finish` part so nothing follows the terminal finish.
- * @module dsh-llm-openai-compatible/translate
- */
-
 import { EMPTY_RESPONSE_CODE, ToolCallId, LlmError } from "@deepseek-ai/dsh-llm";
 import type { FinishReason, StreamChunk, TokenUsage } from "@deepseek-ai/dsh-llm";
 import type {
@@ -16,7 +7,6 @@ import type {
   LanguageModelV4Usage,
 } from "@ai-sdk/provider";
 
-/** Map the AI SDK finish-reason vocabulary to the harness FinishReason. */
 export function mapFinishReason(reason: LanguageModelV4FinishReason): FinishReason {
   switch (reason.unified) {
     case "stop":
@@ -36,7 +26,6 @@ export function mapFinishReason(reason: LanguageModelV4FinishReason): FinishReas
   }
 }
 
-/** Map AI SDK usage (already disjoint by the provider converter) to harness counts. */
 export function mapUsage(usage: LanguageModelV4Usage): TokenUsage {
   const cacheRead = usage.inputTokens.cacheRead;
   const reasoning = usage.outputTokens.reasoning;
@@ -56,7 +45,6 @@ interface OpenBlock {
   name?: string;
 }
 
-/** Assemble the final ContentBlock for one open block. */
 function closeBlock(block: OpenBlock): Extract<StreamChunk, { type: "block-end" }>["block"] {
   switch (block.kind) {
     case "text":
@@ -73,14 +61,6 @@ function closeBlock(block: OpenBlock): Extract<StreamChunk, { type: "block-end" 
   }
 }
 
-/**
- * Consume the AI SDK stream and yield StreamChunks. The `finish` part closes
- * every open block, reports usage, and emits the terminal finish; an empty
- * `stop` completion maps to `EMPTY_RESPONSE`. A stream-level `error` part
- * aborts with `TRANSPORT`.
- * @param stream - the `doStream` result stream.
- * @returns harness chunks in order; the terminal `finish` is always last.
- */
 export async function* translate(
   stream: ReadableStream<LanguageModelV4StreamPart>,
 ): AsyncGenerator<StreamChunk, void> {
@@ -204,7 +184,6 @@ export async function* translate(
   throw new LlmError("AI SDK stream ended without a finish part", "STREAM_CLOSED");
 }
 
-/** Merge a complete tool-call part into the oldest buffered tool block. */
 function applyToolCall(part: LanguageModelV4ToolCall, toolQueue: OpenBlock[]): void {
   const block = toolQueue.shift();
   if (block === void 0) return;

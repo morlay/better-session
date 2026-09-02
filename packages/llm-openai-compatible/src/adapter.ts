@@ -1,16 +1,3 @@
-/**
- * `OpenAICompatibleAdapter`: a multi-provider harness adapter built on
- * `@ai-sdk/openai-compatible`. One instance serves every provider route in
- * the plugin's `providers` dict; profile facts arrive through a thunk resolved
- * once per operation, so the registering plugin owns validation, layering, and
- * credential policy, and a changed profile reaches the next request without a
- * restart. The SDK owns wire serialization and SSE parsing; this adapter owns
- * harness message conversion, sampling-default merging (via
- * `serialize.ts`), chunk translation (via `translate.ts`), and error
- * normalization.
- * @module dsh-llm-openai-compatible/adapter
- */
-
 import {
   CONTEXT_WINDOW_EXCEEDED_CODE,
   QUOTA_EXCEEDED_CODE,
@@ -41,25 +28,22 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { serializeCallOptions, serializeCallOptionsWithImages } from "./serialize.ts";
 import { translate } from "./translate.ts";
 
-/** Default maximum idle interval while an adapter stream read is outstanding. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
-/** Default combined request/response context capacity for unconfigured models. */
+
 export const DEFAULT_CONTEXT_WINDOW = 262_144;
-/** Default per-request output-token cap for unconfigured models. */
+
 export const DEFAULT_MAX_TOKENS = 32_768;
-/** Default bound on accumulated base64 image payload per request. */
+
 export const DEFAULT_MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024;
-/** Code stamped on the idle-watchdog timeout reason. */
+
 export const STREAM_IDLE_TIMEOUT_CODE = "LLM_STREAM_IDLE_TIMEOUT";
-/** Code stamped on the whole-request deadline timeout reason. */
+
 export const REQUEST_TIMEOUT_CODE = "LLM_REQUEST_TIMEOUT";
-/** The provider options key the SDK forwards into the request body. */
+
 export const PROVIDER_OPTIONS_KEY = "openai-compatible";
 
-/** Selectable reasoning effort levels for one provider route. */
 export type ReasoningEffort = "off" | "low" | "high" | "max";
 
-/** One validated catalog model of a provider route. */
 export interface ResolvedModelProfile {
   id: string;
   name?: string;
@@ -67,22 +51,16 @@ export interface ResolvedModelProfile {
   contextWindow?: number;
   maxTokens?: number;
   inputModalities: readonly ModelModality[];
-  /**
-   * Declared reasoning efforts: key = selectable level, value = wire
-   * `reasoning_effort` spelling. `false` rejects the capability outright;
-   * absent means the model carries no reasoning metadata. A `null` wire
-   * spelling (only legal for `off`) means "omit the field".
-   */
+
   reasoningEfforts?: false | Partial<Record<ReasoningEffort, string | null>>;
 }
 
-/** One validated provider route profile, detached and ready for per-request reads. */
 export interface ResolvedProviderProfile {
   provider: string;
   displayName: string;
-  /** Credential reference; absence means the route sends no authorization header. */
+
   apiKeyEnv?: CredentialRef;
-  /** Required endpoint base; requests hit `${baseURL}/chat/completions`. */
+
   baseURL: string;
   headers?: Readonly<Record<string, string>>;
   // === sampling defaults (request-level values win) ===
@@ -92,7 +70,7 @@ export interface ResolvedProviderProfile {
   presencePenalty?: number;
   frequencyPenalty?: number;
   seed?: number;
-  /** Deployment default reasoning level; omission keeps the provider default. */
+
   reasoning?: ReasoningEffort;
   // === model catalog ===
   models: readonly ResolvedModelProfile[];
@@ -101,47 +79,33 @@ export interface ResolvedProviderProfile {
   // === transport ===
   maxRequestImageBytes: number;
   streamIdleTimeoutMs: number;
-  /** Whole-request deadline in milliseconds; unset arms no overall timer. */
+
   timeoutMs?: number;
   retryPolicy: ResolvedRetryPolicy;
 }
 
-/** Constructor options for {@link OpenAICompatibleAdapter}: the hooks the plugin owns. */
 export interface OpenAICompatibleAdapterOptions {
-  /** Current validated profiles by provider route; called once per operation. */
   profiles: () => ReadonlyMap<string, ResolvedProviderProfile>;
-  /**
-   * Resolve the credential for one already-resolved profile; called once per
-   * stream call and frozen for that call. `undefined` means the route sends no
-   * authorization header (an unauthenticated endpoint such as local Ollama).
-   */
+
   resolveApiKey: (
     provider: string,
     profile: ResolvedProviderProfile,
   ) => Promise<string | undefined>;
-  /** Resolve the harness anonymous user id for request attribution headers. */
+
   resolveUserId: () => string;
-  /** Resolve the optional durable attachment service at request time. */
+
   resolveAttachments?: () => AttachmentStore | undefined;
 }
 
-/** The wire usage shape the SDK converter receives (subset of the OpenAI shape). */
 interface WireUsageLike {
   prompt_tokens?: number | null | undefined;
   completion_tokens?: number | null | undefined;
   prompt_tokens_details?: { cached_tokens?: number | null | undefined } | null | undefined;
-  /** DeepSeek-dialect cache hits folded into prompt_tokens. */
+
   prompt_cache_hit_tokens?: number | null | undefined;
   completion_tokens_details?: { reasoning_tokens?: number | null | undefined } | null | undefined;
 }
 
-/**
- * Convert provider token accounting into disjoint AI SDK usage. OpenAI's
- * `prompt_tokens_details.cached_tokens` and the DeepSeek dialect's
- * `prompt_cache_hit_tokens` both report cache reads folded into
- * `prompt_tokens`; the harness convention is disjoint counts, so cache reads
- * are split out regardless of which field the endpoint used.
- */
 export function convertUsage(usage: WireUsageLike | null | undefined): LanguageModelV4Usage {
   if (usage == null) {
     return {
@@ -169,7 +133,6 @@ export function convertUsage(usage: WireUsageLike | null | undefined): LanguageM
   };
 }
 
-/** The first real blocks of one resolve: display + catalog metadata. */
 function modelInfo(profile: ResolvedProviderProfile, model: ResolvedModelProfile): LlmModelInfo {
   return {
     provider: profile.provider,
@@ -180,7 +143,6 @@ function modelInfo(profile: ResolvedProviderProfile, model: ResolvedModelProfile
   };
 }
 
-/** The harness reasoning info for one model, honoring its declared efforts. */
 function reasoningInfo(
   model: ResolvedModelProfile | undefined,
   defaultEffort: ReasoningEffort | undefined,
@@ -205,12 +167,6 @@ function reasoningInfo(
   };
 }
 
-/**
- * Map an HTTP status to a stable LlmError code.
- * @param status - status of a non-2xx provider response.
- * @param error - parsed provider error body, when available.
- * @returns the normalized harness error code.
- */
 export function httpErrorCode(
   status: number,
   error?: { code?: unknown; type?: unknown; message?: unknown },
@@ -228,7 +184,6 @@ export function httpErrorCode(
   return `HTTP_${status}`;
 }
 
-/** Parse a provider error body out of an API-call error's JSON response body. */
 function providerErrorBody(
   error: APICallError,
 ): { code?: unknown; type?: unknown; message?: unknown } | undefined {
@@ -243,19 +198,12 @@ function providerErrorBody(
   }
 }
 
-/** Extract a provider-issued request id from response headers when present. */
 function requestId(headers: Record<string, string> | undefined): ProviderRequestId | undefined {
   if (headers === void 0) return void 0;
   const value = headers["x-request-id"] ?? headers["x-openai-compatible-request-id"];
   return value === void 0 || value.length === 0 ? void 0 : ProviderRequestId(value);
 }
 
-/**
- * Multi-provider adapter. Each operation reads the current profiles, so a
- * configuration change reaches the next request without a restart; the
- * underlying SDK provider instance is cached per resolved profile and rebuilt
- * when the profile object changes.
- */
 export class OpenAICompatibleAdapter extends LlmAdapter {
   private readonly config: OpenAICompatibleAdapterOptions;
   private readonly sdkProviders = new Map<ResolvedProviderProfile, Map<string, LanguageModelV4>>();
@@ -265,7 +213,6 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
     this.config = config;
   }
 
-  /** The profile for one route, or the not-owned failure. */
   private profileOf(provider: string): ResolvedProviderProfile {
     const profile = this.config.profiles().get(provider);
     if (profile === void 0)
@@ -276,7 +223,6 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
     return profile;
   }
 
-  /** The configured descriptor for one exact route/model pair; unlisted ids pass through. */
   private modelOf(
     profile: ResolvedProviderProfile,
     model: string,
@@ -284,7 +230,6 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
     return profile.models.find((entry) => entry.id === model);
   }
 
-  /** The SDK chat model for one route/model, cached per resolved profile. */
   private sdkModel(profile: ResolvedProviderProfile, modelId: string): LanguageModelV4 {
     let byModel = this.sdkProviders.get(profile);
     if (byModel === void 0) {
@@ -456,7 +401,6 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
     }
   }
 
-  /** Normalize an SDK/transport failure into a harness LlmError. */
   private normalizeTransportError(error: unknown, profile: ResolvedProviderProfile): LlmError {
     if (error instanceof LlmError) return error;
     if (APICallError.isInstance(error)) {

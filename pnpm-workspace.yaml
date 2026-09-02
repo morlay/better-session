@@ -1,16 +1,16 @@
 packages:
-  - apps/*
-  - packages/*
   - vendor/deepseek-harness/vendor/*
   - vendor/deepseek-harness/packages/*/*
   - vendor/deepseek-harness/native/landlock-run
   - vendor/deepseek-harness/native/landlock-run/packages/*
   - vendor/deepseek-harness/apps/*
+  - devpackages/*
+  - packages/*
+  - apps/*
 
 linkWorkspacePackages: true
+hoistWorkspacePackages: true
 autoInstallPeers: true
-nodeLinker: hoisted
-injectWorkspacePackages: true
 
 allowBuilds:
   "@deepseek-ai/dsh-subprocess-local": true
@@ -23,8 +23,3 @@ allowBuilds:
   protobufjs: true
 
 minimumReleaseAge: 0
-
-overrides:
-  "@deepseek-ai/dsh-session": "workspace:*"
-  "@deepseek-ai/dsh-brand": "workspace:*"
-  "@deepseek-ai/cordis": "workspace:*"

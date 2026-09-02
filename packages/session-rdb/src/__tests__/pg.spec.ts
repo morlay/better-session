@@ -1,19 +1,3 @@
-/**
- * PostgreSQL backend contract tests against a real dev instance (compose).
- *
- * Isolation unit is a dedicated database per fixture (created/dropped through
- * an admin connection), so each contract case starts from a truly empty store —
- * the same "fresh, empty backend" guarantee the SQLite spec gets from `:memory:`
- * / a temp file. The suite skips unless `TEST_PG_URL` is set; `just pg-test`
- * starts the compose service and points the variable at it.
- *
- * The PostgreSQL backend commits each append in ONE transaction (no SQLite
- * `BEGIN IMMEDIATE` / busy-timeout torn-tail window), so it structurally cannot
- * produce a torn tail — the coordinator contract's torn-tail case therefore
- * asserts `corruptTail` is absent rather than injecting one.
- * @module @morlay/session-rdb/tests/pg
- */
-
 import { randomUUID } from "node:crypto";
 import { describe } from "vitest";
 import { Client } from "pg";
@@ -24,11 +8,9 @@ import SessionPersistenceRdb from "../index.ts";
 import { runPersistenceContract } from "./testing/contract.ts";
 import { runCoordinatorContract, type CoordinatorFixture } from "./testing/coordinator-contract.ts";
 
-/** Admin connection string — the `postgres` database, used to create/drop test databases. */
 const ADMIN_URL =
   process.env.TEST_PG_URL ?? "postgres://postgres:postgres@localhost:25433/postgres";
 
-/** A dedicated empty database for one contract case/fixture, plus its teardown. */
 async function createTestDatabase(): Promise<{
   connectionString: string;
   drop: () => Promise<void>;

@@ -42,10 +42,10 @@ just custom::bundle # 本地 GUI 打包
   `devDependencies`（测试用，如 `dsh-token-meter`、`dsh-session-projection`）。
 - **类型安全**：`strict: true` + `noUncheckedIndexedAccess` + `skipLibCheck`。
   跨边界 id 使用 branded 类型（如 `SessionId`），不做裸 `string`。
-- **公开 API 用 JSDoc 说明**（含 `@param` / `@returns` / `@internal`）；
-  注释与文档贴近代码，一句话一个要点。
 - **测试描述行为，不描述实现**：行为变更必须连同测试一起改。
 - 文件以单个换行结尾。
+- **请勿在注释里做设计说明**
+- **不要使用 JSDoc**
 
 ## 测试约定
 

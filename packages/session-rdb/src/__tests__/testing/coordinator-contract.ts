@@ -1,14 +1,4 @@
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
-/**
- * Shared write-path orchestration contract for backends using {@link PersistenceCoordinator}.
- * Unlike the public storage-semantics suite in `contract.ts`, it covers SessionStore event wiring,
- * lazy creation, fork seed persistence, four adoption/collision cases, crash-tail repair, reload,
- * flush, and disposal quiescence through public APIs rather than storage primitives.
- *
- * Each real backend supplies a shared storage scope and optional torn-tail injector; backend specs
- * retain only storage-mechanics tests, while these scenarios run once per backend.
- * @module @deepseek-ai/dsh-session-persistence/tests/coordinator-contract
- */
 
 import { describe, expect, it, vi } from "vitest";
 import { Context, type Fiber } from "@deepseek-ai/cordis";
@@ -23,35 +13,21 @@ import SessionStore, {
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { meta, oneTurnLog, appendLog } from "./contract.ts";
 
-/**
- * The backend-specific capabilities the orchestration suite needs beyond the
- * public service API. A fresh fixture is created per test (isolated storage);
- * the suite mounts/disposes backend instances on it and cleans it up at the end.
- */
 export interface CoordinatorFixture {
-  /** Mount the real backend through `ctx.plugin` over shared storage and return only that fiber. */
   mount: (ctx: Context) => Promise<Fiber>;
 
-  /**
-   * Inject a never-committed partial record after the durable region so `loadCore` reaches
-   * `commitRepair`. Omit only when the backend structurally cannot produce torn tails.
-   */
   corruptTail?: (id: SessionId, cwd: string | undefined) => Promise<void>;
 
-  /** Tear down the storage scope (remove the temp dir / file). */
   cleanup: () => Promise<void>;
 }
 
-/** A constant absolute cwd; jsonl keys directories off it, memory/sqlite ignore it. */
 const WORK = "/w";
 const OTHER = "/other";
 
-/** Append a whole event log to a live session, event by event (drives session/event). */
 function send(session: Session, events: readonly SessionEvent[]): void {
   appendLog(session, events);
 }
 
-/** A valid persisted log from immediately before messages gained wrappers and identities. */
 function legacyMessageLog(): SessionEvent[] {
   return [
     { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
@@ -119,7 +95,6 @@ function legacyMessageLog(): SessionEvent[] {
   ] as unknown as SessionEvent[];
 }
 
-/** A complete log in the durable event vocabulary of the react-loop refactor base. */
 function preReactLoopLog(): SessionEvent[] {
   const prompt = createUserMessage({
     content: [{ type: "text", text: "old prompt" }],
@@ -254,7 +229,6 @@ function preReactLoopLog(): SessionEvent[] {
   ] as unknown as Array<SessionEvent>;
 }
 
-/** A live session created inside its OWN fiber, so it survives a backend reload. */
 async function liveSessionInFiber(
   ctx: Context,
   id: string,
@@ -275,16 +249,11 @@ async function liveSessionInFiber(
   return session;
 }
 
-/**
- * Run the coordinator orchestration suite against a backend. `makeFixture()`
- * MUST return a fresh fixture (isolated storage) each call.
- */
 export function runCoordinatorContract(
   name: string,
   makeFixture: () => Promise<CoordinatorFixture>,
 ): void {
   describe(`PersistenceCoordinator orchestration: ${name}`, () => {
-    /** Mount SessionStore + a backend instance on a fresh context over the fixture's storage. */
     async function freshCtx(fix: CoordinatorFixture): Promise<{ ctx: Context; fiber: Fiber }> {
       const ctx = new Context();
       await ctx.plugin(SessionStore);

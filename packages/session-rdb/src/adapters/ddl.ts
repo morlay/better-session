@@ -1,11 +1,3 @@
-/**
- * 从方言无关的表描述生成建表 DDL（`CREATE TABLE IF NOT EXISTS` 与独立索引）。
- * SQLite 表附带 `STRICT`，PostgreSQL 用 `SERIAL` / `BIGINT` 等方言类型。
- * 这是实体的唯一 DDL 来源——不手写 SQL 字符串。
- *
- * @module @morlay/session-rdb/entities/ddl
- */
-
 import type { ColumnDef, TableDef } from "../entities/types.ts";
 
 export type Dialect = "sqlite" | "postgres";
@@ -45,7 +37,6 @@ function columnSql(dialect: Dialect, c: ColumnDef): string {
   return sql;
 }
 
-/** 一张表的 `CREATE TABLE IF NOT EXISTS`（表级约束内联在列清单末尾）。 */
 export function createTableSql(dialect: Dialect, def: TableDef, schema?: string): string {
   const parts = def.columns.map((c) => columnSql(dialect, c));
   for (const ck of def.checks ?? []) parts.push(`CHECK (${ck.expression})`);
@@ -60,7 +51,6 @@ export function createTableSql(dialect: Dialect, def: TableDef, schema?: string)
   return `CREATE TABLE IF NOT EXISTS ${qualified} (\n  ${parts.join(",\n  ")}\n)${strict}`;
 }
 
-/** 一张表的独立索引语句（两方言索引 DDL 相同，无需 dialect 参数）。 */
 export function createIndexSql(def: TableDef, name: string, schema?: string): string {
   const idx = def.indexes?.find((i) => i.name === name);
   if (idx === undefined) throw new Error(`unknown index "${name}" on table "${def.name}"`);
@@ -73,7 +63,6 @@ export function createIndexSql(def: TableDef, name: string, schema?: string): st
     .join(", ")})`;
 }
 
-/** 一组表的全部建表语句（每表一条 CREATE TABLE + 每条索引）。 */
 export function createTablesSql(
   dialect: Dialect,
   defs: readonly TableDef[],

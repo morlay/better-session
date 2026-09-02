@@ -17,15 +17,25 @@
     "url": "https://github.com/morlay/session-rdb.git"
   },
   "files": [
-    "lib",
-    "cordis.patch.yml"
+    "dist",
+    "src",
+    "cordis.patch.yml",
+    "!**/__tests__"
   ],
   "type": "module",
   "exports": {
-    ".": "./dist/index.mjs",
-    "./invariant": "./dist/invariant.mjs",
+    ".": "./src/index.ts",
+    "./invariant": "./src/invariant.ts",
     "./package.json": "./package.json",
-    "./cordis.patch.yml": "cordis.patch.yml"
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./invariant": "./dist/invariant.mjs",
+      "./package.json": "./package.json",
+      "./cordis.patch.yml": "./cordis.patch.yml"
+    }
   },
   "scripts": {
     "build": "pnpm exec tsdown",

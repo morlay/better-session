@@ -1,16 +1,3 @@
-/**
- * Session 导入：把 `session.export` 产出的 zip（内含 `session.jsonl` raw
- * artifact）解析回会话并落库。与导出（`toJsonlArtifact` / `readRaw`）互为
- * 逆操作：header 行 + 每事件一行（chunk 打包行展开、`sourceEventSeqs`
- * 区间展开），坐标与上游 JSONL 后端物理布局一致。
- *
- * HTTP 端点 `/api/session.import`（webServer exact route）接收 POST JSON
- * 信封 `{ zip: <base64> }`，鉴权复用 connection 的请求拒绝策略；解压后
- * 以**新 id**（`session-<uuid>`）落库——导入永远不覆盖既有会话。
- *
- * @module @morlay/session-rdb/import
- */
-
 import { randomUUID } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
 import { SessionLogOffset, decodeSeqRanges, decodeStorageRecord } from "@deepseek-ai/dsh-session";
@@ -20,24 +7,12 @@ import { unzipSync } from "fflate";
 import { replaceLiveSessionLog } from "./branch.ts";
 import type { SessionPersistenceRdb } from "./index.ts";
 
-/** 导入 zip 内 raw artifact 的固定文件名（与导出 `readRaw` 一致）。 */
 export const SESSION_LOG_ARTIFACT_FILENAME = "session.jsonl";
 
-/** 导入端点路径（`/api` 前缀下与导出的 exact route 并列）。 */
 export const SESSION_IMPORT_PATH = "/api/session.import";
 
-/** POST 信封的 zip 字段上限（base64 展开前）。 */
 const MAX_IMPORT_ZIP_BYTES = 64 * 1024 * 1024;
 
-/**
- * 展开一行 JSONL 的 storage-form provenance：`sourceEventSeqs` 的区间数组
- * （`[start, end]` 对）还原为 `SessionSeq[]`。与上游 JSONL 后端的
- * `expandProvenanceFromStorage` 语义一致；无 `sourceEventSeqs` 的记录原样
- * 返回。
- * @param parsed - 一行 `JSON.parse` 结果。
- * @returns 展开后的记录。
- * @throws 记录不是对象、seq 非法或区间畸形时抛错（导入的损坏输入拒绝）。
- */
 export function expandProvenanceFromStorage(parsed: unknown): unknown {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new TypeError("imported session records must be objects");
@@ -53,14 +28,6 @@ export function expandProvenanceFromStorage(parsed: unknown): unknown {
   };
 }
 
-/**
- * 解析导入的 JSONL 文本：首行必须是 `type: 'session'` 的 header 记录
- * （`seedLength` 携带继承前缀长度），后续每行一个存储记录（chunk 打包行
- * 展开为多个 `assistant/chunk` 事件）。
- * @param content - JSONL 文本。
- * @returns 会话元数据（含继承前缀长度）与展开后的完整事件列表。
- * @throws 首行缺失/畸形、任一事件行损坏时抛错（整体拒绝，不落库）。
- */
 export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
   events: SessionEvent[];
 } {
@@ -86,7 +53,10 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
     throw new Error("imported session log has an invalid header line");
   }
   const seedLength = header["seedLength"];
-  if (seedLength !== undefined && (!Number.isSafeInteger(seedLength) || (seedLength as number) < 0)) {
+  if (
+    seedLength !== undefined &&
+    (!Number.isSafeInteger(seedLength) || (seedLength as number) < 0)
+  ) {
     throw new Error("imported session log has an invalid seedLength");
   }
   const events: SessionEvent[] = [];
@@ -113,6 +83,9 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
   }
   const origin = header["origin"];
   const delegationDepth = header["delegationDepth"];
+  // 继承前缀长度不得超过事件总数（上游 load 判损坏）；导出已收缩，此处
+  // 防御性收缩非自洽的 artifact。
+  const inheritedEventCount = Math.min((seedLength as number | undefined) ?? 0, events.length);
   return {
     meta: {
       version: header["version"] as number,
@@ -129,18 +102,11 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
         : {}),
       ...(typeof header["agentPreset"] === "string" ? { agentPreset: header["agentPreset"] } : {}),
     },
-    inheritedEventCount: SessionLogOffset((seedLength as number | undefined) ?? 0),
+    inheritedEventCount: SessionLogOffset(inheritedEventCount),
     events,
   };
 }
 
-/**
- * 解压导入的 zip 并解析其 raw artifact。zip 内必须含 `session.jsonl`；
- * 其余条目（`subagents/*`、`media/*`）当前不导入。
- * @param zip - zip 字节。
- * @returns 解析出的会话元数据与事件。
- * @throws zip 损坏或缺失 artifact 时抛错。
- */
 export function parseImportZip(zip: Uint8Array): SessionStorageMetadata & {
   events: SessionEvent[];
 } {
@@ -157,24 +123,6 @@ export function parseImportZip(zip: Uint8Array): SessionStorageMetadata & {
   return parseJsonlArtifact(new TextDecoder().decode(artifact));
 }
 
-/**
- * 导入落库：把解析出的会话写入持久化后端。
- * - `targetId` 为 undefined → 以新 id（`session-<uuid>`）导入（`create` +
- *   `append`）；
- * - `targetId` 指定 → **覆盖**该会话：先 `rewind(-1)` 清空其事件 log
- *   （live/cold 两条路径的 coordinator 状态与内存 log 一并同步），再
- *   `append` 导入的事件（append 的 upsert 会刷新 header 列为导入值，id
- *   保留目标会话）。覆盖后若该会话仍 live，把导入事件**同步回 live 内存
- *   log**（`observeSession` 优先读 live 快照，不同步则 UI 刷新重读仍命中
- *   空/残缺数据）。用于「导入到当前会话」的覆盖语义。
- * @param persistence - RDB 持久化后端。
- * @param branch - sessionBranch 服务（覆盖路径需要 rewind；缺失抛错）。
- * @param imported - 解析出的会话元数据与事件。
- * @param targetId - 覆盖目标；省略则 mint 新 id。
- * @param sessions - 可选的 SessionStore（同步 live 内存用）。
- * @returns 实际落库的会话 id。
- * @throws 覆盖目标不存在（rewind 报 not found）或写入失败时抛错。
- */
 export async function persistImport(
   persistence: SessionPersistenceRdb,
   branch: { rewind(id: SessionId, toBoundary: number): Promise<unknown> } | undefined,
@@ -192,8 +140,8 @@ export async function persistImport(
     await persistence.create({ ...imported.meta, id }, imported.inheritedEventCount);
   }
   if (imported.events.length > 0) await persistence.append(id, imported.events);
-  // 覆盖语义的 live 同步：rewind 截断的 live log 由 append 后的同一批事件
-  // 补回（不发布、不落库），使 observeSession 的 live 快照与 DB 一致。
+  // 覆盖语义的 live 同步：rewind 截断的 live log 由同一批导入事件补回
+  // （不发布、不落库），使 observeSession 的 live 快照与 DB 一致。
   if (targetId !== undefined) {
     const live = sessions?.get(targetId);
     if (live !== undefined) replaceLiveSessionLog(live, imported.events);
@@ -201,29 +149,10 @@ export async function persistImport(
   return id;
 }
 
-/**
- * 注册 `/api/session.import` POST exact route：解压 zip、解析 JSONL 并落库。
- * 信封 `{ zip: <base64>, sessionId?: <string> }`：
- * - 无 `sessionId` → 以新 id（`session-<uuid>`）导入；
- * - 有 `sessionId` → **覆盖**该会话：rewind 清空其事件 log 后追加导入的
- *   事件（header 元数据以导入的 zip 为准，id 保留目标会话），用于
- *   「导入到当前会话」的覆盖语义。
- * 鉴权复用 connection 的请求拒绝策略（与导出的 `/api` 前缀一致）。
- *
- * webServer / connection 服务缺失时（headless 装配、纯后端测试）跳过注册
- * ——导入端点仅 web 环境需要，服务就绪后仍可单独调用。
- * @param ctx - 宿主上下文。
- * @param persistence - RDB 持久化后端（写入路径）。
- * @returns 路由 disposer（未注册时为 no-op）。
- */
-export function registerSessionImport(
-  ctx: Context,
-  persistence: SessionPersistenceRdb,
-): void {
-  // webServer / connection 由其他插件在 apply 时注册；本后端构造早于它们，
-  // 用 ctx.inject 延迟到两个服务就绪后再注册 exact route（注入回调返回的
-  // disposer 随 fiber 卸载自动回滚）。服务缺失（headless 装配、纯后端测试）
-  // 时注入永不触发——导入端点仅 web 环境需要，解析/落库纯函数仍可单测。
+export function registerSessionImport(ctx: Context, persistence: SessionPersistenceRdb): void {
+  // webServer / connection 由其他插件注册，本后端构造早于它们——用
+  // ctx.inject 延迟到两个服务就绪后再注册 exact route（disposer 随 fiber
+  // 卸载自动回滚）；服务缺失（headless 装配、纯后端测试）时注入永不触发。
   ctx.inject(["webServer", "connection"] as const, (webCtx) => {
     const webServer = webCtx.webServer as unknown as {
       register(route: {

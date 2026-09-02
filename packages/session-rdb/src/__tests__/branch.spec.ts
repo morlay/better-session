@@ -1,9 +1,3 @@
-/**
- * RDB 分支 provider（rewind / forkFrom / readBranchPrefix）的端到端测试：
- * 在真实 SQLite 后端上验证闭合边界定位、派生（纯 append）与截断式回退
- * （含 coordinator 状态同步）。
- */
-
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import { Context } from "@deepseek-ai/cordis";
@@ -28,7 +22,6 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
-/** A context with session store + SQLite backend + branch provider. */
 async function harness(): Promise<{
   ctx: Context;
   persistence: SessionPersistenceSqlite;
@@ -72,11 +65,28 @@ async function harness(): Promise<{
         states.set(id, { meta, cursor, materialized: true });
       }
     },
+    setCoordinatorSeedLength: (id, seedLength) => {
+      const withCoordinator = persistence as unknown as {
+        coordinator?: {
+          states?: Map<
+            SessionId,
+            | {
+                storage?: { inheritedEventCount: number };
+              }
+            | undefined
+          >;
+        };
+      };
+      const state = withCoordinator.coordinator?.states?.get(id);
+      if (state?.storage !== undefined && state.storage.inheritedEventCount > seedLength) {
+        // storage 对象可能被冻结（coordinator 发布路径）；整体替换而非改字段。
+        state.storage = { ...state.storage, inheritedEventCount: seedLength };
+      }
+    },
   });
   return { ctx, persistence, provider, dispose: () => fiber.dispose() };
 }
 
-/** 两轮闭合会话（轮 1: seq 0..5，轮 2: seq 6..11）。 */
 function twoTurnLog(): SessionEvent[] {
   const first = oneTurnLog();
   const second: SessionEvent[] = oneTurnLog().map(
@@ -91,7 +101,6 @@ function twoTurnLog(): SessionEvent[] {
   return [...first, ...second];
 }
 
-/** 创建并落盘一个会话（走持久化 API，会话保持 cold / ownerless）。 */
 async function createPersisted(
   ctx: Context,
   id: string,
@@ -461,6 +470,52 @@ describe("rewind", () => {
       expect(snapshot.header.id).toBe("s1");
       const after = await persistence.load(SessionId("s1"));
       expect(after.events).toHaveLength(0);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("shrinks the inherited prefix length when rewind cuts into the seed", async () => {
+    // fork 派生会话（seeded）：rewind 截断进入继承前缀后，`f_seed_length`
+    // 必须收缩到保留事件数——否则存储出现「继承前缀超过存储事件数」的矛盾
+    // （上游 load 拒绝），且下一次 append 的 upsert 会把旧值写回固化。
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      await createPersisted(ctx, "src", twoTurnLog());
+      await provider.forkFrom(SessionId("src"), {
+        atSeq: 6,
+        anchorMode: "before",
+        childSessionId: SessionId("child"),
+      });
+      // 子会话：继承前缀 6 + 无 seedSuffix = 6 事件（轮 1：seq 0..5）。
+      const before = await persistence.load(SessionId("child"));
+      expect(before.inheritedEventCount).toBe(6);
+      expect(before.events).toHaveLength(6);
+
+      // 截断到轮 1 的 user/message（seq 1，exclusive）：保留 turn/start @0。
+      const snapshot = await provider.rewind(SessionId("child"), 1);
+      expect(snapshot.header.id).toBe("child");
+      // 原始存储事件（loadStored 不补合成 closers）：仅 turn/start @0；
+      // 收缩后的继承前缀长度 = 保留事件数（存储自洽）。
+      const stored = await persistence.loadStored(SessionId("child"));
+      expect(stored).toBeDefined();
+      expect(stored!.events).toHaveLength(1);
+      expect(stored!.events[0]?.type).toBe("turn/start");
+      expect(stored!.inheritedEventCount).toBe(1);
+      // 继续 append 后 upsert 不再把旧 seedLength 写回（矛盾不复发）。
+      const continuation: SessionEvent[] = oneTurnLog().map(
+        (event) =>
+          ({
+            ...event,
+            seq: event.seq + 1,
+            time: event.time + 200,
+            data: { ...event.data, turn: 2 },
+          }) as SessionEvent,
+      );
+      await persistence.append(SessionId("child"), continuation);
+      const continued = await persistence.load(SessionId("child"));
+      expect(continued.events).toHaveLength(7);
+      expect(continued.inheritedEventCount).toBe(1);
     } finally {
       await dispose();
     }

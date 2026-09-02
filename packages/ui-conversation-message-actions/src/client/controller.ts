@@ -1,8 +1,3 @@
-/**
- * Browser controller for one session's Timeline projection and branch mutations.
- * 精简版：HTTP 拉取 timeline + 执行操作 + 会话导航（openWhenListed）。
- */
-
 import type { Context as ClientContext } from "@deepseek-ai/cordis";
 import type {
   ISessions,
@@ -24,13 +19,10 @@ import {
 export interface SessionEditorState {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
-  pending: VersionOperation | "cleanse" | "import" | null;
+  pending: VersionOperation | "import" | null;
   timeline: SessionEditorTimeline | null;
-  /** 会话历史加载失败（openState === "error"）——据此显示「清洗会话」入口。 */
-  sessionOpenError: boolean;
 }
 
-/** 业务 face；渲染层绑定到保留的 source compartment。 */
 export interface SessionEditorFace {
   hooks: { sessionEditor: ObservableSnapshot<SessionEditorState> };
   acquire(): () => void;
@@ -43,9 +35,7 @@ export interface SessionEditorFace {
   retry(turn: number, cascade: "truncate" | "preserve"): Promise<boolean>;
   reroll(): Promise<boolean>;
   rewind(toBoundary: number): Promise<boolean>;
-  /** 清洗当前会话的 provenance 坐标为稠密空间（修复历史加载失败）。 */
-  cleanse(): Promise<boolean>;
-  /** 用导出的 zip 覆盖当前会话内容（host 端 rewind 清空后追加导入事件）。 */
+
   importSession(file: File): Promise<boolean>;
   openVersion(sessionId: string): Promise<void>;
 }
@@ -60,14 +50,12 @@ function conversationRevision(snapshot: SessionSnapshot): string {
   return [snapshot.openState, snapshot.removed, snapshot.hasMore].join("|");
 }
 
-/** 一个会话共享一个稳定 controller（header + timeline 两个入口复用）。 */
 export class SessionEditorController {
   readonly store: SnapshotStore<SessionEditorState> = createSnapshotStore<SessionEditorState>({
     status: "idle",
     error: null,
     pending: null,
     timeline: null,
-    sessionOpenError: false,
   });
 
   readonly face: SessionEditorFace;
@@ -110,7 +98,6 @@ export class SessionEditorController {
       reroll: () => this.mutate({ action: "reroll", sessionId: this.sessionId }),
       rewind: (toBoundary) =>
         this.mutate({ action: "rewind", sessionId: this.sessionId, toBoundary }),
-      cleanse: () => this.mutate({ action: "cleanse", sessionId: this.sessionId }),
       importSession: (file) => this.importSession(file),
       openVersion: (sessionId) => this.openWhenListed(sessionId as SessionId),
     };
@@ -131,14 +118,7 @@ export class SessionEditorController {
     this.sessionSource = source;
     this.sessionRevision =
       source === undefined ? undefined : conversationRevision(source.getSnapshot());
-    // 历史加载失败标记：会话 snapshot 的 openState === "error" 时显示清洗入口。
-    this.store.update((state) => {
-      state.sessionOpenError = source?.getSnapshot().openState === "error";
-    });
     this.sessionSourceDispose = source?.subscribe(() => {
-      this.store.update((state) => {
-        state.sessionOpenError = source.getSnapshot().openState === "error";
-      });
       this.invalidate();
     });
   }
@@ -210,9 +190,8 @@ export class SessionEditorController {
   }
 
   private async mutate(operation: SessionEditorOperation): Promise<boolean> {
-    // 只拦截并发操作；不要求 status === "ready"——编辑/重试的数据（eventSeq/
-    // blockIndex/turn）来自客户端 conversation 节点，与 timeline 加载无关，
-    // status 停留在 idle（无 HeaderActions 触发 load）时也必须能发起请求。
+    // 只拦截并发操作；不要求 status === "ready"——编辑/重试的数据来自客户端
+    // conversation 节点，与 timeline 加载无关，status 为 idle 时也可发起请求。
     const current = this.store.getSnapshot();
     if (current.pending !== null) return false;
     this.store.update((state) => {
@@ -237,16 +216,14 @@ export class SessionEditorController {
         state.pending = null;
       });
       const result = value as SessionEditorOperationResult;
-      // edit / retry / reroll 就地编辑（不改变 session id），仅 fork 产生新 id
-      // 时才需要等列表发布并打开新版本。
+      // 仅 fork 产生新 id 时需要等列表发布并打开新版本；就地编辑不改 id。
       if (String(result.sessionId) !== String(this.sessionId)) {
         await this.openWhenListed(result.sessionId as SessionId);
         return true;
       }
-      // 就地编辑：rewind 会**删除**事件，客户端 conversation 事件流（append-only
-      // 发布）无法表达删除——seq 回退只做增量，被剪掉的旧节点会残留。
-      // 优先"会话级刷新"（resync：重置窗口并重新拉取历史，不整页重载）；
-      // resync 不可用时回退整页重载。
+      // 就地编辑：rewind 删除事件，append-only 事件流无法表达删除——seq
+      // 回退只做增量，被剪掉的旧节点残留。优先会话级刷新（resync 重置窗口
+      // 并重新拉取历史）；不可用时回退整页重载。
       const face = this.sessions.binding(this.sessionId)?.session;
       const resync = (face as unknown as { resync?: () => Promise<void> }).resync;
       if (resync !== undefined) {
@@ -270,13 +247,6 @@ export class SessionEditorController {
     }
   }
 
-  /**
-   * 读取 zip 文件并 POST `/api/session.import`（携带当前 sessionId 覆盖
-   * 当前会话内容）。成功后会话级 resync 刷新历史；resync 不可用（或失败）
-   * 时整页重载。与就地编辑（rewind）的刷新策略一致。
-   * @param file - 用户选择的导出 zip。
-   * @returns 是否成功。
-   */
   private async importSession(file: File): Promise<boolean> {
     const current = this.store.getSnapshot();
     if (current.pending !== null) return false;
@@ -292,7 +262,8 @@ export class SessionEditorController {
           const comma = dataUrl.indexOf(",");
           resolve(comma < 0 ? dataUrl : dataUrl.slice(comma + 1));
         };
-        reader.onerror = () => reject(reader.error ?? new Error("failed to read the selected file"));
+        reader.onerror = () =>
+          reject(reader.error ?? new Error("failed to read the selected file"));
         reader.readAsDataURL(file);
       });
       const response = await fetch("/api/session.import", {
@@ -311,10 +282,9 @@ export class SessionEditorController {
       this.store.update((state) => {
         state.pending = null;
       });
-      // 覆盖成功：会话 id 不变但事件被整体替换。**不能**走 resync——
-      // resync 重开事件流时 `observeSession` 仍优先读 live session（rewind
-      // 已把其内存 log 截断为空，append 只写 DB 不进 live），会再次读到
-      // 空/截断数据。整页重载让会话从 live 卸载，后续冷读 DB 完整数据。
+      // 覆盖成功但**不能**走 resync：resync 重开事件流时 observeSession 仍
+      // 优先读 live session（rewind 已截断其内存 log，append 只写 DB），会
+      // 再读到空/截断数据。整页重载让会话从 live 卸载，冷读 DB 完整数据。
       location.reload();
       return true;
     } catch (error) {
@@ -327,7 +297,6 @@ export class SessionEditorController {
     }
   }
 
-  /** 会话列表发布是导航的反应式依赖：等新版本出现在列表后再打开。 */
   private openWhenListed(sessionId: SessionId): Promise<void> {
     if (this.sessions.list.getSnapshot().byId[sessionId] !== undefined) {
       this.sessions.open(sessionId);

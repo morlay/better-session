@@ -1,8 +1,3 @@
-/**
- * 编排层测试：闭合轮次折叠 / 编辑面枚举（纯函数）与 retry / rewind / fork /
- * timeline 的端到端编排（装配真实 rdb 后端 + branch provider）。
- */
-
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import { Context } from "@deepseek-ai/cordis";
@@ -18,6 +13,7 @@ import { TokenMeter } from "@deepseek-ai/dsh-token-meter";
 import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
 import { type BranchTimeline } from "@morlay/session-branch";
 import SessionPersistenceSqlite from "../../../session-rdb/src/index.ts";
+import { parseJsonlArtifact } from "../../../session-rdb/src/import.ts";
 import { EmptySettings } from "../../../session-rdb/src/__tests__/testing/helpers.ts";
 import { meta, oneTurnLog } from "../../../session-rdb/src/__tests__/testing/contract.ts";
 import { SessionEditor, closedTurns, editableMessages, retryableTurns } from "../index.ts";
@@ -27,7 +23,6 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
-/** 装配：SessionStore + rdb persistence + sessionBranch + sessionEditor。 */
 async function harness(): Promise<{
   ctx: Context;
   editor: SessionEditor;
@@ -42,7 +37,6 @@ async function harness(): Promise<{
   return { ctx, editor: ctx.sessionEditor, dispose: () => fiber.dispose() };
 }
 
-/** 两轮闭合会话（轮 1: seq 0..5，轮 2: seq 6..11）。 */
 function twoTurnLog(): SessionEvent[] {
   const first = oneTurnLog();
   const second: SessionEvent[] = oneTurnLog().map(
@@ -818,11 +812,13 @@ describe("SessionEditor rewind/retry/fork", () => {
     }
   });
 
-  it("cleanseSession rewrites legacy provenance coordinates so the session reloads", async () => {
-    const { ctx, editor, dispose } = await harness();
+  it("exports a surface-corrupt session as a loadable artifact (export-time repair)", async () => {
+    const { ctx, dispose } = await harness();
     try {
-      // append 时事件 seq 是上游坐标（delta 被过滤后稠密重编号），replace 的
-      // sourceEventSeqs/surfaceOp 原样落库为上游坐标——历史加载失败的数据样式。
+      // 历史加载失败的数据样式：append 时事件 seq 是上游坐标（delta 被过滤
+      // 后稠密重编号），replace 的 sourceEventSeqs/surfaceOp 原样落库为上游
+      // 坐标；且 tool/result replace 指向的当前 surface 节点不是 tool/result
+      // （上游 assertToolResultRewrite 校验失败）——load 抛 invalid seed。
       const compacted: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
         {
@@ -830,7 +826,7 @@ describe("SessionEditor rewind/retry/fork", () => {
           seq: SessionSeq(1),
           time: 2,
           data: {
-            id: "cleanse-user",
+            id: "export-user",
             role: "user",
             content: [{ type: "text", text: "hi" }],
             source: { kind: "user" },
@@ -900,14 +896,21 @@ describe("SessionEditor rewind/retry/fork", () => {
           data: { turn: 2, reason: { kind: "completed" } },
         },
       ];
-      await createPersisted(ctx, "cleanse-me", compacted);
+      await createPersisted(ctx, "export-me", compacted);
 
-      // 清洗：坐标重写为稠密空间。
-      const { changed } = await editor.cleanseSession(SessionIdBrand("cleanse-me"));
-      expect(changed).toBeGreaterThan(0);
-
-      // 清洗后会话可完整加载。
-      const after = await ctx.sessionPersistence.load(SessionIdBrand("cleanse-me"));
+      // 导出即修复：readRaw 序列化前修复 surface 语义并重算 provenance，
+      // 产出的 artifact 无需任何修复即可导入。
+      const raw = await ctx.sessionPersistence.readRaw(SessionIdBrand("export-me"));
+      expect(raw).toBeDefined();
+      const parsed = parseJsonlArtifact(raw!.content);
+      // 导入以新 id 落库后会话可完整加载。
+      const importedId = SessionIdBrand("export-imported");
+      await ctx.sessionPersistence.create(
+        { ...parsed.meta, id: importedId },
+        parsed.inheritedEventCount,
+      );
+      await ctx.sessionPersistence.append(importedId, parsed.events);
+      const after = await ctx.sessionPersistence.load(importedId);
       expect(after.events.at(-1)?.type).toBe("turn/end");
       expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     } finally {

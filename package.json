@@ -12,6 +12,7 @@
   "devDependencies": {
     "@tsdown/css": "^0.22.14",
     "@types/node": "^26.4.0",
+    "devkit": "workspace:^",
     "js-yaml": "^5.4.1",
     "lightningcss": "^1.33.0",
     "oxfmt": "^0.65.x",
@@ -20,12 +21,12 @@
     "rolldown": "1.x",
     "tsdown": "0.22.x",
     "tsx": "4.x",
-    "turbo": "^2.10.12",
     "typescript": "7.x",
     "vite": "8.x",
     "vite-tsconfig-paths": "6.x",
     "vitest": "4.x",
-    "zod": "4.x"
+    "zod": "4.x",
+    "zx": "^8.8.5"
   },
-  "packageManager": "pnpm@12.2.1"
+  "packageManager": "pnpm@12.3.1"
 }

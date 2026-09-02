@@ -1,0 +1,8 @@
+{
+  "name": "devkit",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./tsconfig.json": "./tsconfig.json"
+  }
+}

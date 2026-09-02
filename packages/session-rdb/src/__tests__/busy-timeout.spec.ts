@@ -1,17 +1,3 @@
-/**
- * Cross-process busy-timeout contract: while one connection holds the write
- * lock, a second process's write either fails immediately (`busyTimeout: 0`,
- * SQLite's default — the session tail of the second `dsh` instance is silently
- * lost) or waits and succeeds (the default 5000ms — contention becomes a
- * queue). This is the durability guarantee behind the `busyTimeout` config:
- * two instances sharing one `sessions.sqlite` must never lose an append to a
- * momentary lock collision.
- *
- * The lock holder and the waiter are separate processes (a synchronous
- * `BEGIN IMMEDIATE` in the same process would block the event loop and could
- * never release the lock). The waiter script uses only `node:sqlite`, so it
- * runs from a plain temp file without the repository's module graph.
- */
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -30,7 +16,6 @@ async function freshDbPath(): Promise<string> {
   return join(dir, "sessions.db");
 }
 
-/** One child process: try `BEGIN IMMEDIATE` with a given busy timeout, report the outcome. */
 function tryWriteLock(
   path: string,
   busyTimeout: number,

@@ -1,14 +1,3 @@
-/**
- * SQLite 存储后端：在 `node:sqlite` `DatabaseSync` 之上实现 {@link Backend}。
- * drizzle 经 `drizzle-orm/node-sqlite` 驱动包装，查询语义与 PostgreSQL 后端
- * 共用同一套 {@link BackendTx} 原语。数据库打开/建表/schema 版本与身份校验
- * （{@link openDatabase}）也归本模块所有——`SqliteBackend` 的实现不跨文件。
- *
- * 事务：SQLite 单连接，`BEGIN IMMEDIATE` 提前获取写锁（受 `busy_timeout`
- * pragma 排队保护）；`COMMIT`/`ROLLBACK` 之后同一连接继续服务普通查询。
- * @module @morlay/session-rdb/sqlite
- */
-
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
@@ -40,31 +29,14 @@ import {
   type JournalMode,
 } from "./schema.ts";
 
-/** The drizzle handle over the open `node:sqlite` database, plus its raw client. */
 type SqliteDb = NodeSQLiteDatabase & { $client: DatabaseSync };
 
-/**
- * Process-wide SQLite write-transaction queues, keyed by database path.
- * SQLite allows exactly one writer, and the async transaction callback (see
- * {@link SqliteBackend.transaction}) must never overlap another connection's
- * `BEGIN IMMEDIATE` inside this process: the second, synchronous BEGIN would
- * busy-wait on the lock and freeze the event loop, so the lock holder could
- * never commit (deadlock until busy_timeout). Serializing per PATH removes the
- * gap entirely.
- *
- * The queue is per path, not global: two backends on DIFFERENT files have no
- * lock to contend for, so serializing them would be pure waste. Two instances
- * sharing one file (the supported multi-process deployment) still share one
- * queue, preserving the deadlock guarantee. `:memory:` databases are distinct
- * per connection but share the key — serializing them is harmless (tests).
- */
 const sqliteTxQueues = new Map<string, Promise<void>>();
 
-/** Run `fn` behind the write-transaction queue for one database path. */
 function enqueueSqliteTx<T>(path: string, fn: () => Promise<T>): Promise<T> {
   const tail = sqliteTxQueues.get(path) ?? Promise.resolve();
   const run = tail.then(fn);
-  // A failed transaction must not poison the queue for later ones.
+  // 失败的事务不得毒化后续队列。
   sqliteTxQueues.set(
     path,
     run.then(
@@ -75,13 +47,6 @@ function enqueueSqliteTx<T>(path: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/**
- * Exclusively create a missing database file with owner-only permissions.
- * Existing files retain their modes, and errors other than `EEXIST` propagate.
- * `DatabaseSync` reopens by path, so this does not protect confidentiality or
- * integrity when another principal can replace the database entry in its parent
- * directory.
- */
 async function createDatabaseFile(path: string): Promise<void> {
   try {
     const handle = await open(path, "wx", 0o600);
@@ -91,17 +56,6 @@ async function createDatabaseFile(path: string): Promise<void> {
   }
 }
 
-/**
- * Open the database and apply its schema and pragmas. An empty database with a
- * zero `user_version` is initialized at {@link SCHEMA_VERSION}; a nonempty
- * unversioned database and every other non-current version reject rather than
- * being migrated in place.
- * @param path - the SQLite database file to open (created when absent).
- * @param journalMode - validated journal pragma.
- * @param busyTimeout - milliseconds to wait for a contended write lock before
- *   failing with `SQLITE_BUSY`; `0` fails immediately (SQLite's default).
- * @returns the open handle with pragmas applied and all tables ensured.
- */
 export function openDatabase(
   path: string,
   journalMode: JournalMode,
@@ -123,18 +77,12 @@ function configureDatabase(
   journalMode: JournalMode,
   busyTimeout: number,
 ): void {
-  // The remaining raw statements are driver-level SQLite operations with no
-  // drizzle API: connection pragmas (foreign_keys / busy_timeout / journal_mode
-  // / user_version / application_id) and the sqlite_schema system-table probe.
+  // 其余是驱动级 SQLite 操作（无 drizzle API）：连接 pragma 与 sqlite_schema 探测。
   db.exec("PRAGMA foreign_keys = ON");
-  // The busy timeout must precede every lock acquisition (the initialization
-  // transaction below, and each write transaction in the backend) so a
-  // contended database queues instead of failing one process's writes outright.
+  // busy_timeout 必须先于一切锁获取（初始化事务与每次写事务）。
   db.exec(`PRAGMA busy_timeout = ${busyTimeout}`);
   const dbx = drizzle({ client: db });
-  // Initialization runs in ONE drizzle transaction (`BEGIN IMMEDIATE` acquires
-  // the write lock up front). Validate while holding the write lock so no other
-  // connection can change schema ownership between inspection and init.
+  // 初始化在单个 `BEGIN IMMEDIATE` 事务内完成，持写锁校验 schema 归属。
   dbx.transaction(
     (tx) => {
       const { user_version: onDisk } = tx.get(sql`PRAGMA user_version`) as {
@@ -170,9 +118,6 @@ function configureDatabase(
       for (const statement of createTablesSql("sqlite", sqliteTableDefs)) {
         tx.run(sql.raw(statement));
       }
-      // The store identity row comes from the same drizzle table object; the
-      // OR-IGNORE semantics are drizzle's `onConflictDoNothing` (the singleton
-      // row already exists after the first open).
       tx.insert(tPersistenceState)
         .values({ fSingleton: 1, fStoreId: randomUUID() })
         .onConflictDoNothing()
@@ -184,27 +129,21 @@ function configureDatabase(
     },
     { behavior: "immediate" },
   );
-  // The validated union is safe to interpolate into a non-bindable PRAGMA.
-  // Apply it only after ownership validation and initialization commit.
+  // journal_mode 不可绑定，经校验后的联合可直接插值；在归属校验与初始化
+  // 提交之后应用。
   db.exec(`PRAGMA journal_mode = ${journalMode.toUpperCase()}`);
 }
 
-/** SQLite 后端的打开参数（来自配置的 sqlite 分支）。 */
 export interface SqliteBackendOptions {
   path: string;
   journalMode: JournalMode;
   busyTimeout: number;
 }
 
-/**
- * SQLite 存储后端。打开时创建目录/文件（owner-only）、应用 pragma 与 DDL、
- * 校验 schema 版本/应用身份并读取 store id。
- */
 export class SqliteBackend implements Backend {
   readonly kind = "sqlite" as const;
   storeIdentity!: string;
 
-  /** The resolved database path (queue key); set by {@link open}. */
   private dbPath = "";
   private db!: SqliteDb;
 
@@ -218,13 +157,9 @@ export class SqliteBackend implements Backend {
       await mkdir(dirname(actual), { recursive: true, mode: 0o700 });
       await createDatabaseFile(actual);
     }
-    // The initialization transaction inside openDatabase is a synchronous
-    // `BEGIN IMMEDIATE`, so it must queue behind the same per-path write queue
-    // as the backend's own transactions: if another instance (sharing the
-    // file) is mid-transaction and its async callback is yielding, a
-    // synchronous BEGIN here would busy-wait and freeze the event loop until
-    // busy_timeout — the other instance could never commit. Queuing turns that
-    // "open collides with an in-flight write" race into a queue wait.
+    // openDatabase 内的初始化事务是同步 `BEGIN IMMEDIATE`，须排进同一
+    // per-path 写队列——否则与进行中的写事务竞争会在持有锁的异步回调
+    // 让步期间忙等，冻结事件循环（死锁直到 busy_timeout）。
     await enqueueSqliteTx(actual, async () => {
       this.db = drizzle({
         client: openDatabase(actual, this.options.journalMode, this.options.busyTimeout),
@@ -256,8 +191,8 @@ export class SqliteBackend implements Backend {
   }
 
   async close(): Promise<void> {
-    // `open` may have failed before assigning `db` (e.g. the queued init threw);
-    // close must not crash the coordinator's dispose on top of that failure.
+    // open 可能未及赋值 db 就失败（队列内初始化抛错）；close 不得在
+    // coordinator 的 dispose 之上再崩。
     if (this.db === undefined) return;
     this.db.$client.close();
   }
@@ -268,9 +203,7 @@ export class SqliteBackend implements Backend {
       | undefined;
   }
 
-  async getSeqMapRows(
-    id: SessionId,
-  ): Promise<Array<{ fSequence: number; fOriginalSeq: number }>> {
+  async getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number }>> {
     return this.db
       .select({ fSequence: tSessionEvents.fSequence, fOriginalSeq: tSessionEvents.fOriginalSeq })
       .from(tSessionEvents)
@@ -293,21 +226,12 @@ export class SqliteBackend implements Backend {
   }
 
   async transaction<T>(fn: (tx: BackendTx) => Promise<T>): Promise<T> {
-    // drizzle's SQLite driver only supports SYNCHRONOUS transaction callbacks
-    // (an async callback is rejected at the type level), while the shared
-    // `BackendTx` interface is async because PostgreSQL is. The BEGIN/COMMIT/
-    // ROLLBACK statements below are therefore driver-level and unavoidable.
-    //
-    // The async transaction callback also yields microtask gaps while the write
-    // lock is held. A second connection in THIS process (another backend
-    // instance sharing the file) that synchronously executes `BEGIN IMMEDIATE`
-    // during such a gap would busy-wait on the lock and block the event loop,
-    // so the lock holder could never commit (deadlock until busy_timeout).
-    // Serializing the per-path write queue (see {@link enqueueSqliteTx})
-    // removes the gap entirely — SQLite has one writer anyway, and a separate
-    // process has its own event loop, so cross-process contention still
-    // resolves through busy_timeout. A backend on a DIFFERENT database file has
-    // no lock to contend for and is not serialized with this one.
+    // drizzle 的 SQLite 驱动只支持同步事务回调，而共享 BackendTx 接口因
+    // PostgreSQL 是异步的——BEGIN/COMMIT/ROLLBACK 语句因此走驱动层。
+    // 异步回调在持写锁期间让出微任务间隙：本进程内第二个连接此时同步
+    // `BEGIN IMMEDIATE` 会忙等并冻结事件循环（锁持有者无法提交，死锁直到
+    // busy_timeout）。per-path 写队列串行化消除该间隙——SQLite 本就单写者；
+    // 跨进程竞争仍经 busy_timeout 解决，不同数据库文件互不串行。
     return enqueueSqliteTx(this.dbPath, async () => {
       this.db.$client.exec("BEGIN IMMEDIATE");
       try {
@@ -315,13 +239,12 @@ export class SqliteBackend implements Backend {
         this.db.$client.exec("COMMIT");
         return result;
       } catch (error: unknown) {
-        // The DELETE+INSERT cannot collide; this rolls back a DB-level failure
-        // (disk full, etc.), unreachable in test.
+        // DELETE+INSERT 不会冲突；这里回滚 DB 级失败（磁盘满等），测试不可达。
         /* v8 ignore start */
         try {
           this.db.$client.exec("ROLLBACK");
         } catch {
-          // The original SQLite failure remains the actionable cause.
+          // 原始 SQLite 失败仍是可操作的根因。
         }
         throw error;
         /* v8 ignore stop */
@@ -329,14 +252,11 @@ export class SqliteBackend implements Backend {
     });
   }
 
-  /**
-   * SQLite is a single connection: after `BEGIN IMMEDIATE` every query on the
-   * same handle is inside the transaction, so the tx primitives are the same
-   * row primitives used by the non-transactional reads.
-   */
   private readonly tx: BackendTx = {
     upsertSession: (storage, incarnation) => this.upsertSession(storage, incarnation),
     getHead: (id) => this.getHead(id),
+    getSeedLength: (id) => this.getSeedLength(id),
+    updateSeedLength: (id, seedLength) => this.updateSeedLength(id, seedLength),
     insertEvents: (events) => this.insertEvents(events),
     insertBridges: (rows) => this.insertBridges(rows),
     updateHead: (id, headEventId, headSequence) => this.updateHead(id, headEventId, headSequence),
@@ -344,7 +264,6 @@ export class SqliteBackend implements Backend {
     deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(id, fromSequence),
     getPrevBridge: (id, sequence) => this.getPrevBridge(id, sequence),
     getLastBridge: (id) => this.getLastBridge(id),
-    updateBridgeFields: (id, sequence, fields) => this.updateBridgeFields(id, sequence, fields),
   };
 
   // --- row primitives (transaction-internal or standalone) ---
@@ -373,10 +292,25 @@ export class SqliteBackend implements Backend {
     return head;
   }
 
-  /**
-   * 单条多行 INSERT 的绑定参数上限（SQLite 默认 32766；`t_events` 10 列、
-   * `t_session_events` 5 列，按 10 列取 1000 行/批保证两表都安全）。
-   */
+  private async getSeedLength(id: SessionId): Promise<number | null> {
+    const row = this.db
+      .select({ fSeedLength: tSessions.fSeedLength })
+      .from(tSessions)
+      .where(eq(tSessions.fSessionId, id))
+      .get() as { fSeedLength: number | null } | undefined;
+    /* v8 ignore next -- rewind always materializes the row before reading the seed length */
+    if (row === undefined) throw new Error(`session "${id}" has no materialized row`);
+    return row.fSeedLength;
+  }
+
+  private async updateSeedLength(id: SessionId, seedLength: number): Promise<void> {
+    this.db
+      .update(tSessions)
+      .set({ fSeedLength: seedLength })
+      .where(eq(tSessions.fSessionId, id))
+      .run();
+  }
+
   private static readonly INSERT_BATCH_ROWS = 1000;
 
   private async insertEvents(events: EventInsert[]): Promise<void> {
@@ -384,9 +318,7 @@ export class SqliteBackend implements Backend {
     for (let i = 0; i < events.length; i += SqliteBackend.INSERT_BATCH_ROWS) {
       this.db
         .insert(tEvents)
-        .values(
-          events.slice(i, i + SqliteBackend.INSERT_BATCH_ROWS).map((event) => ({ ...event })),
-        )
+        .values(events.slice(i, i + SqliteBackend.INSERT_BATCH_ROWS).map((event) => ({ ...event })))
         .run();
     }
   }
@@ -459,7 +391,6 @@ export class SqliteBackend implements Backend {
       .get() as { fEventId: string; fSequence: number } | undefined;
   }
 
-  /** The joined event-row projection shared by whole-log and suffix reads. */
   private eventRows() {
     return this.db
       .select({
@@ -477,23 +408,5 @@ export class SqliteBackend implements Backend {
       })
       .from(tSessionEvents)
       .innerJoin(tEvents, eq(tSessionEvents.fEventId, tEvents.fEventId));
-  }
-
-  private async updateBridgeFields(
-    id: SessionId,
-    sequence: number,
-    fields: {
-      fSurfaceOp?: string | null;
-      fOriginalSeq?: number;
-    },
-  ): Promise<void> {
-    this.db
-      .update(tSessionEvents)
-      .set({
-        ...(fields.fSurfaceOp === undefined ? {} : { fSurfaceOp: fields.fSurfaceOp }),
-        ...(fields.fOriginalSeq === undefined ? {} : { fOriginalSeq: fields.fOriginalSeq }),
-      })
-      .where(and(eq(tSessionEvents.fSessionId, id), eq(tSessionEvents.fSequence, sequence)))
-      .run();
   }
 }

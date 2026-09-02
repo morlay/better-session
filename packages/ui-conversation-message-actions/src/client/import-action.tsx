@@ -1,20 +1,10 @@
-/**
- * 会话头部「导入会话」入口：导出按钮（session-log-download）旁注册到
- * `conversation.session.header.utilities` list 槽。点击选择 `session.export`
- * 产出的 zip，POST `/api/session.import` 携带当前 `sessionId` **覆盖**当前
- * 会话内容（host 端 rewind 清空后追加导入事件），成功后会话级 resync 刷新
- * 历史；resync 不可用时整页重载。注入面来自 `SessionEditorFace`
- * （hooks → `useSessionEditor`，方法 → `importSession`）。
- */
-
 import { useCallback, useRef, useState, type ReactElement } from "react";
 import { Button, IconProps } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { SessionEditorState } from "./controller.ts";
 
 export interface SessionImportActionProps {
-  /** inject hooks：订阅 sessionEditor 状态。 */
   useSessionEditor: <S>(sel: (s: SessionEditorState) => S) => S;
-  /** inject face：发起导入。 */
+
   importSession: (file: File) => Promise<boolean>;
 }
 
@@ -37,11 +27,6 @@ export const IconUpload = ({ size = 14, className }: IconProps) => (
   </svg>
 );
 
-/**
- * 渲染「导入会话」按钮：文件选择（zip）+ POST 覆盖 + 结果反馈。
- * @param props - 注入的 selector 钩子与导入方法。
- * @returns 按钮元素。
- */
 export function SessionImportAction({
   useSessionEditor,
   importSession,

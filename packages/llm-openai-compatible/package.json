@@ -17,13 +17,22 @@
   },
   "files": [
     "dist",
-    "cordis.patch.yml"
+    "src",
+    "cordis.patch.yml",
+    "!**/__tests__"
   ],
   "type": "module",
   "exports": {
-    ".": "./dist/index.mjs",
+    ".": "./src/index.ts",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./package.json": "./package.json",
+      "./cordis.patch.yml": "./cordis.patch.yml"
+    }
   },
   "scripts": {
     "build": "pnpm exec tsdown",

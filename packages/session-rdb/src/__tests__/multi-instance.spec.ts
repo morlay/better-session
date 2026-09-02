@@ -1,7 +1,3 @@
-/**
- * 多实例复现测试（临时）：两个 persistence 实例（两个 cordis Context / 两个
- * coordinator）共享同一 SQLite 文件时，同一个 session id 的并发写是否损坏。
- */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

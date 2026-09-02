@@ -1,10 +1,5 @@
 import type { TableDef } from "./types.ts";
 
-/**
- * `t_sessions` — 会话元数据（`SessionHeader` 列）+ playpen 风格 head 游标
- * （`f_head_event_id` / `f_head_sequence`，事务内维护，append 时提供 parent
- * 链与下一个 seq）。行的存在即 materialized 信号。
- */
 export const sessions: TableDef = {
   name: "t_sessions",
   columns: [

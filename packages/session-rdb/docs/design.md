@@ -18,7 +18,7 @@ packages/session-rdb/
 │   ├── write-path.md            # 写路径流程
 │   ├── read-path.md             # 读路径流程
 │   ├── branch.md                # 分支能力（forkFrom / rewind / timeline）
-│   ├── legacy-clean.md          # 旧数据修复（clean & reload）
+│   ├── legacy-clean.md          # 旧数据修复（导出即修复）
 │   ├── concurrency.md           # 并发写入者检测
 │   └── event-reconstruction.md  # 事件 id 关联与重建可行性分析
 ├── package.json                 # 包元数据；exports 指向 lib/ 产物
@@ -64,8 +64,8 @@ packages/session-rdb/
 5. **合成 closers 内存合成**：崩溃尾部修复不落库，不违反忠实存储（见
    [read-path.md](read-path.md)）。
 6. **SCHEMA_VERSION 门禁**：破坏性表结构变更必须 bump；表结构级升级走
-   一次性迁移脚本，clean & reload 只处理同版本内数据格式差异（见
-   [schema.md](schema.md) / [legacy-clean.md](legacy-clean.md)）。
+   一次性迁移脚本，同版本内数据格式差异（含 surface 语义损坏）在导出时
+   修复（导出即修复，见 [schema.md](schema.md) / [legacy-clean.md](legacy-clean.md)）。
 
 ## 文档导航
 
@@ -75,6 +75,6 @@ packages/session-rdb/
 | 写路径流程（appendBatch）                  | [write-path.md](write-path.md)                     |
 | 读路径流程（load / readFrom）              | [read-path.md](read-path.md)                       |
 | 分支能力（forkFrom / rewind / timeline）   | [branch.md](branch.md)                             |
-| 旧数据修复（clean & reload）               | [legacy-clean.md](legacy-clean.md)                 |
+| 旧数据修复（导出即修复）                   | [legacy-clean.md](legacy-clean.md)                 |
 | 并发写入者检测                             | [concurrency.md](concurrency.md)                   |
 | 事件 id 关联与重建可行性分析               | [event-reconstruction.md](event-reconstruction.md) |

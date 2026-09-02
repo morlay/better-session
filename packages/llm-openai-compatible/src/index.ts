@@ -1,16 +1,3 @@
-/**
- * Register a {@link OpenAICompatibleAdapter} for every route in the plugin's
- * `providers` dict on `ctx.llm`. Profile facts resolve per request over the
- * optional `llm-openai-compatible` user-settings section (`ctx.settings`), so
- * a changed base URL, catalog, sampling default, or key reaches the very next
- * request without restarting anything, while an in-flight stream keeps the
- * facts it started with. A changed *route set* (or a route's
- * registration-captured retry policy) re-registers the same adapter instance
- * in place, and the configurable-provider directory tracks the declared
- * routes so configuration surfaces can show and edit each profile.
- * @module @morlay/dsh-llm-openai-compatible
- */
-
 import type { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import {
@@ -52,12 +39,10 @@ export const name = "llm-openai-compatible";
 export const inject = ["llm"];
 export const NS = "llm-openai-compatible";
 
-/** Selectable reasoning levels a profile or model may declare. */
 export const REASONING_LEVELS = ["off", "low", "high", "max"] as const;
-/** Accepted model input modalities. */
+
 export const MODEL_MODALITIES = ["text", "image"] as const;
 
-/** Source shape of one model catalog entry. */
 export interface ModelProfileSource {
   id: string;
   name?: string;
@@ -68,15 +53,13 @@ export interface ModelProfileSource {
   reasoningEfforts?: false | Partial<Record<ReasoningEffort, string | null>>;
 }
 
-/** Source shape of one provider route profile; the `providers` dict key IS the route. */
 export interface ProviderProfileSource {
-  /** Credential reference (environment-variable name); absence sends no authorization header. */
   apiKeyEnv?: string;
-  /** Name shown by configuration surfaces; defaults to the route key. */
+
   displayName?: string;
-  /** Required endpoint base; requests hit `${baseURL}/chat/completions`. */
+
   baseURL: string;
-  /** Extra request headers, merged under the mandatory attribution headers. */
+
   headers?: Record<string, string>;
   // === sampling defaults (request-level values win) ===
   temperature?: number;
@@ -85,22 +68,20 @@ export interface ProviderProfileSource {
   presencePenalty?: number;
   frequencyPenalty?: number;
   seed?: number;
-  /** Deployment default reasoning level; omission keeps the provider default. */
+
   reasoning?: ReasoningEffort;
-  /** This route's model catalog; omission serves an empty catalog (unlisted ids pass through). */
+
   models?: ModelProfileSource[];
   defaultContextWindow?: number;
   defaultMaxTokens?: number;
   maxRequestImageBytes?: number;
   streamIdleTimeoutMs?: number;
-  /** Whole-request deadline in milliseconds; unset arms no overall timer. */
+
   timeoutMs?: number;
   retryPolicy?: RetryPolicyConfig;
 }
 
-/** Plugin configuration: the provider routes this instance owns. */
 export interface Config {
-  /** Provider routes, keyed by route. An empty (or omitted) dict is the dormant posture. */
   providers?: Record<string, ProviderProfileSource>;
 }
 
@@ -139,7 +120,6 @@ const providerSchema = z.object({
   retryPolicy: RetryPolicySchema,
 });
 
-/** Runtime schema for {@link Config}. */
 export const Config: z<Config> = z.object({
   providers: z.dict(providerSchema).default({}),
 });
@@ -148,7 +128,6 @@ function isReasoningEffort(value: string): value is ReasoningEffort {
   return (REASONING_LEVELS as readonly string[]).includes(value);
 }
 
-/** Validate one model's declared reasoning efforts into detached form. */
 function resolveReasoningEfforts(
   provider: string,
   modelId: string,
@@ -182,7 +161,6 @@ function resolveReasoningEfforts(
   return { reasoningEfforts: declaration };
 }
 
-/** Validate and detach one provider route's model catalog. */
 function resolveModels(
   provider: string,
   models: readonly ModelProfileSource[] | undefined,
@@ -250,22 +228,12 @@ function resolveModels(
   });
 }
 
-/** A bounded finite number within `[lo, hi]`, or undefined. */
 function bounded(value: number | undefined, lo: number, hi: number): number | undefined {
   if (value === void 0) return void 0;
   if (!Number.isFinite(value) || value < lo || value > hi) return void 0;
   return value;
 }
 
-/**
- * The one explicit resolve step from a raw profile to validated connection
- * facts. Programmatic construction may bypass Schemastery normalization, so
- * every default and bound is re-judged here — for the composition entry at
- * load (fail loud) and for each settings snapshot at its first use.
- * @param provider - the route key owning this profile.
- * @param source - raw profile from config or a resolved settings snapshot.
- * @returns validated connection facts plus the credential reference.
- */
 export function resolveAdapterOptions(
   provider: string,
   source: ProviderProfileSource,
@@ -373,14 +341,6 @@ export function resolveAdapterOptions(
   };
 }
 
-/**
- * Validate profiles and return a detached route-keyed map suitable for
- * per-request reads. This is the one explicit resolve step, so an omitted dict
- * resolves to the empty (dormant) route set here rather than through a hidden
- * fallback.
- * @param providers - configured provider profiles keyed by route.
- * @returns validated profiles in configuration order.
- */
 export function resolveProfiles(
   providers: Readonly<Record<string, ProviderProfileSource>> | undefined,
 ): Map<string, ResolvedProviderProfile> {
@@ -395,18 +355,10 @@ export function resolveProfiles(
   return resolved;
 }
 
-/**
- * Reject a section this adapter could not serve. Registered as the settings
- * namespace's validator, so an unserviceable profile is refused where it is
- * written instead of being stored and then quietly disabling every route in
- * the namespace.
- * @param config - the resolved section to check.
- */
 export function assertServiceable(config: Config): void {
   resolveProfiles(config.providers);
 }
 
-/** The registry captures these per route; a change here must re-register. */
 function registrationFacts(profiles: ReadonlyMap<string, ResolvedProviderProfile>): unknown[] {
   return [...profiles.entries()]
     .map(([provider, profile]) => ({
@@ -417,13 +369,6 @@ function registrationFacts(profiles: ReadonlyMap<string, ResolvedProviderProfile
     .sort((left, right) => left.provider.localeCompare(right.provider));
 }
 
-/**
- * The configurable-provider directory: every route the current profiles
- * declare. A hand-declared route has no catalog entry, so without this it
- * would have no settings address and configuration surfaces could neither
- * show nor edit it. The profile half is unconditional, which keeps a route
- * already stored against a withheld provider editable and deletable.
- */
 function directoryEntries(profiles: ReadonlyMap<string, ResolvedProviderProfile>): {
   provider: string;
   displayName: string;
@@ -453,12 +398,11 @@ function directoryEntries(profiles: ReadonlyMap<string, ResolvedProviderProfile>
   return [...entries.values()];
 }
 
-/** Register one generic OpenAI-compatible adapter for all configured provider routes. */
 export function apply(ctx: Context, config: Config): void {
   let current = () => config;
   let lastRaw: Config | undefined;
   let memoized: Map<string, ResolvedProviderProfile> | undefined;
-  /** The resolved profiles for the current configuration, memoized by raw identity. */
+
   const profiles = (): ReadonlyMap<string, ResolvedProviderProfile> => {
     const raw = current();
     if (raw === lastRaw && memoized !== void 0) return memoized;
