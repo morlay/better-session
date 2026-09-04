@@ -1,186 +1,25 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
-import { Context } from "@deepseek-ai/cordis";
 import {
+  createPersisted,
+  harness,
+  meta,
+  oneTurnLog,
+  twoTurnLog,
   Session,
-  SessionId as SessionIdBrand,
+  SessionIdBrand,
   SessionSeq,
-  SessionStore,
+  TokenMeter,
+  parseJsonlArtifact,
   type SessionEvent,
-  type SessionHeader,
-} from "@deepseek-ai/dsh-session";
-import { TokenMeter } from "@deepseek-ai/dsh-token-meter";
-import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
-import { type BranchTimeline } from "@morlay/session-branch";
-import SessionPersistenceSqlite from "../../../session-rdb/src/index.ts";
-import { parseJsonlArtifact } from "../../../session-rdb/src/import.ts";
-import { EmptySettings } from "../../../session-rdb/src/__tests__/testing/helpers.ts";
-import { meta, oneTurnLog } from "../../../session-rdb/src/__tests__/testing/contract.ts";
-import { SessionEditor, closedTurns, editableMessages, retryableTurns } from "../index.ts";
+} from "@morlay/ui-conversation-message-actions/testing";
 
 const dirs: string[] = [];
 afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
-async function harness(): Promise<{
-  ctx: Context;
-  editor: SessionEditor;
-  dispose: () => Promise<void>;
-}> {
-  const ctx = new Context();
-  await ctx.plugin(EmptySettings);
-  await ctx.plugin(SessionStore);
-  new SessionProjectionRegistry(ctx);
-  const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path: ":memory:" });
-  await ctx.plugin(SessionEditor);
-  return { ctx, editor: ctx.sessionEditor, dispose: () => fiber.dispose() };
-}
-
-function twoTurnLog(): SessionEvent[] {
-  const first = oneTurnLog();
-  const second: SessionEvent[] = oneTurnLog().map(
-    (event) =>
-      ({
-        ...event,
-        seq: event.seq + 6,
-        time: event.time + 100,
-        data: { ...event.data, turn: 2 },
-      }) as SessionEvent,
-  );
-  return [...first, ...second];
-}
-
-async function createPersisted(
-  ctx: Context,
-  id: string,
-  events: readonly SessionEvent[],
-  header: SessionHeader = meta(id),
-): Promise<void> {
-  await ctx.sessionPersistence.create(header);
-  await ctx.sessionPersistence.append(SessionIdBrand(id), [...events]);
-}
-
-describe("closedTurns / editableMessages / retryableTurns", () => {
-  const log = twoTurnLog();
-
-  it("folds two complete turns", () => {
-    const turns = closedTurns(log);
-    expect(turns.map((t) => t.turn)).toEqual([1, 2]);
-    expect(turns[0]?.startSeq).toBe(0);
-    expect(turns[0]?.endSeq).toBe(5);
-    expect(turns[1]?.startSeq).toBe(6);
-    expect(turns[1]?.endSeq).toBe(11);
-  });
-
-  it("enumerates editable user/assistant text blocks", () => {
-    const blocks = editableMessages(closedTurns(log));
-    expect(blocks.filter((b) => b.kind === "user")).toHaveLength(2);
-    expect(blocks.filter((b) => b.kind === "assistant.response")).toHaveLength(2);
-  });
-
-  it("enumerates retryable turns with user previews", () => {
-    const turns = retryableTurns(closedTurns(log));
-    expect(turns.map((t) => t.turn)).toEqual([1, 2]);
-    expect(turns[0]?.preview).toBe("hi");
-  });
-});
-
-describe("SessionEditor rewind/retry/fork", () => {
-  it("retry truncates the original session in place (same session id)", async () => {
-    const { ctx, editor, dispose } = await harness();
-    try {
-      await createPersisted(ctx, "src", twoTurnLog());
-      const result = await editor.retry({
-        action: "retry",
-        sessionId: SessionIdBrand("src"),
-        turn: 2,
-        cascade: "truncate",
-      });
-      expect(result.sessionId).toBe(SessionIdBrand("src")); // 不改变 session id
-      expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
-
-      const after = await ctx.sessionPersistence.load(SessionIdBrand("src"));
-      // 截断到轮 1（turn/end @ 5），轮 2 及之后被抛弃；版本效果 ignorable 不落库。
-      expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-    } finally {
-      await dispose();
-    }
-  });
-
-  it("rewind truncates the original session and allows continuation", async () => {
-    const { ctx, editor, dispose } = await harness();
-    try {
-      await createPersisted(ctx, "src", twoTurnLog());
-      await editor.rewind(SessionIdBrand("src"), 5);
-      const after = await ctx.sessionPersistence.load(SessionIdBrand("src"));
-      expect(after.events).toHaveLength(6);
-      expect(after.events.at(-1)?.type).toBe("turn/end");
-      // 续写（coordinator 状态已同步）。
-      const continuation: SessionEvent[] = oneTurnLog().map(
-        (event) =>
-          ({
-            ...event,
-            seq: event.seq + 6,
-            time: event.time + 200,
-            data: { ...event.data, turn: 2 },
-          }) as SessionEvent,
-      );
-      await ctx.sessionPersistence.append(SessionIdBrand("src"), continuation);
-      expect(await ctx.sessionPersistence.load(SessionIdBrand("src"))).toMatchObject({});
-    } finally {
-      await dispose();
-    }
-  });
-
-  it("rewinds a live session in place (memory log truncated too)", async () => {
-    const { ctx, editor, dispose } = await harness();
-    try {
-      ctx.sessions.create(SessionIdBrand("live"), { meta: meta("live"), seed: [...twoTurnLog()] });
-      const live = ctx.sessions.get(SessionIdBrand("live"))!;
-      await ctx.sessions.flush(live);
-      await editor.rewind(SessionIdBrand("live"), 5);
-      // live 内存 log 与持久化一起截断，会话不释放、id 不变。
-      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-      expect(ctx.sessions.get(SessionIdBrand("live"))).toBe(live);
-    } finally {
-      await dispose();
-    }
-  });
-
-  it("retry on a live session keeps the version effect in memory but not in storage", async () => {
-    const { ctx, editor, dispose } = await harness();
-    try {
-      ctx.sessions.create(SessionIdBrand("live"), { meta: meta("live"), seed: [...twoTurnLog()] });
-      const live = ctx.sessions.get(SessionIdBrand("live"))!;
-      await ctx.sessions.flush(live);
-
-      const result = await editor.retry({
-        action: "retry",
-        sessionId: SessionIdBrand("live"),
-        turn: 2,
-        cascade: "truncate",
-      });
-      expect(result.sessionId).toBe(SessionIdBrand("live"));
-
-      // live 内存 log：截断前缀 + ignorable 版本效果（seq 6）。
-      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
-      expect(live.snapshotEvents()[6]?.type).toBe("session-branch/version");
-      // RDB canonical log：只有截断前缀（版本效果 ignorable 不落库）。
-      const backend = (
-        ctx.sessionPersistence as unknown as {
-          internals(): {
-            backend: { getHead(id: SessionIdBrand): Promise<{ fHeadSequence: number }> };
-          };
-        }
-      ).internals().backend;
-      const head = await backend.getHead(SessionIdBrand("live"));
-      expect(head.fHeadSequence).toBe(5);
-    } finally {
-      await dispose();
-    }
-  });
-
+describe("SessionEditor edit", () => {
   it("edits after an interrupted run (open turn with delta events) without misreading the stored head", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
@@ -284,78 +123,6 @@ describe("SessionEditor rewind/retry/fork", () => {
     }
   });
 
-  it("retry on a live session replays queued input through the live agent", async () => {
-    const { ctx, editor, dispose } = await harness();
-    try {
-      // 轮 1（seq 1..6）+ request/header（seq 0，在轮 1 内，截断后仍可解析模型）
-      // + 轮 2（seq 7..12）。
-      const first = oneTurnLog().map(
-        (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
-      );
-      const header: SessionEvent = {
-        type: "request/header",
-        seq: SessionSeq(0),
-        time: 1,
-        data: {
-          header: { config: { provider: "mock", model: "mock" } },
-          reason: "initial",
-        },
-      } as SessionEvent;
-      const second = oneTurnLog().map(
-        (e) =>
-          ({
-            ...e,
-            seq: e.seq + 7,
-            time: e.time + 100,
-            data: { ...e.data, turn: 2 },
-          }) as SessionEvent,
-      );
-      ctx.sessions.create(SessionIdBrand("live"), {
-        meta: meta("live"),
-        seed: [header, ...first, ...second],
-      });
-      const live = ctx.sessions.get(SessionIdBrand("live"))!;
-      await ctx.sessions.flush(live);
-
-      // mock agents：get 返回 live agent（记录 followup，不真正驱动模型）。
-      const followups: unknown[] = [];
-      const disposeAgents = ctx.provide("agents", {
-        get: (id: SessionIdBrand) =>
-          id === SessionIdBrand("live")
-            ? {
-                session: live,
-                followup: (message: unknown) => {
-                  followups.push(message);
-                },
-              }
-            : undefined,
-        create: async () => {
-          throw new Error("unused");
-        },
-        resume: async () => {
-          throw new Error("unused");
-        },
-      });
-
-      const result = await editor.retry({
-        action: "retry",
-        sessionId: SessionIdBrand("live"),
-        turn: 2,
-        cascade: "truncate",
-      });
-      // 就地：id 不变；重放排队到 live agent（turn 2 的输入）。
-      expect(result.sessionId).toBe(SessionIdBrand("live"));
-      expect(followups).toHaveLength(1);
-      // live log：截断前缀（header seq 0 + 轮 1 seq 1..6）+ ignorable
-      // 版本效果（seq 7，boundary = 轮 1 的 turn/end @ 6）。
-      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-      expect(live.snapshotEvents()[7]?.type).toBe("session-branch/version");
-      disposeAgents();
-    } finally {
-      await dispose();
-    }
-  });
-
   it("edits an assistant block on a live session (manualTurn lands, cursor synced)", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
@@ -441,6 +208,9 @@ describe("SessionEditor rewind/retry/fork", () => {
                 followup: (message: unknown) => {
                   followups.push(message);
                 },
+                whenIdle: async () => {},
+                inboxPending: false,
+                clearInbox: () => {},
               }
             : undefined,
         create: async () => {
@@ -468,102 +238,6 @@ describe("SessionEditor rewind/retry/fork", () => {
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0]);
       expect(live.snapshotEvents()[0]?.type).toBe("session-branch/version");
       disposeAgents();
-    } finally {
-      await dispose();
-    }
-  });
-
-  it("rewind resets the live agent's turn cursor so replay reuses the turn number", async () => {
-    const { ctx, editor, dispose } = await harness();
-    try {
-      const header: SessionEvent = {
-        type: "request/header",
-        seq: SessionSeq(0),
-        time: 1,
-        data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
-      } as SessionEvent;
-      const first = oneTurnLog().map(
-        (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
-      );
-      const second = oneTurnLog().map(
-        (e) =>
-          ({
-            ...e,
-            seq: e.seq + 7,
-            time: e.time + 100,
-            data: { ...e.data, turn: 2 },
-          }) as SessionEvent,
-      );
-      ctx.sessions.create(SessionIdBrand("live"), {
-        meta: meta("live"),
-        seed: [header, ...first, ...second],
-      });
-      const live = ctx.sessions.get(SessionIdBrand("live"))!;
-      await ctx.sessions.flush(live);
-
-      // mock 驻留 agent：phase.lastTurn = 2（编辑前游标），requestHeaderLogged = true。
-      const mockAgent: {
-        session: typeof live;
-        requestHeaderLogged: boolean;
-        phase: { lastTurn: number };
-        followup: () => void;
-      } = { session: live, requestHeaderLogged: true, phase: { lastTurn: 2 }, followup: () => {} };
-      const disposeAgents = ctx.provide("agents", {
-        get: (id: SessionIdBrand) => (id === SessionIdBrand("live") ? mockAgent : undefined),
-        create: async () => {
-          throw new Error("unused");
-        },
-        resume: async () => {
-          throw new Error("unused");
-        },
-      });
-
-      // retry turn 2（truncate → 截断到轮 1 末尾，保留轮 1 = turn 1）。
-      const result = await editor.retry({
-        action: "retry",
-        sessionId: SessionIdBrand("live"),
-        turn: 2,
-        cascade: "truncate",
-      });
-      expect(result.sessionId).toBe(SessionIdBrand("live"));
-      // 轮次游标重置为截断后最后 turn 号（轮 1 = 1）→ 重放 followup 会开
-      // turn 2（复用目标轮号），而不是递增出 turn 3。
-      expect(mockAgent.phase.lastTurn).toBe(1);
-      expect(mockAgent.requestHeaderLogged).toBe(false);
-      disposeAgents();
-    } finally {
-      await dispose();
-    }
-  });
-
-  it("fork derives a child at a closed boundary", async () => {
-    const { ctx, editor, dispose } = await harness();
-    try {
-      await createPersisted(ctx, "src", twoTurnLog());
-      const childId = await editor.fork(SessionIdBrand("src"), 6, SessionIdBrand("child"));
-      expect(childId).toBe(SessionIdBrand("child"));
-      const child = await ctx.sessionPersistence.load(childId);
-      expect(child.meta.parentSession).toBe(SessionIdBrand("src"));
-      expect(child.events).toHaveLength(12); // after 模式：包含轮 2
-    } finally {
-      await dispose();
-    }
-  });
-
-  it("timeline keeps a single root after in-place retry", async () => {
-    const { ctx, editor, dispose } = await harness();
-    try {
-      await createPersisted(ctx, "src", twoTurnLog());
-      await editor.retry({
-        action: "retry",
-        sessionId: SessionIdBrand("src"),
-        turn: 2,
-        cascade: "truncate",
-      });
-      const timeline: BranchTimeline = await editor.timeline(SessionIdBrand("src"));
-      expect(timeline.root.sessionId).toBe(SessionIdBrand("src"));
-      // 就地编辑不派生新会话：版本树保持单根。
-      expect(timeline.nodes).toHaveLength(1);
     } finally {
       await dispose();
     }
@@ -1018,6 +692,623 @@ describe("SessionEditor rewind/retry/fork", () => {
       const meter = new TokenMeter(ctx);
       const replayed = Session.create(SessionIdBrand("src"), [...continued.events]);
       expect(() => meter.measure(replayed)).not.toThrow();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("edits the second user message appended mid-turn in an open turn (agent-loop followup)", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合，且轮 3
+      // 内 agent 运行中追加了第二条 user/message（真实 agent-loop 的 followup
+      // 追加：turn/start → step/start → user/message → assistant/message →
+      // step/end → step/start → user/message → step/end，无 turn/end）。
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
+        { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
+        {
+          type: "user/message",
+          seq: SessionSeq(14),
+          time: 14,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        {
+          type: "assistant/message",
+          seq: SessionSeq(15),
+          time: 15,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: SessionSeq(16), time: 16, data: { turn: 3, step: 1 } },
+        { type: "step/start", seq: SessionSeq(17), time: 17, data: { turn: 3, step: 2 } },
+        {
+          type: "user/message",
+          seq: SessionSeq(18),
+          time: 18,
+          data: {
+            id: "turn3-followup",
+            role: "user",
+            content: [{ type: "text", text: "Llm 请求参数配置不完整" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: SessionSeq(19), time: 19, data: { turn: 3, step: 2 } },
+      ];
+      await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
+
+      // 编辑轮 3 内追加的第二条 user 消息（eventSeq 18）→ rewind 到该消息
+      // （exclusive drop 它及其后），重放编辑版。
+      const result = await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("src"),
+        eventSeq: 18,
+        blockIndex: 0,
+        text: "Llm 请求参数配置不完整（已编辑）",
+        cascade: "truncate",
+      });
+      expect(result.sessionId).toBe(SessionIdBrand("src"));
+      expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
+
+      // 真实落盘行：截断前缀（0..16，孤儿 step/start 17 被 balanceRewindPrefix
+      // 剔除——它配对的 step/end 19 已被 drop）；版本效果 ignorable 不落库；
+      // 被 drop 的旧 followup（seq 18）与 step/end（19）不在 log 中。
+      const backend = (
+        ctx.sessionPersistence as unknown as {
+          internals(): {
+            backend: {
+              getEventRows(
+                id: SessionIdBrand,
+              ): Promise<Array<{ fSequence: number; fType: string }>>;
+            };
+          };
+        }
+      ).internals().backend;
+      const rows = await backend.getEventRows(SessionIdBrand("src"));
+      expect(rows.map((r) => r.fSequence)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+      ]);
+      expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 17)).toBe(false);
+      expect(rows.some((r) => r.fType === "user/message" && r.fSequence === 18)).toBe(false);
+      expect(rows.some((r) => r.fType === "step/end" && r.fSequence === 19)).toBe(false);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("edits the first user message of an open turn and keeps the mid-turn followup in the replay", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // request/header（seq 0）+ 轮 1（seq 1..6 闭合）+ 轮 2（seq 7..12 闭合）
+      // + 轮 3 未闭合，轮 3 内 agent 运行中追加了第二条 user/message（followup）。
+      const header: SessionEvent = {
+        type: "request/header",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
+      } as SessionEvent;
+      const first = oneTurnLog().map(
+        (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
+      );
+      const second = oneTurnLog().map(
+        (e) =>
+          ({
+            ...e,
+            seq: e.seq + 7,
+            time: e.time + 100,
+            data: { ...e.data, turn: 2 },
+          }) as SessionEvent,
+      );
+      const openTail: SessionEvent[] = [
+        { type: "turn/start", seq: SessionSeq(13), time: 13, data: { turn: 3 } },
+        { type: "step/start", seq: SessionSeq(14), time: 14, data: { turn: 3, step: 1 } },
+        {
+          type: "user/message",
+          seq: SessionSeq(15),
+          time: 15,
+          data: {
+            id: "turn3-user",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        {
+          type: "assistant/message",
+          seq: SessionSeq(16),
+          time: 16,
+          data: {
+            turn: 3,
+            step: 1,
+            message: {
+              id: "turn3-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "partial" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: SessionSeq(17), time: 17, data: { turn: 3, step: 1 } },
+        { type: "step/start", seq: SessionSeq(18), time: 18, data: { turn: 3, step: 2 } },
+        {
+          type: "user/message",
+          seq: SessionSeq(19),
+          time: 19,
+          data: {
+            id: "turn3-followup",
+            role: "user",
+            content: [{ type: "text", text: "Llm 请求参数配置不完整" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: SessionSeq(20), time: 20, data: { turn: 3, step: 2 } },
+      ];
+      ctx.sessions.create(SessionIdBrand("live"), {
+        meta: meta("live"),
+        seed: [header, ...first, ...second, ...openTail],
+      });
+      const live = ctx.sessions.get(SessionIdBrand("live"))!;
+      await ctx.sessions.flush(live);
+
+      // mock agents：get 返回 live agent（记录 followup，不真正驱动模型）。
+      const followups: unknown[] = [];
+      const disposeAgents = ctx.provide("agents", {
+        get: (id: SessionIdBrand) =>
+          id === SessionIdBrand("live")
+            ? {
+                session: live,
+                followup: (message: unknown) => {
+                  followups.push(message);
+                },
+                whenIdle: async () => {},
+                inboxPending: false,
+                clearInbox: () => {},
+              }
+            : undefined,
+        create: async () => {
+          throw new Error("unused");
+        },
+        resume: async () => {
+          throw new Error("unused");
+        },
+      });
+
+      // 编辑轮 3 的第一条 user 消息（eventSeq 15）→ rewind 到该消息
+      // （exclusive drop 它及其后），重放编辑版 + 轮内 followup。
+      const result = await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("live"),
+        eventSeq: 15,
+        blockIndex: 0,
+        text: "go on (edited)",
+        cascade: "truncate",
+      });
+      expect(result.sessionId).toBe(SessionIdBrand("live"));
+      // 重放 2 条输入：编辑版 + 轮内 followup。
+      expect(followups).toHaveLength(2);
+      const texts = followups.map((m) =>
+        (m as { content: Array<{ type: string; text?: string }> }).content
+          .filter((b) => b.type === "text")
+          .map((b) => b.text ?? "")
+          .join(""),
+      );
+      expect(texts).toEqual(["go on (edited)", "Llm 请求参数配置不完整"]);
+      disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("edits a mid-turn followup of a CLOSED turn without deleting the whole turn", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // request/header（seq 0）+ 轮 1（seq 1..6 闭合）+ 轮 2（seq 7..15 闭合）
+      // 轮 2 内 agent 运行中追加了第二条 user/message（followup）。
+      const header: SessionEvent = {
+        type: "request/header",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
+      } as SessionEvent;
+      const first = oneTurnLog().map(
+        (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
+      );
+      const turn2: SessionEvent[] = [
+        { type: "turn/start", seq: SessionSeq(7), time: 8, data: { turn: 2 } },
+        { type: "step/start", seq: SessionSeq(8), time: 9, data: { turn: 2, step: 1 } },
+        {
+          type: "user/message",
+          seq: SessionSeq(9),
+          time: 10,
+          data: {
+            id: "turn2-user",
+            role: "user",
+            content: [{ type: "text", text: "q1" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        {
+          type: "assistant/message",
+          seq: SessionSeq(10),
+          time: 11,
+          data: {
+            turn: 2,
+            step: 1,
+            message: {
+              id: "turn2-assistant",
+              role: "assistant",
+              content: [{ type: "text", text: "ans0" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: SessionSeq(11), time: 12, data: { turn: 2, step: 1 } },
+        { type: "step/start", seq: SessionSeq(12), time: 13, data: { turn: 2, step: 2 } },
+        {
+          type: "user/message",
+          seq: SessionSeq(13),
+          time: 14,
+          data: {
+            id: "turn2-followup",
+            role: "user",
+            content: [{ type: "text", text: "followup" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: SessionSeq(14), time: 15, data: { turn: 2, step: 2 } },
+        {
+          type: "turn/end",
+          seq: SessionSeq(15),
+          time: 16,
+          data: { turn: 2, reason: { kind: "completed" } },
+        },
+      ];
+      await createPersisted(ctx, "src", [header, ...first, ...turn2]);
+
+      // 编辑闭合轮 2 内的 followup（eventSeq 13）→ 只 rewind 到该消息
+      // （exclusive drop 它及其后），保留轮首 q1 与回复，绝不允许整轮删除。
+      const result = await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("src"),
+        eventSeq: 13,
+        blockIndex: 0,
+        text: "followup (edited)",
+        cascade: "truncate",
+      });
+      expect(result.sessionId).toBe(SessionIdBrand("src"));
+
+      const after = await ctx.sessionPersistence.load(SessionIdBrand("src"));
+      const outline = after.events
+        .filter((e) =>
+          ["turn/start", "turn/end", "user/message", "assistant/message"].includes(e.type),
+        )
+        .map((e) => `${String(e.seq)}:${e.type.replace("/", ".")}`);
+      // 轮 1 完整保留 + 轮 2 的 turn/start + q1 + ans0 保留；followup
+      // 之后（旧 seq 13/14/15）被 drop。
+      expect(outline).toContain("6:turn.end");
+      expect(outline).toContain("7:turn.start");
+      expect(outline).toContain("9:user.message");
+      expect(outline).toContain("10:assistant.message");
+      // 轮 2 还在（未被整轮删除）：轮首 q1 文本保留；turn/end 已不存在
+      // （被截断，load 补合成 interrupted closers）。
+      expect(
+        after.events.some(
+          (e) =>
+            e.type === "user/message" &&
+            (e.data as { content?: Array<{ text?: string }> }).content?.[0]?.text === "q1",
+        ),
+      ).toBe(true);
+      // followup 文本已不在（exclusive drop 后未重放）。
+      expect(
+        after.events.some(
+          (e) =>
+            e.type === "user/message" &&
+            (e.data as { content?: Array<{ text?: string }> }).content?.[0]?.text === "followup",
+        ),
+      ).toBe(false);
+      // 轮 2 的真实 turn/end（reason completed）已被截断；load 只给未闭合
+      // 尾部补合成 interrupted closers，轮 1 的 completed turn/end 保留。
+      const completed = after.events.filter(
+        (e) =>
+          e.type === "turn/end" &&
+          (e.data as { reason?: { kind?: string } }).reason?.kind === "completed",
+      );
+      expect(completed.map((e) => e.seq)).toEqual([6]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("edits on a COLD session by resuming the agent and replaying the edited input (GUI flow)", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // request/header（seq 0）+ 轮 1（seq 1..6 闭合）+ 轮 2（seq 7..12 闭合）。
+      // 会话只落库、无 live owner（模拟 GUI 打开历史会话后服务端 cold）。
+      const header: SessionEvent = {
+        type: "request/header",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
+      } as SessionEvent;
+      const first = oneTurnLog().map(
+        (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
+      );
+      const second = oneTurnLog().map(
+        (e) =>
+          ({
+            ...e,
+            seq: e.seq + 7,
+            time: e.time + 100,
+            data: { ...e.data, turn: 2 },
+          }) as SessionEvent,
+      );
+      await createPersisted(ctx, "cold", [header, ...first, ...second]);
+      expect(ctx.sessions.get(SessionIdBrand("cold"))).toBeUndefined(); // 确无 live
+
+      // mock agents：resume 返回一个"已驻留 agent"handle（记录 followup）。
+      const resumed: Array<{
+        sessionId: string;
+        provider: string | undefined;
+        model: string | undefined;
+      }> = [];
+      const followups: unknown[] = [];
+      const disposeAgents = ctx.provide("agents", {
+        get: () => undefined,
+        create: async () => {
+          throw new Error("unused");
+        },
+        resume: async (options: { resumeSessionId: string; agentOptions?: { provider: string; model: string } }) => {
+          resumed.push({
+            sessionId: options.resumeSessionId,
+            provider: options.agentOptions?.provider,
+            model: options.agentOptions?.model,
+          });
+          // 真实 resume 会加载会话并建立 live entry（读 DB 现有事件）。
+          const stored = await ctx.sessionPersistence.load(SessionIdBrand("cold"));
+          ctx.sessions.create(SessionIdBrand("cold"), {
+            meta: stored.meta,
+            seed: [...stored.events],
+          });
+          return {
+            agent: {
+              session: ctx.sessions.get(SessionIdBrand("cold"))!,
+              followup: (message: unknown) => {
+                followups.push(message);
+              },
+            },
+            dispose: async () => {},
+          };
+        },
+      });
+
+      // 编辑轮 2 user（eventSeq 8）→ rewind 到轮 1 末尾 → resume agent →
+      // followup 重放 edited 输入（GUI 场景的完整闭环）。
+      const result = await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("cold"),
+        eventSeq: 8,
+        blockIndex: 0,
+        text: "q2 edited",
+        cascade: "truncate",
+      });
+      expect(result.sessionId).toBe(SessionIdBrand("cold"));
+      // resume 被调用且携带会话的模型配置。
+      expect(resumed).toHaveLength(1);
+      expect(resumed[0]).toMatchObject({ sessionId: "cold", provider: "mock", model: "mock" });
+      // followup 收到编辑后的输入。
+      expect(followups).toHaveLength(1);
+      const text = (
+        followups[0] as { content: Array<{ type: string; text?: string }> }
+      ).content
+        .filter((b) => b.type === "text")
+        .map((b) => b.text ?? "")
+        .join("");
+      expect(text).toBe("q2 edited");
+      // 会话被 resume 后变 live（agent 驻留）。
+      expect(ctx.sessions.get(SessionIdBrand("cold"))).toBeDefined();
+      disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("surfaces a resume failure instead of silently dropping the edited replay", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      const header: SessionEvent = {
+        type: "request/header",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
+      } as SessionEvent;
+      const first = oneTurnLog().map(
+        (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
+      );
+      await createPersisted(ctx, "cold2", [header, ...first]);
+
+      // agents 服务存在但 resume 失败（factory 缺失 / prepare 冲突）。
+      const disposeAgents = ctx.provide("agents", {
+        get: () => undefined,
+        create: async () => {
+          throw new Error("unused");
+        },
+        resume: async () => {
+          throw new Error("no agent factory registered");
+        },
+      });
+
+      // 编辑轮 1 user（eventSeq 2）：resume 在 rewind 前失败 → 编辑抛错
+      // （不静默），且会话未被截断（原子：失败不丢数据）。
+      await expect(
+        editor.edit({
+          action: "edit",
+          sessionId: SessionIdBrand("cold2"),
+          eventSeq: 2,
+          blockIndex: 0,
+          text: "edited q1",
+          cascade: "truncate",
+        }),
+      ).rejects.toThrow(/no agent factory registered|无法重放/);
+      const after = await ctx.sessionPersistence.load(SessionIdBrand("cold2"));
+      expect(after.events).toHaveLength(7); // header(0) + 轮 1(1..6) 完整
+      disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("waits for a busy live agent to settle BEFORE rewinding (edit stops the run first)", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      const header: SessionEvent = {
+        type: "request/header",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
+      } as SessionEvent;
+      const first = oneTurnLog().map(
+        (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
+      );
+      ctx.sessions.create(SessionIdBrand("busy"), {
+        meta: meta("busy"),
+        seed: [header, ...first],
+      });
+      const live = ctx.sessions.get(SessionIdBrand("busy"))!;
+      await ctx.sessions.flush(live);
+
+      // agent 正在跑（whenIdle 需要显式 resolve 才会放行 rewind）。
+      let releaseIdle: () => void = () => {};
+      const idlePromise = new Promise<void>((resolve) => {
+        releaseIdle = resolve;
+      });
+      let idleWaited = false;
+      const followups: unknown[] = [];
+      const disposeAgents = ctx.provide("agents", {
+        get: (id: SessionIdBrand) =>
+          id === SessionIdBrand("busy")
+            ? {
+                session: live,
+                followup: (message: unknown) => {
+                  followups.push(message);
+                },
+                whenIdle: () => {
+                  idleWaited = true;
+                  return idlePromise;
+                },
+              }
+            : undefined,
+        create: async () => {
+          throw new Error("unused");
+        },
+        resume: async () => {
+          throw new Error("unused");
+        },
+      });
+
+      // 发起编辑（内部会先等 agent idle）——不应在 agent 释放前完成 rewind。
+      const editing = editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("busy"),
+        eventSeq: 2,
+        blockIndex: 0,
+        text: "edited while busy",
+        cascade: "truncate",
+      });
+      // 给 microtask 让 whenIdle 被调用。
+      await Promise.resolve();
+      expect(idleWaited).toBe(true);
+      // 释放 agent → 编辑继续完成。
+      releaseIdle();
+      const result = await editing;
+      expect(result.sessionId).toBe(SessionIdBrand("busy"));
+      expect(result.queuedTurns).toBe(1);
+      expect(followups).toHaveLength(1);
+      disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("clears the live agent inbox before rewinding", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      const header: SessionEvent = {
+        type: "request/header",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
+      } as SessionEvent;
+      const first = oneTurnLog().map(
+        (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
+      );
+      ctx.sessions.create(SessionIdBrand("pending"), {
+        meta: meta("pending"),
+        seed: [header, ...first],
+      });
+      const live = ctx.sessions.get(SessionIdBrand("pending"))!;
+      await ctx.sessions.flush(live);
+
+      // Agent inbox has leftover queued input (rewind would delete its turn).
+      let cleared = false;
+      const followups: unknown[] = [];
+      const disposeAgents = ctx.provide("agents", {
+        get: (id: SessionIdBrand) =>
+          id === SessionIdBrand("pending")
+            ? {
+                session: live,
+                followup: (message: unknown) => {
+                  followups.push(message);
+                },
+                whenIdle: async () => {},
+                inboxPending: true,
+                clearInbox: () => {
+                  cleared = true;
+                },
+              }
+            : undefined,
+        create: async () => {
+          throw new Error("unused");
+        },
+        resume: async () => {
+          throw new Error("unused");
+        },
+      });
+
+      const result = await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("pending"),
+        eventSeq: 2,
+        blockIndex: 0,
+        text: "edited with pending inbox",
+        cascade: "truncate",
+      });
+      expect(result.sessionId).toBe(SessionIdBrand("pending"));
+      // Rewind only happens after leftover inbox input is cleared.
+      expect(cleared).toBe(true);
+      expect(followups).toHaveLength(1);
+      disposeAgents();
     } finally {
       await dispose();
     }

@@ -26,17 +26,24 @@
   ],
   "type": "module",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.mts",
-      "default": "./dist/index.mjs"
-    },
-    "./client": "./dist/client.js",
-    "./invariant": {
-      "types": "./dist/invariant.d.mts",
-      "default": "./dist/invariant.mjs"
-    },
+    ".": "./src/index.ts",
+    "./invariant": "./src/invariant.ts",
+    "./plan": "./src/plan.ts",
+    "./testing": "./src/testing.ts",
     "./package.json": "./package.json",
-    "./cordis.patch.yml": "./cordis.patch.yml"
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./client": "./dist/client.js"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./invariant": "./dist/invariant.mjs",
+      "./plan": "./dist/plan.mjs",
+      "./testing": "./dist/testing.mjs",
+      "./package.json": "./package.json",
+      "./cordis.patch.yml": "./cordis.patch.yml",
+      "./client": "./dist/client.js"
+    }
   },
   "scripts": {
     "build": "pnpm exec tsdown",
@@ -46,6 +53,7 @@
     "@morlay/session-branch": "workspace:^"
   },
   "devDependencies": {
+    "@morlay/session-rdb": "workspace:^",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "lightningcss": "^1.32.0",
@@ -84,5 +92,28 @@
         "@deepseek-ai/dsh-client-ui-chat"
       ]
     }
+  },
+  "inlinedDependencies": {
+    "@standard-schema/spec": "1.1.0",
+    "@vitest/pretty-format": "4.1.11",
+    "@vitest/runner": "4.1.11",
+    "@vitest/utils": "4.1.11",
+    "drizzle-orm": "1.0.0-rc.5-ab785fc",
+    "fflate": "0.8.3",
+    "pg": "8.23.0",
+    "pg-cloudflare": "1.4.0",
+    "pg-connection-string": "2.14.0",
+    "pg-int8": "1.0.1",
+    "pg-pool": "3.14.0",
+    "pg-protocol": "1.16.0",
+    "pg-types": "2.2.0",
+    "pgpass": "1.0.5",
+    "postgres-array": "2.0.0",
+    "postgres-bytea": "1.0.1",
+    "postgres-date": "1.0.7",
+    "postgres-interval": "1.2.0",
+    "split2": "4.2.0",
+    "tinyrainbow": "3.1.1",
+    "xtend": "4.0.2"
   }
 }
