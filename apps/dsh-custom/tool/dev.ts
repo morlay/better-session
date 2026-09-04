@@ -17,7 +17,11 @@ async function main(cwd = process.cwd()) {
     );
   }
 
-  await $`DSH_HOME=${dshHomeDir} NODE_OPTIONS=--import=tsx/esm dsh web`.pipe(process.stdout);
+  const port = process.env.PORT ?? "3080";
+
+  await $`DSH_HOME=${dshHomeDir} NODE_OPTIONS=--import=tsx/esm dsh web --port=${port}`.pipe(
+    process.stdout,
+  );
 }
 
 function resolveAsLink(pkg: string): string {
