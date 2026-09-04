@@ -1,9 +1,9 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { InvariantInstaller } from "@deepseek-ai/dsh-invariants";
 
-const PACKAGE_NAME = "@morlay/better-session";
+const PACKAGE_NAME = "@morlay/dsh-llm-openai-compatible";
 
-export const name = "web-app-invariant";
+export const name = "llm-openai-compatible-invariant";
 
 export const inject = ["invariants"];
 

@@ -24,13 +24,13 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/invariant.ts",
+    ".": "./src/index.ts",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "publishConfig": {
     "exports": {
-      ".": "./dist/invariant.mjs",
+      ".": "./dist/index.mjs",
       "./package.json": "./package.json",
       "./cordis.patch.yml": "./cordis.patch.yml"
     }
@@ -45,8 +45,7 @@
     "@morlay/ui-conversation-message-actions": "workspace:^"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-invariants": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:^"
   },
   "dsh": {
     "bundle": {

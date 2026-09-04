@@ -13,7 +13,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/morlay/dsh-llm-openai-compatible.git"
+    "url": "https://github.com/morlay/better-session.git"
   },
   "files": [
     "dist",
@@ -24,12 +24,16 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./invariant": "./src/invariant.ts",
+    "./wire": "./src/wire.ts",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "publishConfig": {
     "exports": {
       ".": "./dist/index.mjs",
+      "./invariant": "./dist/invariant.mjs",
+      "./wire": "./dist/wire.mjs",
       "./package.json": "./package.json",
       "./cordis.patch.yml": "./cordis.patch.yml"
     }
@@ -48,6 +52,7 @@
     "@deepseek-ai/dsh-anonymous-user-id": "workspace:^",
     "@deepseek-ai/dsh-attachment": "workspace:^",
     "@deepseek-ai/dsh-credentials": "workspace:^",
+    "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-launch-environment": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-settings": "workspace:^",
