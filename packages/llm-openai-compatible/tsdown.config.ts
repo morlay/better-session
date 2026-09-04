@@ -1,19 +1,8 @@
-import { defineConfig } from "tsdown";
+import { defineCordisPluginConfig } from "devkit";
 
-export default defineConfig({
-  entry: {
-    index: "./src/index.ts",
+// 额外导出 ./wire（请求序列化 / 响应翻译的 wire 编解码层）。
+export default defineCordisPluginConfig({
+  entries: {
+    wire: "./src/wire.ts",
   },
-  exports: {
-    packageJson: true,
-    devExports: true,
-    customExports: {
-      "./cordis.patch.yml": "./cordis.patch.yml",
-    },
-  },
-  format: ["esm"],
-  deps: {
-    onlyBundle: false,
-  },
-  clean: true,
 });

@@ -2,11 +2,10 @@
   "compilerOptions": {
     "module": "nodenext",
     "target": "esnext",
-    "types": [],
+    "types": ["node"],
     "composite": true,
     "sourceMap": false,
     "declaration": true,
-    "declarationMap": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
@@ -17,6 +16,6 @@
     "verbatimModuleSyntax": false,
     "isolatedModules": false,
     "noUncheckedSideEffectImports": true,
-    "skipLibCheck": true
-  }
+    "skipLibCheck": true,
+  },
 }

@@ -4,6 +4,12 @@
   "type": "module",
   "private": true,
   "exports": {
+    ".": "./src/index.ts",
     "./tsconfig.json": "./tsconfig.json"
+  },
+  "peerDependencies": {
+    "lightningcss": "^1.33.0",
+    "tsdown": "0.22.x",
+    "typescript": "7.x"
   }
 }
