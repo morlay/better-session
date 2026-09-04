@@ -1,0 +1,4 @@
+[
+  { "type": "rm", "path": "apps/cli/tests/profiles/acp/cordis.yml" },
+  { "type": "git", "patch": "css-inline-query.patch" }
+]

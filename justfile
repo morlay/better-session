@@ -38,7 +38,3 @@ version *args:
 
 test:
     pnpm exec vitest run
-
-prepare-vendor:
-    just vendor sync
-    just vendor build

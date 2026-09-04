@@ -1,16 +1,21 @@
-sync: && patch
-    @if [ -d deepseek-harness ]; then rm -rf deepseek-harness; fi
-    git clone --depth=1 -b dsh-v{{ env("DEEPSEEK_HARNESS_VERSION") }} https://github.com/deepseek-ai/deepseek-harness.git deepseek-harness
+# vendor 同步与构建：脚本由 dsh-side-workspace-plugin-develop skill 提供，tsx 执行
+# （tsx 由 mise 托管：npm:tsx，见 mise.toml——勿用 pnpm exec，会触发隐式
+# install 下载已裁剪依赖）。
+# 约定 env（mise.toml）：DEEPSEEK_HARNESS_DIR / DEEPSEEK_HARNESS_VERSION /
+# DEEPSEEK_HARNESS_EXCLUDE。
+# 用法：just vendor sync && just vendor patch && just vendor build
+# （prepare 聚合三步）。
 
-[working-directory("deepseek-harness")]
+sync:
+    @tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/sync.ts') }}
+
 patch:
-    rm -rf apps/cli/tests/profiles/acp/cordis.yml
-    rm -rf packages/subagent/subagent-codex packages/subagent/subagent-claude-code
-    sd '^.*subagent-(?:claude-code|codex).*$' '' tsconfig.host.json
-    git apply ../patches/css-inline-query.patch
+    @tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/patch.ts') }}
 
-[working-directory("deepseek-harness")]
 build:
-    pnpm install
-    pnpm run build
-    fd -I -t d node_modules -x rm -rf
+    @tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/build.ts') }}
+
+prepare:
+    @just sync
+    @just patch
+    @just build
