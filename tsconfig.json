@@ -1,4 +1,4 @@
 {
   "extends": ["devkit/tsconfig.json"],
-  "exclude": ["vendor/**", "packages/*/dist/*"]
+  "exclude": ["vendor/**", "packages/*/dist/*"],
 }

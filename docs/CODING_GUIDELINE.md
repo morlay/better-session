@@ -2,6 +2,7 @@
 
 本仓库是 pnpm workspaces monorepo。工具链集中在根；各包只声明自身运行时
 依赖。所有命令入口见 [justfile](../justfile)，版本见 [mise.toml](../mise.toml)。
+领域术语与决策见 [CONTEXT-MAP.md](../CONTEXT-MAP.md) 与各级 `docs/adr/`。
 
 ## 技术栈
 
@@ -19,19 +20,26 @@
 ## 常用命令
 
 ```sh
-just dep         # pnpm install（含 vendor side workspace）
-just build       # 构建全部包（pnpm -r --filter './packages/*' run build）
-just test        # vitest run
-just lint        # oxlint
-just fmt         # oxfmt
-just update      # taze latest 升级依赖（-w 写回）
-just clean       # 清理 lock 与构建产物
+just dep           # pnpm install（根依赖：开发工具链与本仓库包）
+just build         # 构建全部包（pnpm -r --filter './packages/*' run build）
+just test          # vitest run
+just lint          # oxlint
+just fmt           # oxfmt
+just update        # taze latest 升级依赖（-w 写回）
+just clean         # 清理 lock 与构建产物
 
-just vendor::sync   # 同步上游 deepseek-harness 到 vendor/（clone + patch）
-just vendor::build  # 上游构建（vendor 目录内）
+just vendor sync   # 同步上游 deepseek-harness 到 vendor/（clone + patch）
+just vendor build  # 上游构建：vendor 内干净 pnpm install → build → 清理
+                   # （上游自带 lockfile；同步链不需要根 just dep）
+just prepare-vendor # vendor sync + build 聚合入口（需 mise 环境提供版本变量）
 just custom::dev    # 本地 GUI 开发（dsh-web-desktopify）
 just custom::bundle # 本地 GUI 打包
 ```
+
+> vendor 命令依赖 `DEEPSEEK_HARNESS_VERSION`（mise.toml 注入）：请在 mise
+> 环境下执行（`mise exec -- just vendor sync` 或 shell 已 `mise activate`）。
+> `just vendor sync` 会删除旧 vendor 目录再重克隆；`just vendor build` 内含
+> 干净的 `pnpm install`，上游同步链不需要单独跑根 `just dep`。
 
 ## 代码约定
 
@@ -68,5 +76,8 @@ just custom::bundle # 本地 GUI 打包
 
 ## 上游更新
 
-上游 deepseek-harness 以 side workspace vendor 到 `vendor/deepseek-harness/`。
-更新流程与本地 patch 说明见 [vendor/README.md](../vendor/README.md)。
+上游 deepseek-harness 以 side workspace vendor 到 `vendor/deepseek-harness/`
+（版本锁定完整代码，`DEEPSEEK_HARNESS_VERSION`）。**升级 / 适配评估 /
+排查 / 本地 patch / EXCLUDE 裁剪的完整流程见
+[dsh-side-workspace-plugin-develop skill](../.agents/skills/dsh-side-workspace-plugin-develop/SKILL.md)**——命令
+封装在 [vendor/justfile](../vendor/justfile)（薄封装，调用 skill 脚本）。
