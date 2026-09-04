@@ -27,6 +27,7 @@ import { WriteGuard } from "./write-guard.ts";
 import {
   buildSeqMap,
   recomputeReplaceProvenance,
+  repairOrphanInboxSplices,
   repairSurfaceOps,
   rowToMeta,
   scanRows,
@@ -261,6 +262,9 @@ export class SessionPersistenceRdb
     this.writeGuard.confirmHead(id, log.events.at(-1)?.seq ?? -1);
     // replace 的 provenance 读取时重计算（sourceEventSeqs 不落库）。
     recomputeReplaceProvenance(log.events);
+    // 孤儿 inbox splice（引用已被截断排队消息的插入/消费）会使上游 Inbox
+    // 增量重放失败、整个会话不可 resume——读取时改写为 no-op 修复。
+    repairOrphanInboxSplices(log.events);
     return {
       meta: log.meta,
       inheritedEventCount: SessionLogOffset(log.inheritedEventCount),

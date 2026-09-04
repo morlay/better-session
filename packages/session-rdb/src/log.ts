@@ -283,6 +283,92 @@ export function repairSurfaceOps(events: SessionEvent[]): void {
   }
 }
 
+interface InboxSpliceLike {
+  target?: unknown;
+  start?: unknown;
+  removedCount?: unknown;
+  inserted?: Array<{ id?: unknown }>;
+}
+
+/**
+ * 定位无法从空状态增量重放的 agent/inbox/spliced 事件（孤儿操作）。
+ *
+ * 上游 Inbox 每次构造都从会话起点重放全部 inbox splice，失败即拒绝整个
+ * 会话（resume / 编辑重放不可用）。rewind 截断历史轮次后若残留 splice 引用
+ * 已被截断的排队消息（插入被删、消费保留，或反之），重放时越界或重复——
+ * 无法独立重放。
+ */
+export function orphanInboxSpliceSeqs(events: readonly SessionEvent[]): Set<number> {
+  const inbox: Record<string, Array<{ id: string }>> = { "next-turn": [], "next-step": [] };
+  const orphan = new Set<number>();
+  for (const raw of events) {
+    // agent/inbox/spliced 属 dsh-agent 类型扩展，不在本包 SessionEventMap——
+    // 用宽类型 duck-type 读取，避免判别联合窄化到 never。
+    const event = raw as unknown as { type: string; seq: number; data: InboxSpliceLike };
+    if (event.type !== "agent/inbox/spliced") continue;
+    const { target, start, removedCount, inserted } = event.data;
+    const list = typeof target === "string" ? inbox[target] : undefined;
+    if (list === undefined) {
+      orphan.add(event.seq);
+      continue;
+    }
+    const removed = removedCount ?? 0;
+    const parsedInserted = (inserted ?? []).map((m) => ({
+      id: typeof m.id === "string" ? m.id : "",
+    }));
+    if (
+      !Number.isSafeInteger(start as number) ||
+      (start as number) < 0 ||
+      (start as number) > list.length ||
+      !Number.isSafeInteger(removed as number) ||
+      (removed as number) < 0 ||
+      (start as number) + (removed as number) > list.length
+    ) {
+      orphan.add(event.seq);
+      continue;
+    }
+    const candidate = [
+      ...list.slice(0, start as number),
+      ...parsedInserted,
+      ...list.slice((start as number) + (removed as number)),
+    ];
+    const other = (target === "next-turn" ? inbox["next-step"] : inbox["next-turn"]) ?? [];
+    const seen = new Set<string>();
+    let dup = false;
+    for (const m of [...candidate, ...other]) {
+      if (m.id === "") continue;
+      if (seen.has(m.id)) {
+        dup = true;
+        break;
+      }
+      seen.add(m.id);
+    }
+    if (dup) {
+      orphan.add(event.seq);
+      continue;
+    }
+    list.splice(start as number, removed as number, ...parsedInserted);
+  }
+  return orphan;
+}
+
+/** 内存修复：把孤儿 inbox splice 改写为 no-op（调用方负责持久化）。 */
+export function repairOrphanInboxSplices(events: SessionEvent[]): void {
+  const orphan = orphanInboxSpliceSeqs(events);
+  if (orphan.size === 0) return;
+  for (const event of events) {
+    if (!orphan.has(event.seq)) continue;
+    const data = event.data as unknown as InboxSpliceLike;
+    const target = data.target;
+    (event as { data: unknown }).data = {
+      ...(typeof target === "string" ? { target } : { target: "next-turn" }),
+      start: 0,
+      removedCount: 0,
+      inserted: [],
+    };
+  }
+}
+
 export function scanRows(
   rows: readonly EventRow[],
   base = 0,

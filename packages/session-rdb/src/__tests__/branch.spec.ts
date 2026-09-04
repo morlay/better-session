@@ -875,4 +875,137 @@ describe("rewind", () => {
       await dispose();
     }
   });
+
+  it("rewinds to a mid-turn followup of a CLOSED turn, then agent-style continuation keeps the session loadable", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..14 闭合），轮 2 内 followup：
+      // turn/start(6) step/start(7) user q1(8) assistant a1(9) step/end(10)
+      // step/start(11) user followup(12) step/end(13) turn/end(14)。
+      const turn2: SessionEvent[] = [
+        { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
+        { type: "step/start", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
+        {
+          type: "user/message",
+          seq: SessionSeq(8),
+          time: 9,
+          data: {
+            id: "t2-u1",
+            role: "user",
+            content: [{ type: "text", text: "q1" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        {
+          type: "assistant/message",
+          seq: SessionSeq(9),
+          time: 10,
+          data: {
+            turn: 2,
+            step: 1,
+            message: {
+              id: "t2-a1",
+              role: "assistant",
+              content: [{ type: "text", text: "a1" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: SessionSeq(10), time: 11, data: { turn: 2, step: 1 } },
+        { type: "step/start", seq: SessionSeq(11), time: 12, data: { turn: 2, step: 2 } },
+        {
+          type: "user/message",
+          seq: SessionSeq(12),
+          time: 13,
+          data: {
+            id: "t2-fup",
+            role: "user",
+            content: [{ type: "text", text: "followup" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: SessionSeq(13), time: 14, data: { turn: 2, step: 2 } },
+        {
+          type: "turn/end",
+          seq: SessionSeq(14),
+          time: 15,
+          data: { turn: 2, reason: { kind: "completed" } },
+        },
+      ];
+      await createPersisted(ctx, "s1", [...oneTurnLog(), ...turn2]);
+
+      // 编辑 followup（seq 12）→ rewind exclusive 到该消息。
+      await provider.rewind(SessionId("s1"), 12);
+
+      const backend = (
+        persistence as unknown as {
+          internals(): {
+            backend: {
+              getEventRows(
+                id: SessionId,
+              ): Promise<Array<{ fSequence: number; fType: string }>>;
+            };
+          };
+        }
+      ).internals().backend;
+      const rows = await backend.getEventRows(SessionId("s1"));
+      // 截断前缀 0..10；孤儿 step/start(11) 被平衡化剔除。
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 11)).toBe(false);
+
+      // agent 风格续写：新 step/start → 编辑版 followup → 回复 → 闭合。
+      const continuation: SessionEvent[] = [
+        { type: "step/start", seq: SessionSeq(11), time: 16, data: { turn: 2, step: 3 } },
+        {
+          type: "user/message",
+          seq: SessionSeq(12),
+          time: 17,
+          data: {
+            id: "t2-fup-edited",
+            role: "user",
+            content: [{ type: "text", text: "followup edited" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        {
+          type: "assistant/message",
+          seq: SessionSeq(13),
+          time: 18,
+          data: {
+            turn: 2,
+            step: 3,
+            message: {
+              id: "t2-a2",
+              role: "assistant",
+              content: [{ type: "text", text: "a2" }],
+              source: { kind: "model", provider: "mock", model: "mock" },
+            },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
+        { type: "step/end", seq: SessionSeq(14), time: 19, data: { turn: 2, step: 3 } },
+        {
+          type: "turn/end",
+          seq: SessionSeq(15),
+          time: 20,
+          data: { turn: 2, reason: { kind: "completed" } },
+        },
+      ];
+      await persistence.append(SessionId("s1"), continuation);
+
+      // 完整 log 可 load、token meter 重放合法（无孤儿、无残缺 step）。
+      const after = await persistence.load(SessionId("s1"));
+      expect(after.events.at(-1)?.type).toBe("turn/end");
+      const meter = new TokenMeter(ctx);
+      const session = Session.create(SessionId("s1"), [...after.events]);
+      expect(() => meter.measure(session)).not.toThrow();
+    } finally {
+      await dispose();
+    }
+  });
 });
+
