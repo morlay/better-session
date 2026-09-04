@@ -13,9 +13,9 @@ import {
 import { TokenMeter } from "@deepseek-ai/dsh-token-meter";
 import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
 import { SessionBranchError } from "@morlay/session-branch";
-import SessionPersistenceSqlite, { SessionBranchRdbProvider, locateTurnEnd } from "../index.ts";
-import { EmptySettings } from "./testing/helpers.ts";
-import { meta, oneTurnLog } from "./testing/contract.ts";
+import SessionPersistenceSqlite, { SessionBranchRdbProvider, locateTurnEnd } from "@morlay/session-rdb";
+import { EmptySettings } from "@morlay/session-rdb/testing";
+import { meta, oneTurnLog } from "@morlay/session-rdb/testing";
 
 const dirs: string[] = [];
 afterEach(async () => {

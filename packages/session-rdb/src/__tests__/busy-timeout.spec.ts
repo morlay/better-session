@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { openDatabase } from "../sqlite.ts";
+import { openDatabase } from "@morlay/session-rdb/storage";
 
 const dirs: string[] = [];
 afterEach(async () => {

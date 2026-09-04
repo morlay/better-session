@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ToolCallId, createMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { afterEach, describe, expect, it } from "vitest";
-import { EmptySettings } from "./testing/helpers.ts";
+import { EmptySettings } from "@morlay/session-rdb/testing";
 import { Context } from "@deepseek-ai/cordis";
 import { existsSync } from "node:fs";
 import { chmod, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
@@ -15,8 +15,8 @@ import type {
   SurfaceEvent,
   SurfaceEventType,
 } from "@deepseek-ai/dsh-session";
-import SessionPersistenceSqlite, { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "../index.ts";
-import { parseJsonlArtifact } from "../import.ts";
+import SessionPersistenceSqlite, { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "@morlay/session-rdb";
+import { parseJsonlArtifact } from "@morlay/session-rdb/artifact";
 import {
   buildSeqMap,
   findSurfaceRepairs,
@@ -26,7 +26,7 @@ import {
   rowToEvent,
   rowToMeta,
   scanRows,
-} from "../log.ts";
+} from "@morlay/session-rdb/artifact";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   eventDimensions,
@@ -35,10 +35,10 @@ import {
   SESSION_PERSISTENCE_SQLITE_APPLICATION_ID,
   type EventRow,
   type SessionRow,
-} from "../schema.ts";
-import { openDatabase } from "../sqlite.ts";
-import { runPersistenceContract, meta, oneTurnLog, appendLog } from "./testing/contract.ts";
-import { runCoordinatorContract, type CoordinatorFixture } from "./testing/coordinator-contract.ts";
+} from "@morlay/session-rdb/storage";
+import { openDatabase } from "@morlay/session-rdb/storage";
+import { runPersistenceContract, meta, oneTurnLog, appendLog } from "@morlay/session-rdb/testing";
+import { runCoordinatorContract, type CoordinatorFixture } from "@morlay/session-rdb/testing";
 
 const dirs: string[] = [];
 afterEach(async () => {

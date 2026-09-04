@@ -6,7 +6,7 @@ import {
   SESSION_BRANCH_VERSION_SCHEMA,
   buildTimeline,
   type SessionBranchVersionEvent,
-} from "../index.ts";
+} from "@morlay/session-branch";
 
 function header(id: string, overrides: Partial<SessionHeader> = {}): SessionHeader {
   return {

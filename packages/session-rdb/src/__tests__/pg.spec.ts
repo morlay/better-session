@@ -3,10 +3,10 @@ import { describe } from "vitest";
 import { Client } from "pg";
 import { Context } from "@deepseek-ai/cordis";
 import { SessionStore } from "@deepseek-ai/dsh-session";
-import { EmptySettings } from "./testing/helpers.ts";
-import SessionPersistenceRdb from "../index.ts";
-import { runPersistenceContract } from "./testing/contract.ts";
-import { runCoordinatorContract, type CoordinatorFixture } from "./testing/coordinator-contract.ts";
+import { EmptySettings } from "@morlay/session-rdb/testing";
+import SessionPersistenceRdb from "@morlay/session-rdb";
+import { runPersistenceContract } from "@morlay/session-rdb/testing";
+import { runCoordinatorContract, type CoordinatorFixture } from "@morlay/session-rdb/testing";
 
 const ADMIN_URL =
   process.env.TEST_PG_URL ?? "postgres://postgres:postgres@localhost:25433/postgres";

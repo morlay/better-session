@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
-import { balanceRewindPrefix } from "../index.ts";
+import { balanceRewindPrefix } from "@morlay/session-branch";
 
 function stepStart(seq: number, turn: number, step: number): SessionEvent {
   return { type: "step/start", seq, time: seq, data: { turn, step } } as SessionEvent;

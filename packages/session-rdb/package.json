@@ -25,14 +25,22 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./artifact": "./src/artifact.ts",
+    "./import": "./src/import.ts",
     "./invariant": "./src/invariant.ts",
+    "./storage": "./src/storage.ts",
+    "./testing": "./src/testing.ts",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "publishConfig": {
     "exports": {
       ".": "./dist/index.mjs",
+      "./artifact": "./dist/artifact.mjs",
+      "./import": "./dist/import.mjs",
       "./invariant": "./dist/invariant.mjs",
+      "./storage": "./dist/storage.mjs",
+      "./testing": "./dist/testing.mjs",
       "./package.json": "./package.json",
       "./cordis.patch.yml": "./cordis.patch.yml"
     }
@@ -66,5 +74,18 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "inlinedDependencies": {
+    "@jridgewell/sourcemap-codec": "1.6.0",
+    "@vitest/expect": "4.1.11",
+    "@vitest/pretty-format": "4.1.11",
+    "@vitest/runner": "4.1.11",
+    "@vitest/snapshot": "4.1.11",
+    "@vitest/spy": "4.1.11",
+    "@vitest/utils": "4.1.11",
+    "chai": "6.2.2",
+    "magic-string": "0.30.21",
+    "tinyrainbow": "3.1.1",
+    "vitest": "4.1.11"
   }
 }

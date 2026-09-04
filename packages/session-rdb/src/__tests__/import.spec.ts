@@ -15,17 +15,17 @@ import {
 } from "@deepseek-ai/dsh-session";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { strToU8, zipSync } from "fflate";
-import SessionPersistenceSqlite from "../index.ts";
-import { toJsonlArtifact } from "../log.ts";
-import { EmptySettings } from "./testing/helpers.ts";
-import { meta, oneTurnLog } from "./testing/contract.ts";
+import SessionPersistenceSqlite from "@morlay/session-rdb";
+import { toJsonlArtifact } from "@morlay/session-rdb/artifact";
+import { EmptySettings } from "@morlay/session-rdb/testing";
+import { meta, oneTurnLog } from "@morlay/session-rdb/testing";
 import {
   SESSION_LOG_ARTIFACT_FILENAME,
   expandProvenanceFromStorage,
   parseImportZip,
   parseJsonlArtifact,
   persistImport,
-} from "../import.ts";
+} from "@morlay/session-rdb/artifact";
 
 const dirs: string[] = [];
 afterEach(async () => {

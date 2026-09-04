@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import { WriteGuard } from "../write-guard.ts";
+import { WriteGuard } from "@morlay/session-rdb/storage";
 
 function expectRejected(fn: () => void, pattern: RegExp): void {
   try {

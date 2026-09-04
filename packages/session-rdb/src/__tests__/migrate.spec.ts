@@ -8,8 +8,8 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Context } from "@deepseek-ai/cordis";
 import { SessionId, SessionStore } from "@deepseek-ai/dsh-session";
-import SessionPersistenceSqlite from "../index.ts";
-import { EmptySettings } from "./testing/helpers.ts";
+import SessionPersistenceSqlite from "@morlay/session-rdb";
+import { EmptySettings } from "@morlay/session-rdb/testing";
 
 const dirs: string[] = [];
 afterEach(async () => {
