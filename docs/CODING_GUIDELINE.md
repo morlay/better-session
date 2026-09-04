@@ -31,7 +31,7 @@ just clean         # 清理 lock 与构建产物
 just vendor sync   # 同步上游 deepseek-harness 到 vendor/（clone + patch）
 just vendor build  # 上游构建：vendor 内干净 pnpm install → build → 清理
                    # （上游自带 lockfile；同步链不需要根 just dep）
-just prepare-vendor # vendor sync + build 聚合入口（需 mise 环境提供版本变量）
+just vendor prepare # vendor sync + build 聚合入口（需 mise 环境提供版本变量）
 just custom::dev    # 本地 GUI 开发（dsh-web-desktopify）
 just custom::bundle # 本地 GUI 打包
 ```
