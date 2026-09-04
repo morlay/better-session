@@ -12,7 +12,7 @@ DeepSeek Harness 的**分支式会话编辑** monorepo：在不修改上游
 | `packages/session-branch/`                  | 契约层：`SessionBranchProvider` 抽象 + `SessionBranch` 服务 + 版本树投影                   | [README](packages/session-branch/README.md)                                              |
 | `packages/session-rdb/`                     | 实现层：RDB 持久化（`PersistenceBackend`）+ 分支 provider（`SessionBranchProvider`）双服务 | [README](packages/session-rdb/README.md) · [design](packages/session-rdb/docs/design.md) |
 | `packages/ui-conversation-message-actions/` | 编排层 + UI：edit / retry / fork 编排 + `conversation.chat.node` 渲染替换                  | [README](packages/ui-conversation-message-actions/README.md)                             |
-| `packages/llm-openai-compatible/`           | LLM 适配层：OpenAI-compatible 多 provider 路由（可选组件）                                 | [README](packages/llm-openai-compatible/README.md)                                       |
+| `packages/llm-ai-sdk/`                       | LLM 适配层：AI SDK（openai-compatible / openai / open-responses）多 provider 路由（可选组件） | [README](packages/llm-ai-sdk/README.md)                                          |
 | `apps/dsh-custom/`                          | 本地 GUI 应用壳（dsh-web-desktopify）                                                      | `just custom::dev` / `just custom::bundle`                                               |
 | `vendor/`                                   | 上游 deepseek-harness side workspace（同步 / 裁剪 / 构建）                                 | [dsh-side-workspace-plugin-develop skill](.agents/skills/dsh-side-workspace-plugin-develop/SKILL.md)                            |
 

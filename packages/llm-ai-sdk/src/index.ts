@@ -17,13 +17,19 @@ import {
   DEFAULT_MAX_REQUEST_IMAGE_BYTES,
   DEFAULT_MAX_TOKENS,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
-  OpenAICompatibleAdapter,
+  LlmAiSdkAdapter,
 } from "./adapter.ts";
 import type { ReasoningEffort, ResolvedModelProfile, ResolvedProviderProfile } from "./adapter.ts";
+import { LLM_APIS, DEFAULT_LLM_API } from "./transport.ts";
+import type { LlmApi } from "./transport.ts";
 
-export { OpenAICompatibleAdapter } from "./adapter.ts";
+export { LLM_APIS } from "./transport.ts";
+export type { LlmApi } from "./transport.ts";
+export { DEFAULT_LLM_API, apiDisplayName, createSdkModelCache, sdkModelOf } from "./transport.ts";
+
+export { LlmAiSdkAdapter } from "./adapter.ts";
 export type {
-  OpenAICompatibleAdapterOptions,
+  LlmAiSdkAdapterOptions,
   ReasoningEffort,
   ResolvedModelProfile,
   ResolvedProviderProfile,
@@ -35,9 +41,9 @@ export {
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
 } from "./adapter.ts";
 
-export const name = "llm-openai-compatible";
+export const name = "llm-ai-sdk";
 export const inject = ["llm"];
-export const NS = "llm-openai-compatible";
+export const NS = "llm-ai-sdk";
 
 export const REASONING_LEVELS = ["off", "low", "high", "max"] as const;
 
@@ -57,6 +63,9 @@ export interface ProviderProfileSource {
   apiKeyEnv?: string;
 
   displayName?: string;
+
+  /** AI SDK 传输风格；省略 = openai-compatible（chat completions 泛兼容）。 */
+  api?: LlmApi;
 
   baseURL: string;
 
@@ -98,6 +107,7 @@ const modelSchema = z.object({
 const providerSchema = z.object({
   apiKeyEnv: z.string().role("credential-ref"),
   displayName: z.string(),
+  api: z.union(LLM_APIS).default(DEFAULT_LLM_API),
   baseURL: z.string().required(),
   headers: z.dict(z.string()),
   temperature: z.number().min(0).max(2),
@@ -139,13 +149,13 @@ function resolveReasoningEfforts(
   for (const [effort, wire] of Object.entries(value)) {
     if (!isReasoningEffort(effort)) {
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" model "${modelId}" declares unknown reasoning effort "${effort}"`,
+        `llm-ai-sdk: provider "${provider}" model "${modelId}" declares unknown reasoning effort "${effort}"`,
       );
     }
     if (effort === "off") {
       if (wire !== null) {
         throw new Error(
-          `llm-openai-compatible: provider "${provider}" model "${modelId}" reasoning effort "off" must leave an empty wire spelling (null) to omit reasoning_effort`,
+          `llm-ai-sdk: provider "${provider}" model "${modelId}" reasoning effort "off" must leave an empty wire spelling (null) to omit reasoning_effort`,
         );
       }
       declaration.off = null;
@@ -153,7 +163,7 @@ function resolveReasoningEfforts(
     }
     if (wire === null || wire.length === 0) {
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" model "${modelId}" reasoning effort "${effort}" needs a non-empty wire spelling`,
+        `llm-ai-sdk: provider "${provider}" model "${modelId}" reasoning effort "${effort}" needs a non-empty wire spelling`,
       );
     }
     declaration[effort] = wire;
@@ -170,18 +180,18 @@ function resolveModels(
   return models.map((model) => {
     if (model.id.length === 0)
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" catalog model ids must be non-empty`,
+        `llm-ai-sdk: provider "${provider}" catalog model ids must be non-empty`,
       );
     if (model.name !== void 0 && model.name.length === 0)
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" catalog model "${model.id}" has an empty name`,
+        `llm-ai-sdk: provider "${provider}" catalog model "${model.id}" has an empty name`,
       );
     if (
       model.contextWindow !== void 0 &&
       (!Number.isInteger(model.contextWindow) || model.contextWindow <= 0)
     ) {
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" catalog model "${model.id}" contextWindow must be a positive integer`,
+        `llm-ai-sdk: provider "${provider}" catalog model "${model.id}" contextWindow must be a positive integer`,
       );
     }
     if (
@@ -189,13 +199,13 @@ function resolveModels(
       (!Number.isInteger(model.maxTokens) || model.maxTokens <= 0)
     ) {
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" catalog model "${model.id}" maxTokens must be a positive integer`,
+        `llm-ai-sdk: provider "${provider}" catalog model "${model.id}" maxTokens must be a positive integer`,
       );
     }
     const inputModalities = model.inputModalities ?? ["text"];
     if (inputModalities.length === 0)
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" catalog model "${model.id}" inputModalities must not be empty`,
+        `llm-ai-sdk: provider "${provider}" catalog model "${model.id}" inputModalities must not be empty`,
       );
     if (
       inputModalities.some(
@@ -203,17 +213,17 @@ function resolveModels(
       )
     ) {
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" catalog model "${model.id}" inputModalities must contain only "text" and "image"`,
+        `llm-ai-sdk: provider "${provider}" catalog model "${model.id}" inputModalities must contain only "text" and "image"`,
       );
     }
     if (new Set(inputModalities).size !== inputModalities.length) {
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" catalog model "${model.id}" inputModalities must not contain duplicates`,
+        `llm-ai-sdk: provider "${provider}" catalog model "${model.id}" inputModalities must not contain duplicates`,
       );
     }
     if (seen.has(model.id))
       throw new Error(
-        `llm-openai-compatible: provider "${provider}" has duplicate catalog model "${model.id}"`,
+        `llm-ai-sdk: provider "${provider}" has duplicate catalog model "${model.id}"`,
       );
     seen.add(model.id);
     return {
@@ -239,12 +249,12 @@ export function resolveAdapterOptions(
   source: ProviderProfileSource,
 ): ResolvedProviderProfile {
   if (provider.length === 0)
-    throw new Error("llm-openai-compatible: provider names must be non-empty");
+    throw new Error("llm-ai-sdk: provider names must be non-empty");
   if (source.baseURL === void 0 || source.baseURL.length === 0) {
-    throw new Error(`llm-openai-compatible: provider "${provider}" requires a non-empty baseURL`);
+    throw new Error(`llm-ai-sdk: provider "${provider}" requires a non-empty baseURL`);
   }
   if (source.displayName !== void 0 && source.displayName.length === 0) {
-    throw new Error(`llm-openai-compatible: provider "${provider}" has an empty displayName`);
+    throw new Error(`llm-ai-sdk: provider "${provider}" has an empty displayName`);
   }
   const streamIdleTimeoutMs = source.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   if (
@@ -253,71 +263,78 @@ export function resolveAdapterOptions(
     streamIdleTimeoutMs > MAX_TIMER_DELAY_MS
   ) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" streamIdleTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`,
+      `llm-ai-sdk: provider "${provider}" streamIdleTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`,
     );
   }
   const maxRequestImageBytes = source.maxRequestImageBytes ?? DEFAULT_MAX_REQUEST_IMAGE_BYTES;
   if (!Number.isSafeInteger(maxRequestImageBytes) || maxRequestImageBytes <= 0) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" maxRequestImageBytes must be a positive safe integer`,
+      `llm-ai-sdk: provider "${provider}" maxRequestImageBytes must be a positive safe integer`,
     );
   }
   const defaultContextWindow = source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW;
   if (!Number.isInteger(defaultContextWindow) || defaultContextWindow <= 0) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" defaultContextWindow must be a positive integer`,
+      `llm-ai-sdk: provider "${provider}" defaultContextWindow must be a positive integer`,
     );
   }
   const defaultMaxTokens = source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS;
   if (!Number.isSafeInteger(defaultMaxTokens) || defaultMaxTokens <= 0) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" defaultMaxTokens must be a positive safe integer`,
+      `llm-ai-sdk: provider "${provider}" defaultMaxTokens must be a positive safe integer`,
     );
   }
   const timeoutMs = bounded(source.timeoutMs, Number.MIN_VALUE, MAX_TIMER_DELAY_MS);
   if (source.timeoutMs !== void 0 && timeoutMs === void 0) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" timeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`,
+      `llm-ai-sdk: provider "${provider}" timeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`,
     );
   }
   if (bounded(source.temperature, 0, 2) === void 0 && source.temperature !== void 0) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" temperature must be a finite number within 0..2`,
+      `llm-ai-sdk: provider "${provider}" temperature must be a finite number within 0..2`,
     );
   }
   if (bounded(source.topP, 0, 1) === void 0 && source.topP !== void 0) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" topP must be a finite number within 0..1`,
+      `llm-ai-sdk: provider "${provider}" topP must be a finite number within 0..1`,
     );
   }
   if (source.topK !== void 0 && (!Number.isInteger(source.topK) || source.topK <= 0)) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" topK must be a positive integer`,
+      `llm-ai-sdk: provider "${provider}" topK must be a positive integer`,
     );
   }
   if (bounded(source.presencePenalty, -2, 2) === void 0 && source.presencePenalty !== void 0) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" presencePenalty must be a finite number within -2..2`,
+      `llm-ai-sdk: provider "${provider}" presencePenalty must be a finite number within -2..2`,
     );
   }
   if (bounded(source.frequencyPenalty, -2, 2) === void 0 && source.frequencyPenalty !== void 0) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" frequencyPenalty must be a finite number within -2..2`,
+      `llm-ai-sdk: provider "${provider}" frequencyPenalty must be a finite number within -2..2`,
     );
   }
   if (source.seed !== void 0 && (!Number.isInteger(source.seed) || source.seed <= 0)) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" seed must be a positive integer`,
+      `llm-ai-sdk: provider "${provider}" seed must be a positive integer`,
     );
   }
   if (source.reasoning !== void 0 && !isReasoningEffort(source.reasoning)) {
     throw new Error(
-      `llm-openai-compatible: provider "${provider}" reasoning must be one of ${REASONING_LEVELS.join(", ")}`,
+      `llm-ai-sdk: provider "${provider}" reasoning must be one of ${REASONING_LEVELS.join(", ")}`,
+    );
+  }
+  const api = source.api ?? DEFAULT_LLM_API;
+  if (!(LLM_APIS as readonly string[]).includes(api)) {
+    throw new Error(
+      `llm-ai-sdk: provider "${provider}" api must be one of ${LLM_APIS.join(", ")}`,
     );
   }
   return {
     provider,
     displayName: source.displayName ?? provider,
+    api,
     ...(source.apiKeyEnv === void 0 ? {} : { apiKeyEnv: credentialRef(source.apiKeyEnv) }),
     baseURL: source.baseURL,
     ...(source.headers === void 0 ? {} : { headers: { ...source.headers } }),
@@ -336,7 +353,7 @@ export function resolveAdapterOptions(
     ...(timeoutMs === void 0 ? {} : { timeoutMs }),
     retryPolicy: resolveRetryPolicy(
       source.retryPolicy,
-      `llm-openai-compatible: provider "${provider}" retryPolicy`,
+      `llm-ai-sdk: provider "${provider}" retryPolicy`,
     ),
   };
 }
@@ -346,7 +363,7 @@ export function resolveProfiles(
 ): Map<string, ResolvedProviderProfile> {
   if (Array.isArray(providers))
     throw new Error(
-      "llm-openai-compatible: providers is now a dict keyed by provider route, not an array of profiles",
+      "llm-ai-sdk: providers is now a dict keyed by provider route, not an array of profiles",
     );
   const resolved = new Map<string, ResolvedProviderProfile>();
   for (const [provider, source] of Object.entries(providers ?? {})) {
@@ -421,20 +438,20 @@ export function apply(ctx: Context, config: Config): void {
     const credentials = ctx.get("credentials");
     if (credentials !== void 0) {
       const hit = await credentials.resolve(ref);
-      if (hit !== void 0) return assertUsableApiKey(hit.value, "llm-openai-compatible", ref);
+      if (hit !== void 0) return assertUsableApiKey(hit.value, "llm-ai-sdk", ref);
     } else {
       const ambient = launchEnvironmentOf(ctx).get(ref);
       if (ambient !== void 0 && ambient.value.length > 0)
-        return assertUsableApiKey(ambient.value, "llm-openai-compatible", ref);
+        return assertUsableApiKey(ambient.value, "llm-ai-sdk", ref);
     }
     throw new LlmError(
-      `llm-openai-compatible: no credential for provider route "${provider}"; its profile resolves ${ref}, which is not set — store ${ref} through the credentials service (the web Models page writes it), or export ${ref} in the launching environment`,
+      `llm-ai-sdk: no credential for provider route "${provider}"; its profile resolves ${ref}, which is not set — store ${ref} through the credentials service (the web Models page writes it), or export ${ref} in the launching environment`,
       "MISSING_CREDENTIAL",
     );
   };
   let userId: string | undefined;
   const resolveUserId = () => (userId ??= getOrCreateAnonymousUserId());
-  const adapter = new OpenAICompatibleAdapter({
+  const adapter = new LlmAiSdkAdapter({
     profiles,
     resolveApiKey,
     resolveUserId,
@@ -479,7 +496,7 @@ export function apply(ctx: Context, config: Config): void {
           ensureRegistrationFacts();
         } catch (error) {
           ctx.logger.error(
-            "llm-openai-compatible: keeping the previously registered routes after a refused update",
+            "llm-ai-sdk: keeping the previously registered routes after a refused update",
           );
           ctx.logger.error(error);
         }
@@ -487,7 +504,7 @@ export function apply(ctx: Context, config: Config): void {
           ensureDirectory();
         } catch (error) {
           ctx.logger.error(
-            "llm-openai-compatible: keeping the previous configurable-provider directory after a refused update",
+            "llm-ai-sdk: keeping the previous configurable-provider directory after a refused update",
           );
           ctx.logger.error(error);
         }

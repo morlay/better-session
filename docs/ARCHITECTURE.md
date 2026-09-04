@@ -24,7 +24,7 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 │   ├── ui-conversation-message-actions/  # 编排层 @morlay/ui-conversation-message-actions
 │   ├── session-rdb/             # 实现层 @morlay/session-rdb（RDB 持久化 + branch provider 双服务）
 │   ├── better-session/          # 聚合层 @morlay/better-session（装配决策 docs/adr/）
-│   └── llm-openai-compatible/   # LLM 适配 @morlay/dsh-llm-openai-compatible（独立上下文）
+│   └── llm-ai-sdk/              # AI SDK LLM 适配 @morlay/dsh-llm-ai-sdk（独立上下文）
 ├── vendor/
 │   └── deepseek-harness/        # 上游 side workspace（独立 git 仓库，见 dsh-side-workspace-plugin-develop skill）
 ├── .agents/skills/dsh-side-workspace-plugin-develop/ # 上游同步与适配流程 skill
@@ -110,16 +110,16 @@ namespace 可覆盖为 PostgreSQL（`connectionString`）。官方
 | 仓库级 | [docs/adr/](adr/) | 上游以 side workspace 版本锁定完整代码而非发布版本 |
 | 装配级 | [packages/better-session/docs/adr/](../packages/better-session/docs/adr/) | rdb 替换官方 jsonl 持久化；配置经 settings 服务覆盖 |
 | 上下文级 | [packages/session-branch/docs/adr/](../packages/session-branch/docs/adr/) | 分支面 provider 抽象；就地编辑；ignorable 版本效果；稠密坐标；事件实体全局化；rewind 直接截断；并发写入 fail loud；合成 closers；导出即修复；client bundle 单文件；agent 驱动重放 |
-| 上下文级 | [packages/llm-openai-compatible/docs/adr/](../packages/llm-openai-compatible/docs/adr/) | 起因（pi-ai 参数不完整）；传输层复用 ai-sdk；dict 多路由；模型目录缺省为空；凭据服务解析；采样合并规则 |
+| 上下文级 | [packages/llm-ai-sdk/docs/adr/](../packages/llm-ai-sdk/docs/adr/) | 起因（pi-ai 参数不完整）；传输层复用 ai-sdk；dict 多路由；模型目录缺省为空；凭据服务解析；采样合并规则；三传输风格（openai-compatible / openai / open-responses） |
 
 ## 深入阅读
 
 - 领域模型：[CONTEXT-MAP.md](../CONTEXT-MAP.md)、
   [会话编辑术语表](../packages/session-branch/CONTEXT.md)、
-  [LLM 适配术语表](../packages/llm-openai-compatible/CONTEXT.md)
+  [LLM 适配术语表](../packages/llm-ai-sdk/CONTEXT.md)
 - 契约层：[packages/session-branch/README.md](../packages/session-branch/README.md)
 - 编排层：[packages/ui-conversation-message-actions/README.md](../packages/ui-conversation-message-actions/README.md)
 - 实现层：[packages/session-rdb/README.md](../packages/session-rdb/README.md)、
   [packages/session-rdb/docs/design.md](../packages/session-rdb/docs/design.md)
 - 聚合 bundle：[packages/better-session/README.md](../packages/better-session/README.md)
-- LLM 适配：[packages/llm-openai-compatible/README.md](../packages/llm-openai-compatible/README.md)
+- LLM 适配：[packages/llm-ai-sdk/README.md](../packages/llm-ai-sdk/README.md)

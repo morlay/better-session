@@ -1,0 +1,39 @@
+# @morlay/better-llm-ai bundle patch.
+#
+# 在 profile 的 dsh.profile.bundles 中列出本包后，本 patch 装配 LLM AI 栈：
+# - llm-ai-sdk：AI SDK（openai-compatible / openai / open-responses）多
+#   provider LLM 适配器（host）。
+# - ui-llm-ai-settings：其 Web Models 设置页（client，settings.section id
+#   `llm-ai-sdk`；`dsh.client` 声明把它挂进浏览器 roster）。
+# 示例默认装配一个 ollama provider（零配置即可跑，但需要 ollama 端点可达）。
+# provider 增删与 API key 走 Web Models 设置页（写 settings.yaml 的
+# llm-ai-sdk namespace），或手写本 patch 的 config。
+
+- insert:
+    - id: llm-ai-sdk
+      name: "@morlay/dsh-llm-ai-sdk"
+      config:
+        providers:
+          ollama:
+            apiKeyEnv: OLLAMA_API_KEY
+            api: openai-compatible
+            baseURL: https://ollama.com/v1
+            displayName: Ollama Cloud
+            temperature: 1 # 0..2
+            topP: 0.95
+            reasoning: high
+            defaultContextWindow: 1000000
+            defaultMaxTokens: 65535
+            models:
+              - id: deepseek-v4-flash:0731
+                name: "DeepSeek V4 Flash @ Ollama Cloud"
+                contextWindow: 1000000
+                maxTokens: 65535
+                inputModalities: [text]
+                reasoningEfforts:
+                  off:
+                  high: high
+                  max: max
+
+    - id: ui-llm-ai-settings
+      name: "@morlay/ui-llm-ai-settings"

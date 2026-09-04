@@ -1,6 +1,6 @@
 - insert:
-    - id: llm-openai-compatible
-      name: "@morlay/dsh-llm-openai-compatible"
+    - id: llm-ai-sdk
+      name: "@morlay/dsh-llm-ai-sdk"
       config:
         providers:
           ollama:

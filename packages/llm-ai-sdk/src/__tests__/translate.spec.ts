@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { StreamChunk } from "@deepseek-ai/dsh-llm";
-import { mapFinishReason, mapUsage, translate } from "@morlay/dsh-llm-openai-compatible/wire";
+import { mapFinishReason, mapUsage, translate } from "@morlay/dsh-llm-ai-sdk/wire";
 
 function streamOf(
   ...parts: LanguageModelV4StreamPart[]

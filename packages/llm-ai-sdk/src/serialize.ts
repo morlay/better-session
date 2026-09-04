@@ -20,15 +20,21 @@ const TOOL_RESULT_IMAGE_TEXT = "Attached image(s) from tool result:";
 
 type UserContentPart = Extract<LanguageModelV4Prompt[number], { role: "user" }>["content"][number];
 
-export type OpenAICompatibleProviderOptions = SharedV4ProviderOptions & {
+export type LlmAiSdkProviderOptions = SharedV4ProviderOptions & {
   "openai-compatible"?: {
     reasoningEffort?: string;
 
     top_k?: number;
   };
+  openai?: {
+    reasoningEffort?: string;
+  };
+  "open-responses"?: {
+    reasoningEffort?: string;
+  };
 };
 
-export interface OpenAICompatibleCallOptions {
+export interface LlmAiSdkCallOptions {
   prompt: LanguageModelV4Prompt;
   maxOutputTokens?: number;
   temperature?: number;
@@ -38,7 +44,7 @@ export interface OpenAICompatibleCallOptions {
   seed?: number;
   stopSequences?: string[];
   tools?: LanguageModelV4FunctionTool[];
-  providerOptions?: OpenAICompatibleProviderOptions;
+  providerOptions?: LlmAiSdkProviderOptions;
 }
 
 export function resolveReasoningWire(
@@ -50,14 +56,14 @@ export function resolveReasoningWire(
   if (declaration === void 0 || declaration === false) {
     const subject = model === void 0 ? "unlisted model" : `model "${model.id}"`;
     throw new LlmError(
-      `OpenAI-compatible ${subject} declares no reasoning efforts, so "${effort}" cannot be selected`,
+      `llm-ai-sdk ${subject} declares no reasoning efforts, so "${effort}" cannot be selected`,
       "UNSUPPORTED_REASONING_EFFORT",
     );
   }
   const wire = declaration[effort];
   if (wire === void 0) {
     throw new LlmError(
-      `OpenAI-compatible model "${model.id}" does not support reasoning effort "${effort}"`,
+      `llm-ai-sdk model "${model.id}" does not support reasoning effort "${effort}"`,
       "UNSUPPORTED_REASONING_EFFORT",
     );
   }
@@ -75,7 +81,7 @@ function flattenText(blocks: readonly ContentBlock[]): string {
 function assertTextOnly(blocks: readonly ContentBlock[]): void {
   if (contentHasImage(blocks)) {
     throw new LlmError(
-      "The OpenAI-compatible chat-completions adapter does not support image content in this message.",
+      "The llm-ai-sdk chat-completions adapter does not support image content in this message.",
       "UNSUPPORTED_CONTENT",
     );
   }
@@ -85,7 +91,7 @@ function assertSupportedImageRoles(messages: readonly Message[]): void {
   for (const message of messages) {
     if (message.role !== "user" && contentHasImage(message.content)) {
       throw new LlmError(
-        `The OpenAI-compatible chat-completions adapter cannot represent image content in a ${message.role} message.`,
+        `The llm-ai-sdk chat-completions adapter cannot represent image content in a ${message.role} message.`,
         "UNSUPPORTED_CONTENT",
       );
     }
@@ -169,7 +175,7 @@ async function userParts(
       case "image":
         if (resolveImage === void 0)
           throw new LlmError(
-            "The OpenAI-compatible chat-completions adapter does not support image content in this message.",
+            "The llm-ai-sdk chat-completions adapter does not support image content in this message.",
             "UNSUPPORTED_CONTENT",
           );
         parts.push(await resolveImage(block, signal));
@@ -269,12 +275,42 @@ function serializeTools(options: GenerateOptions): LanguageModelV4FunctionTool[]
   return tools !== void 0 && tools.length > 0 ? tools : void 0;
 }
 
+function providerOptionsFor(
+  api: ResolvedProviderProfile["api"],
+  reasoningEffort: string | undefined,
+  topK: number | undefined,
+): LlmAiSdkProviderOptions | undefined {
+  // 官方 openai 与独立 open-responses 后端丢弃 top_k（只在 stream-start 里
+  // 发 unsupported warning），不发送它；openai-compatible 网关透传 top_k。
+  // reasoning_effort 三个后端都在各自的 providerOptions key 下直通（任意
+  // wire 拼写均不校验），所以档位 wire 照发。
+  switch (api) {
+    case "openai-compatible":
+      return reasoningEffort === void 0 && topK === void 0
+        ? void 0
+        : {
+          "openai-compatible": {
+            ...(reasoningEffort === void 0 ? {} : { reasoningEffort }),
+            ...(topK === void 0 ? {} : { top_k: topK }),
+          },
+        };
+    case "openai":
+      return reasoningEffort === void 0
+        ? void 0
+        : { openai: { reasoningEffort } };
+    case "open-responses":
+      return reasoningEffort === void 0
+        ? void 0
+        : { "open-responses": { reasoningEffort } };
+  }
+}
+
 function callOptionsWithPrompt(
   options: GenerateOptions,
   profile: ResolvedProviderProfile,
   model: ResolvedModelProfile | undefined,
   prompt: LanguageModelV4Prompt,
-): OpenAICompatibleCallOptions {
+): LlmAiSdkCallOptions {
   const tools = serializeTools(options);
   const temperature = options.temperature ?? profile.temperature;
   const maxOutputTokens = options.maxTokens ?? model?.maxTokens ?? profile.defaultMaxTokens;
@@ -283,12 +319,7 @@ function callOptionsWithPrompt(
       ? profile.reasoning
       : (options.reasoningEffort as unknown as ReasoningEffort);
   const reasoningEffort = resolveReasoningWire(model, requestedEffort);
-  const providerOptions: OpenAICompatibleProviderOptions = {
-    "openai-compatible": {
-      ...(reasoningEffort === void 0 ? {} : { reasoningEffort }),
-      ...(profile.topK === void 0 ? {} : { top_k: profile.topK }),
-    },
-  };
+  const providerOptions = providerOptionsFor(profile.api, reasoningEffort, profile.topK);
   return {
     prompt,
     ...(temperature !== void 0 ? { temperature } : {}),
@@ -299,9 +330,7 @@ function callOptionsWithPrompt(
     ...(maxOutputTokens !== void 0 ? { maxOutputTokens } : {}),
     ...(options.stop !== void 0 ? { stopSequences: options.stop } : {}),
     ...(tools !== void 0 ? { tools } : {}),
-    ...(Object.keys(providerOptions["openai-compatible"] ?? {}).length > 0
-      ? { providerOptions }
-      : {}),
+    ...(providerOptions === void 0 ? {} : { providerOptions }),
   };
 }
 
@@ -309,7 +338,7 @@ export async function serializeCallOptions(
   options: GenerateOptions,
   profile: ResolvedProviderProfile,
   model: ResolvedModelProfile | undefined,
-): Promise<OpenAICompatibleCallOptions> {
+): Promise<LlmAiSdkCallOptions> {
   const system =
     options.system === void 0 ? [] : [{ role: "system" as const, content: options.system }];
   const prompt = await serializePrompt(options.messages, void 0);
@@ -321,7 +350,7 @@ export async function serializeCallOptionsWithImages(
   profile: ResolvedProviderProfile,
   model: ResolvedModelProfile | undefined,
   images: { attachments: AttachmentStore; maxRequestImageBytes: number; signal?: AbortSignal },
-): Promise<OpenAICompatibleCallOptions> {
+): Promise<LlmAiSdkCallOptions> {
   const requestMessages = offloadRequestImagesWithPolicy(options.messages, {
     representation: "raw",
     maxBytes: images.maxRequestImageBytes,

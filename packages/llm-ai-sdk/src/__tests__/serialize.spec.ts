@@ -8,8 +8,8 @@ import {
   resolveRetryPolicy,
 } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, Message } from "@deepseek-ai/dsh-llm";
-import type { ResolvedModelProfile, ResolvedProviderProfile } from "@morlay/dsh-llm-openai-compatible";
-import { resolveReasoningWire, serializeCallOptions } from "@morlay/dsh-llm-openai-compatible/wire";
+import type { ResolvedModelProfile, ResolvedProviderProfile } from "@morlay/dsh-llm-ai-sdk";
+import { resolveReasoningWire, serializeCallOptions } from "@morlay/dsh-llm-ai-sdk/wire";
 
 function userMessage(text: string): Message {
   return createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } });
@@ -19,6 +19,7 @@ function profile(overrides?: Partial<ResolvedProviderProfile>): ResolvedProvider
   return {
     provider: "test",
     displayName: "Test",
+    api: "openai-compatible",
     baseURL: "https://example.com/v1",
     models: [],
     defaultContextWindow: 262144,
@@ -150,6 +151,36 @@ describe("serializeCallOptions", () => {
       }),
     );
     expect(callOptions.providerOptions?.["openai-compatible"]?.reasoningEffort).toBeUndefined();
+  });
+
+  it("routes reasoning_effort and top_k to the profile's api style", async () => {
+    const reasoningModel = model({ reasoningEfforts: { off: null, high: "high" } });
+    const official = await serializeCallOptions(
+      options(),
+      profile({ api: "openai", topK: 40, reasoning: "high" }),
+      reasoningModel,
+    );
+    expect(official.providerOptions?.openai?.reasoningEffort).toBe("high");
+    expect(official.providerOptions?.["openai-compatible"]).toBeUndefined();
+    // 官方 chat 后端丢弃 top_k（只发 unsupported warning），所以不发它。
+    expect("top_k" in (official.providerOptions?.openai ?? {})).toBe(false);
+
+    const responses = await serializeCallOptions(
+      options(),
+      profile({ api: "open-responses", topK: 40, reasoning: "high" }),
+      reasoningModel,
+    );
+    expect(responses.providerOptions?.["open-responses"]?.reasoningEffort).toBe("high");
+    expect(responses.providerOptions?.["openai-compatible"]).toBeUndefined();
+  });
+
+  it("omits providerOptions entirely when the style has nothing to carry", async () => {
+    const callOptions = await serializeCallOptions(
+      options(),
+      profile({ api: "open-responses" }),
+      model(),
+    );
+    expect(callOptions.providerOptions).toBeUndefined();
   });
 
   it("throws UNSUPPORTED_REASONING_EFFORT for a request-level effort the model lacks", async () => {

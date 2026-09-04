@@ -5,7 +5,6 @@ import {
   LlmError,
   ProviderRequestId,
   ReasoningEffortId,
-  attributionHeaders,
   contentHasImage,
   isContextWindowExceededError,
   isQuotaExceededError,
@@ -23,10 +22,11 @@ import type { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import type { CredentialRef } from "@deepseek-ai/dsh-credentials";
 import { deadline, idleWatchdog, timeoutOf } from "@deepseek-ai/dsh-timeout";
 import { APICallError } from "@ai-sdk/provider";
-import type { LanguageModelV4, LanguageModelV4Usage } from "@ai-sdk/provider";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import type { LanguageModelV4Usage } from "@ai-sdk/provider";
 import { serializeCallOptions, serializeCallOptionsWithImages } from "./serialize.ts";
 import { translate } from "./translate.ts";
+import { createSdkModelCache, sdkModelOf } from "./transport.ts";
+import type { LlmApi } from "./transport.ts";
 
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
 
@@ -61,6 +61,9 @@ export interface ResolvedProviderProfile {
 
   apiKeyEnv?: CredentialRef;
 
+  /** AI SDK 传输风格（见 {@link LlmApi}）；缺省在 index 解析层落为 openai-compatible。 */
+  api: LlmApi;
+
   baseURL: string;
   headers?: Readonly<Record<string, string>>;
   // === sampling defaults (request-level values win) ===
@@ -84,7 +87,7 @@ export interface ResolvedProviderProfile {
   retryPolicy: ResolvedRetryPolicy;
 }
 
-export interface OpenAICompatibleAdapterOptions {
+export interface LlmAiSdkAdapterOptions {
   profiles: () => ReadonlyMap<string, ResolvedProviderProfile>;
 
   resolveApiKey: (
@@ -204,11 +207,11 @@ function requestId(headers: Record<string, string> | undefined): ProviderRequest
   return value === void 0 || value.length === 0 ? void 0 : ProviderRequestId(value);
 }
 
-export class OpenAICompatibleAdapter extends LlmAdapter {
-  private readonly config: OpenAICompatibleAdapterOptions;
-  private readonly sdkProviders = new Map<ResolvedProviderProfile, Map<string, LanguageModelV4>>();
+export class LlmAiSdkAdapter extends LlmAdapter {
+  private readonly config: LlmAiSdkAdapterOptions;
+  private readonly sdkModelCaches = new Map<ResolvedProviderProfile, ReturnType<typeof createSdkModelCache>>();
 
-  constructor(config: OpenAICompatibleAdapterOptions) {
+  constructor(config: LlmAiSdkAdapterOptions) {
     super();
     this.config = config;
   }
@@ -217,7 +220,7 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
     const profile = this.config.profiles().get(provider);
     if (profile === void 0)
       throw new LlmError(
-        `OpenAI-compatible adapter does not own provider "${provider}"`,
+        `llm-ai-sdk adapter does not own provider "${provider}"`,
         "NO_ADAPTER",
       );
     return profile;
@@ -230,25 +233,17 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
     return profile.models.find((entry) => entry.id === model);
   }
 
-  private sdkModel(profile: ResolvedProviderProfile, modelId: string): LanguageModelV4 {
-    let byModel = this.sdkProviders.get(profile);
-    if (byModel === void 0) {
-      byModel = new Map();
-      this.sdkProviders.set(profile, byModel);
+  private sdkModel(
+    profile: ResolvedProviderProfile,
+    modelId: string,
+    apiKey: string | undefined,
+  ) {
+    let cache = this.sdkModelCaches.get(profile);
+    if (cache === void 0) {
+      cache = createSdkModelCache();
+      this.sdkModelCaches.set(profile, cache);
     }
-    let model = byModel.get(modelId);
-    if (model === void 0) {
-      const provider = createOpenAICompatible({
-        name: PROVIDER_OPTIONS_KEY,
-        baseURL: profile.baseURL,
-        headers: { ...profile.headers, ...attributionHeaders() },
-        includeUsage: true,
-        convertUsage,
-      });
-      model = provider.chatModel(modelId);
-      byModel.set(modelId, model);
-    }
-    return model;
+    return sdkModelOf(cache, profile, modelId, apiKey);
   }
 
   providerInfo(provider: string): LlmProviderInfo {
@@ -294,14 +289,14 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
     if (hasImages) {
       if (model?.inputModalities.includes("image") !== true) {
         throw new LlmError(
-          `OpenAI-compatible model "${options.model}" does not accept image input.`,
+          `llm-ai-sdk model "${options.model}" does not accept image input.`,
           "UNSUPPORTED_CONTENT",
         );
       }
       attachments = this.config.resolveAttachments?.();
       if (attachments === void 0)
         throw new LlmError(
-          "OpenAI-compatible image conversion requires the durable attachment service.",
+          "llm-ai-sdk image conversion requires the durable attachment service.",
           "UNSUPPORTED_CONTENT",
         );
     }
@@ -330,7 +325,7 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
               maxRequestImageBytes: profile.maxRequestImageBytes,
               signal: watchdog.signal,
             });
-      const sdkModel = this.sdkModel(profile, options.model);
+      const sdkModel = this.sdkModel(profile, options.model, apiKey);
       let result;
       try {
         result = await sdkModel.doStream({
@@ -338,12 +333,12 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
           abortSignal: watchdog.signal,
           headers: {
             ...(apiKey === void 0 ? {} : { authorization: `Bearer ${apiKey}` }),
-            "x-openai-compatible-harness-user-id": String(userId),
+            "x-llm-ai-sdk-harness-user-id": String(userId),
             ...(options.sessionId !== void 0
-              ? { "x-openai-compatible-harness-session-id": String(options.sessionId) }
+              ? { "x-llm-ai-sdk-harness-session-id": String(options.sessionId) }
               : {}),
             ...(options.purpose === "compaction"
-              ? { "x-openai-compatible-harness-compact": "1" }
+              ? { "x-llm-ai-sdk-harness-compact": "1" }
               : {}),
           },
         });
@@ -364,7 +359,7 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
       } catch (error) {
         if (timeoutOf(watchdog.signal, STREAM_IDLE_TIMEOUT_CODE) !== void 0) {
           throw new LlmError(
-            `OpenAI-compatible stream idle timeout after ${profile.streamIdleTimeoutMs}ms`,
+            `llm-ai-sdk stream idle timeout after ${profile.streamIdleTimeoutMs}ms`,
             "TIMEOUT",
             { cause: error },
           );
@@ -374,19 +369,19 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
           timeoutOf(watchdog.signal, REQUEST_TIMEOUT_CODE) !== void 0
         ) {
           throw new LlmError(
-            `OpenAI-compatible request timeout after ${profile.timeoutMs}ms`,
+            `llm-ai-sdk request timeout after ${profile.timeoutMs}ms`,
             "TIMEOUT",
             { cause: error },
           );
         }
         if (options.signal?.aborted)
-          throw new LlmError("OpenAI-compatible request aborted by caller", "ABORTED", {
+          throw new LlmError("llm-ai-sdk request aborted by caller", "ABORTED", {
             cause: error,
           });
         if (error instanceof LlmError) throw error;
         throw this.normalizeTransportError(error, profile);
       } finally {
-        consumer.abort("OpenAI-compatible stream consumer stopped");
+        consumer.abort("llm-ai-sdk stream consumer stopped");
         if (!exhausted) {
           try {
             await iterator.return(void 0);
@@ -416,11 +411,11 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
     }
     if (error instanceof Error) {
       return new LlmError(
-        `OpenAI-compatible API request to ${profile.baseURL} failed`,
+        `llm-ai-sdk API request to ${profile.baseURL} failed`,
         "TRANSPORT",
         { cause: error },
       );
     }
-    return new LlmError(`OpenAI-compatible API request to ${profile.baseURL} failed`, "TRANSPORT");
+    return new LlmError(`llm-ai-sdk API request to ${profile.baseURL} failed`, "TRANSPORT");
   }
 }

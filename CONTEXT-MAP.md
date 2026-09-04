@@ -7,7 +7,7 @@
 ## 上下文
 
 - [会话编辑](./packages/session-branch/CONTEXT.md) — 为会话提供就地编辑 / 重试 / 分支（rewind / retry / fork）闭环
-- [LLM 适配](./packages/llm-openai-compatible/CONTEXT.md) — 为 OpenAI 兼容端点提供 LLM 适配器
+- [LLM 适配](./packages/llm-ai-sdk/CONTEXT.md) — 基于 AI SDK 三传输风格的 LLM 适配器
 
 ## 关系
 

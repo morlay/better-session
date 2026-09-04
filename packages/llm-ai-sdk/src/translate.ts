@@ -177,7 +177,7 @@ export async function* translate(
         const cause = error instanceof Error ? error : void 0;
         const message =
           cause?.message ?? (typeof error === "string" ? error : "provider stream error");
-        throw new LlmError(`OpenAI-compatible stream failed: ${message}`, "TRANSPORT", { cause });
+        throw new LlmError(`llm-ai-sdk stream failed: ${message}`, "TRANSPORT", { cause });
       }
     }
   }

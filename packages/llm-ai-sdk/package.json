@@ -1,14 +1,16 @@
 {
-  "name": "@morlay/dsh-llm-openai-compatible",
+  "name": "@morlay/dsh-llm-ai-sdk",
   "version": "0.0.3",
-  "description": "OpenAI-compatible LLM adapter plugin for DeepSeek Harness with configurable default sampling parameters (temperature / topP / topK / penalties / seed) over a providers dict.",
+  "description": "AI SDK (openai-compatible / openai / open-responses) LLM adapter plugin for DeepSeek Harness with configurable default sampling parameters over a providers dict.",
   "keywords": [
     "dsh",
     "dsh-plugin",
     "llm",
     "ollama",
     "openai",
-    "openai-compatible"
+    "openai-compatible",
+    "open-responses",
+    "ai-sdk"
   ],
   "license": "MIT",
   "repository": {
@@ -43,6 +45,8 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
+    "@ai-sdk/open-responses": "^2.0.38",
+    "@ai-sdk/openai": "^4.0.58",
     "@ai-sdk/openai-compatible": "^3.0.32",
     "@ai-sdk/provider": "^4.0.7",
     "@deepseek-ai/dsh-util-values": "workspace:^"

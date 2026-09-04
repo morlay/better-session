@@ -154,12 +154,12 @@ importers:
       '@deepseek-ai/dsh':
         specifier: workspace:^
         version: link:../../vendor/deepseek-harness/apps/cli
+      '@morlay/better-llm-ai':
+        specifier: workspace:^
+        version: link:../../packages/better-llm-ai
       '@morlay/better-session':
         specifier: workspace:^
         version: link:../../packages/better-session
-      '@morlay/dsh-llm-openai-compatible':
-        specifier: workspace:^
-        version: link:../../packages/llm-openai-compatible
 
   devpackages/devkit:
     dependencies:
@@ -172,6 +172,18 @@ importers:
       typescript:
         specifier: 7.x
         version: 7.0.2
+
+  packages/better-llm-ai:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/vendor/cordis
+      '@morlay/dsh-llm-ai-sdk':
+        specifier: workspace:^
+        version: link:../llm-ai-sdk
+      '@morlay/ui-llm-ai-settings':
+        specifier: workspace:^
+        version: link:../ui-llm-ai-settings
 
   packages/better-session:
     dependencies:
@@ -188,8 +200,14 @@ importers:
         specifier: workspace:^
         version: link:../ui-conversation-message-actions
 
-  packages/llm-openai-compatible:
+  packages/llm-ai-sdk:
     dependencies:
+      '@ai-sdk/open-responses':
+        specifier: ^2.0.38
+        version: 2.0.38(zod@4.5.4)
+      '@ai-sdk/openai':
+        specifier: ^4.0.58
+        version: 4.0.58(zod@4.5.4)
       '@ai-sdk/openai-compatible':
         specifier: ^3.0.32
         version: 3.0.43(zod@4.5.4)
@@ -354,6 +372,55 @@ importers:
       '@morlay/session-rdb':
         specifier: workspace:^
         version: link:../session-rdb
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.5
+        version: 19.2.5(@types/react@19.2.18)
+      lightningcss:
+        specifier: ^1.32.0
+        version: 1.33.0
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.8
+        version: 19.2.8(react@19.2.8)
+
+  packages/ui-llm-ai-settings:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/vendor/cordis
+      '@deepseek-ai/dsh-api-remotes':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/api/remotes
+      '@deepseek-ai/dsh-client-connection':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/client/connection
+      '@deepseek-ai/dsh-client-locale':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/client/locale
+      '@deepseek-ai/dsh-client-store':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/client/store
+      '@deepseek-ai/dsh-client-ui-renderer':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/client/ui-renderer
+      '@deepseek-ai/dsh-client-ui-settings':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/client/ui-settings
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/client/ui-slots
+      '@deepseek-ai/dsh-util-values':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/util/values
+    devDependencies:
+      '@deepseek-ai/dsh-client-test-runtime':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/test-support/client-runtime
       '@types/react':
         specifier: ^19.2.18
         version: 19.2.18
@@ -9900,8 +9967,20 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
+  '@ai-sdk/open-responses@2.0.38':
+    resolution: {integrity: sha512-mWlZJxBLh/+5PVJ9b1/mPb7cBB/+hwQQCougprIML0z6skWWgHzhwof3+9AzFbTpTEcTn22P8yQE2+5BH1GCJQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
   '@ai-sdk/openai-compatible@3.0.43':
     resolution: {integrity: sha512-QurboftQF0jGshbNM5KHNNpttp7huKSV7rN+C7ylcT5XsLZPud1eCMqyX0zlYFxm6pE4MEc/1PgFX12tm85yqg==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/openai@4.0.58':
+    resolution: {integrity: sha512-oO3vH0e8lhN3OrANukokI2rvUJV+RVwTwJ2y+eSK+IiKlauFza2Yyl/7hjErqkjOt/eMOobhNijo+CFsFt8T+g==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -14357,7 +14436,19 @@ snapshots:
     dependencies:
       zod: 4.5.4
 
+  '@ai-sdk/open-responses@2.0.38(zod@4.5.4)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.10
+      '@ai-sdk/provider-utils': 5.0.36(zod@4.5.4)
+      zod: 4.5.4
+
   '@ai-sdk/openai-compatible@3.0.43(zod@4.5.4)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.10
+      '@ai-sdk/provider-utils': 5.0.36(zod@4.5.4)
+      zod: 4.5.4
+
+  '@ai-sdk/openai@4.0.58(zod@4.5.4)':
     dependencies:
       '@ai-sdk/provider': 4.0.10
       '@ai-sdk/provider-utils': 5.0.36(zod@4.5.4)

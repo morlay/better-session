@@ -12,8 +12,8 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@morlay/better-session": "workspace:^",
-    "@morlay/dsh-llm-openai-compatible": "workspace:^"
+    "@morlay/better-llm-ai": "workspace:^",
+    "@morlay/better-session": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh": "workspace:^"
@@ -24,7 +24,7 @@
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
         "@morlay/better-session",
-        "@morlay/dsh-llm-openai-compatible"
+        "@morlay/better-llm-ai"
       ]
     },
     "desktop": {

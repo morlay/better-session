@@ -1,0 +1,55 @@
+{
+  "name": "@morlay/better-llm-ai",
+  "version": "0.0.1",
+  "description": "Example dsh profile bundle: assembles @morlay/dsh-llm-ai-sdk (AI SDK multi-provider LLM adapter) and @morlay/ui-llm-ai-settings (Web Models settings page) into a web profile.",
+  "keywords": [
+    "dsh",
+    "dsh-bundle",
+    "llm",
+    "openai",
+    "ai-sdk",
+    "llm-ai-sdk",
+    "settings",
+    "ui-llm-ai-settings"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/morlay/better-session.git"
+  },
+  "files": [
+    "dist",
+    "src",
+    "cordis.patch.yml",
+    "!**/__tests__"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./package.json": "./package.json",
+      "./cordis.patch.yml": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "pnpm exec tsdown",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "@morlay/dsh-llm-ai-sdk": "workspace:^",
+    "@morlay/ui-llm-ai-settings": "workspace:^"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

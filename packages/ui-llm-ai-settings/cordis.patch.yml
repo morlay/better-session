@@ -1,0 +1,10 @@
+# @morlay/ui-llm-ai-settings bundle patch.
+#
+# 在 profile 的 dsh.profile.bundles 中列出本包后，本 patch 插入本插件条目。
+# host 面为空 apply；`dsh.client` 声明让 client-modules 把本包的 client 面
+# （src/client → dist/client.js）挂进浏览器 roster——注册 llm-ai-sdk 的
+# Web Models 设置页（settings.section id `llm-ai-sdk`）。
+
+- insert:
+    - id: ui-llm-ai-settings
+      name: "@morlay/ui-llm-ai-settings"
