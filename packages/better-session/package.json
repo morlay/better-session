@@ -1,6 +1,6 @@
 {
   "name": "@morlay/better-session",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "Example dsh profile bundle: assembles @morlay/session-rdb and @morlay/ui-conversation-message-actions into a web profile — rewind / retry / fork closed loop on RDB persistence.",
   "keywords": [
     "dsh",
