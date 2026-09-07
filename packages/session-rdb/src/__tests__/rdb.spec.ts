@@ -9,13 +9,17 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { SessionStore, SessionId, SessionLogOffset, SessionSeq } from "@deepseek-ai/dsh-session";
+import { foldSurface } from "@deepseek-ai/dsh-session/surface";
 import type {
   Session,
   SessionEvent,
   SurfaceEvent,
   SurfaceEventType,
 } from "@deepseek-ai/dsh-session";
-import SessionPersistenceSqlite, { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "@morlay/session-rdb";
+import SessionPersistenceSqlite, {
+  SCHEMA_VERSION,
+  EPHEMERAL_EVENT_TYPES,
+} from "@morlay/session-rdb";
 import { parseJsonlArtifact } from "@morlay/session-rdb/artifact";
 import {
   buildSeqMap,
@@ -1156,6 +1160,114 @@ describe("recomputeReplaceProvenance", () => {
     const replacement = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
     expect(replacement.sourceEventSeqs).toEqual([1, 2]);
   });
+
+  it("satisfies the upstream surface fold across chained checkpoints with a straggler", () => {
+    // 端到端：两轮链式 checkpoint + 压缩竞态漏网节点（seq 2 位于上一个
+    // checkpoint 节点 5 之后的表面位置、seq 却更小）。重算后的 provenance
+    // 必须通过上游 foldSurface（assertProvenance 的真实实现），漏网节点
+    // 被正确遮蔽；按 range 数值扫描的旧结果会被 "missing 2" 拒绝。
+    const events: SessionEvent[] = [
+      {
+        type: "user/message",
+        seq: SessionSeq(0),
+        time: 1,
+        data: { content: [{ type: "text", text: "old" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "assistant/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: {
+            id: "a1",
+            role: "assistant",
+            content: [{ type: "text", text: "old" }],
+            source: { kind: "model", provider: "m", model: "m" },
+          },
+        },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "assistant/message",
+        seq: SessionSeq(2),
+        time: 3,
+        data: {
+          turn: 1,
+          step: 2,
+          message: {
+            id: "a2",
+            role: "assistant",
+            content: [{ type: "text", text: "straggler" }],
+            source: { kind: "model", provider: "m", model: "m" },
+          },
+        },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "compaction/summary",
+        seq: SessionSeq(3),
+        time: 5,
+        data: {
+          turn: 1,
+          summary: "s1",
+          shadowedRange: { start: 0, end: 1 },
+          shadowedSeqs: [0, 1],
+          shadowedTokenCount: 10,
+        },
+      } as unknown as SessionEvent,
+      {
+        type: "user/message",
+        seq: SessionSeq(4),
+        time: 6,
+        data: {
+          content: [{ type: "text", text: "checkpoint" }],
+          source: { kind: "plugin", plugin: "compact" },
+        },
+        surfaceOp: { op: "replace", start: 0, end: 1 },
+      } as unknown as SessionEvent,
+      {
+        type: "user/message",
+        seq: SessionSeq(5),
+        time: 7,
+        data: { content: [{ type: "text", text: "next" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "compaction/summary",
+        seq: SessionSeq(6),
+        time: 9,
+        data: {
+          turn: 1,
+          summary: "s2",
+          shadowedRange: { start: 4, end: 5 },
+          shadowedSeqs: [4, 2, 5],
+          shadowedTokenCount: 20,
+        },
+      } as unknown as SessionEvent,
+      {
+        type: "user/message",
+        seq: SessionSeq(7),
+        time: 10,
+        data: {
+          content: [{ type: "text", text: "checkpoint" }],
+          source: { kind: "plugin", plugin: "compact" },
+        },
+        surfaceOp: { op: "replace", start: 4, end: 5 },
+      } as unknown as SessionEvent,
+    ];
+    recomputeReplaceProvenance(events);
+    const checkpoint = events[7] as SessionEvent & { sourceEventSeqs?: number[] };
+    expect(checkpoint.sourceEventSeqs).toEqual([4, 2, 5]);
+    checkpoint.sourceEventSeqs = [4, 5];
+    expect(() => foldSurface(events)).toThrow(/missing 2/);
+    checkpoint.sourceEventSeqs = [4, 2, 5];
+    const { nodes } = foldSurface(events);
+    // 两轮 checkpoint 后，表面只剩最后一个 checkpoint 节点（漏网节点已被遮蔽）。
+    expect([...nodes]).toEqual([SessionSeq(7)]);
+  });
 });
 
 describe("remapSurfaceOp", () => {
@@ -1192,9 +1304,23 @@ describe("remapShadowedRange", () => {
 
 describe("remapShadowedSeqs", () => {
   it("remaps every shadowed seq through the upstream→persisted seq map", () => {
-    expect(remapShadowedSeqs([15, 398_881, 400_000], (seq) => seq - 10)).toEqual([
-      5, 398_871, 399_990,
+    const map = new Map<number, number>([
+      [15, 5],
+      [398_881, 398_871],
+      [400_000, 399_990],
     ]);
+    expect(remapShadowedSeqs([15, 398_881, 400_000], map)).toEqual([5, 398_871, 399_990]);
+  });
+
+  it("drops refs absent from the persisted view instead of identity fallback", () => {
+    // 分支裁剪可能丢弃部分被遮蔽节点；恒等回退会留下陈旧的上游 seq，
+    // 它可大于 replace 事件的稠密 seq（上游校验 "must reference earlier
+    // events" 拒绝加载），或指向无关事件污染 provenance。
+    const map = new Map<number, number>([
+      [15, 5],
+      [398_881, 398_871],
+    ]);
+    expect(remapShadowedSeqs([15, 77_318, 398_881], map)).toEqual([5, 398_871]);
   });
 });
 

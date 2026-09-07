@@ -92,9 +92,15 @@ export function remapShadowedRange(
 
 export function remapShadowedSeqs(
   seqs: readonly number[],
-  remap: (seq: number) => number,
+  seqMap: ReadonlyMap<number, number>,
 ): number[] {
-  return seqs.map(remap);
+  // 未持久化的引用（分支裁剪等）直接丢弃：恒等回退会留下陈旧的上游 seq，
+  // 稠密坐标通常被压缩，它可能大于 replace 事件的稠密 seq，上游
+  // assertProvenance 会以 "must reference earlier events" 拒绝整个会话。
+  return seqs.flatMap((seq) => {
+    const dense = seqMap.get(seq);
+    return dense === undefined ? [] : [dense];
+  });
 }
 
 export function rowToEvent(row: EventRow, seqMap: ReadonlyMap<number, number>): SessionEvent {
@@ -117,7 +123,7 @@ export function rowToEvent(row: EventRow, seqMap: ReadonlyMap<number, number>): 
       metering.shadowedRange = remapShadowedRange(metering.shadowedRange, remap);
     }
     if (metering.shadowedSeqs !== undefined) {
-      metering.shadowedSeqs = remapShadowedSeqs(metering.shadowedSeqs, remap);
+      metering.shadowedSeqs = remapShadowedSeqs(metering.shadowedSeqs, seqMap);
     }
   }
   return {
