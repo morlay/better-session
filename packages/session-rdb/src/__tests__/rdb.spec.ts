@@ -22,6 +22,7 @@ import {
   findSurfaceRepairs,
   recomputeReplaceProvenance,
   remapShadowedRange,
+  remapShadowedSeqs,
   remapSurfaceOp,
   rowToEvent,
   rowToMeta,
@@ -578,6 +579,43 @@ describe("rowToEvent", () => {
     });
   });
 
+  it("remaps a compaction/summary shadowedSeqs through the upstream→persisted seq map", () => {
+    // shadowedSeqs 是权威的被遮蔽节点列表（range 只是首尾边界对，压缩竞态下
+    // 可能漏掉并发落地的节点）——replace 的 provenance 重计算依赖它，必须与
+    // range 同空间重映射到稠密坐标。
+    const row: EventRow = {
+      fEventId: "evt-4056",
+      fSequence: 4056,
+      fOriginalSeq: 400_000,
+      fType: "compaction/summary",
+      fKind: "compaction",
+      fRole: "",
+      fName: "",
+      fActionId: "",
+      fCreatedAt: 1,
+      fData: JSON.stringify({
+        turn: 1,
+        summary: "…",
+        shadowedRange: { start: 15, end: 398_881 },
+        shadowedSeqs: [15, 77_318, 398_881],
+        shadowedTokenCount: 12_345,
+      }),
+      fSurfaceOp: null,
+    };
+    const map = new Map<number, number>([
+      [15, 15],
+      [77_318, 659],
+      [398_881, 4048],
+      [400_000, 4056],
+    ]);
+    const event = rowToEvent(row, map);
+    expect(event.data).toMatchObject({
+      shadowedRange: { start: 15, end: 4048 },
+      shadowedSeqs: [15, 659, 4048],
+      shadowedTokenCount: 12_345,
+    });
+  });
+
   it("keeps a compact shadowedRange verbatim with an identity map (no delta filtering)", () => {
     const row: EventRow = {
       fEventId: "evt-3",
@@ -953,6 +991,171 @@ describe("recomputeReplaceProvenance", () => {
     // user/message @ 10 + assistant/message @ 11 are surface nodes in the range.
     expect(checkpoint.sourceEventSeqs).toEqual([10, 11]);
   });
+
+  it("prefers the adjacent metering event's shadowedSeqs over a range scan", () => {
+    // 压缩竞态样式：compaction/summary 的 shadowedSeqs 显式列出全部被遮蔽
+    // 节点（含 range 数值区间漏掉的并发落地节点 659），replace 紧随其后。
+    // provenance 必须采用 shadowedSeqs（权威列表），否则上游
+    // assertProvenance 报 "missing 659"。
+    const events: SessionEvent[] = [
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 1,
+        data: { content: [{ type: "text", text: "a" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "assistant/message",
+        seq: SessionSeq(2),
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: {
+            id: "a",
+            role: "assistant",
+            content: [{ type: "text", text: "b" }],
+            source: { kind: "model", provider: "m", model: "m" },
+          },
+        },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "compaction/summary",
+        seq: SessionSeq(3),
+        time: 3,
+        data: {
+          turn: 1,
+          summary: "…",
+          shadowedRange: { start: 1, end: 2 },
+          shadowedSeqs: [1, 2],
+          shadowedTokenCount: 9,
+        },
+      } as SessionEvent,
+      {
+        type: "user/message",
+        seq: SessionSeq(4),
+        time: 4,
+        data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
+        surfaceOp: { op: "replace", start: 1, end: 2 },
+      } as SessionEvent,
+    ];
+    recomputeReplaceProvenance(events);
+    const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
+    expect(checkpoint.sourceEventSeqs).toEqual([1, 2]);
+  });
+
+  it("uses shadowedSeqs even when the range scan would miss a shadowed node", () => {
+    // 竞态核心：range [1..2] 的数值区间不含 659（并发落地节点），但
+    // shadowedSeqs 显式列出 [1, 659, 2]——provenance 必须完整覆盖。
+    const events: SessionEvent[] = [
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 1,
+        data: { content: [{ type: "text", text: "a" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "user/message",
+        seq: SessionSeq(659),
+        time: 2,
+        data: { content: [{ type: "text", text: "late" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "user/message",
+        seq: SessionSeq(2),
+        time: 3,
+        data: { content: [{ type: "text", text: "b" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "compaction/summary",
+        seq: SessionSeq(3),
+        time: 4,
+        data: {
+          turn: 1,
+          summary: "…",
+          shadowedRange: { start: 1, end: 2 },
+          shadowedSeqs: [1, 659, 2],
+          shadowedTokenCount: 9,
+        },
+      } as SessionEvent,
+      {
+        type: "user/message",
+        seq: SessionSeq(4),
+        time: 5,
+        data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
+        surfaceOp: { op: "replace", start: 1, end: 2 },
+      } as SessionEvent,
+    ];
+    recomputeReplaceProvenance(events);
+    const checkpoint = events[4] as SessionEvent & { sourceEventSeqs?: number[] };
+    expect(checkpoint.sourceEventSeqs).toEqual([1, 659, 2]);
+  });
+
+  it("falls back to a range scan when the adjacent event is not a metering event", () => {
+    // 非压缩 replace（如 tool-result pruner 的旧样式）：无紧邻 metering
+    // 事件，回退到 range 数值扫描，既有行为不变。
+    const events: SessionEvent[] = [
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 1,
+        data: { content: [{ type: "text", text: "a" }], source: { kind: "user" } },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "assistant/message",
+        seq: SessionSeq(2),
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: {
+            id: "a",
+            role: "assistant",
+            content: [{ type: "text", text: "b" }],
+            source: { kind: "model", provider: "m", model: "m" },
+          },
+        },
+        surfaceOp: "append",
+      } as SessionEvent,
+      {
+        type: "turn/end",
+        seq: SessionSeq(3),
+        time: 3,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
+      {
+        type: "tool/result",
+        seq: SessionSeq(4),
+        time: 4,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "user",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: ToolCallId("c"),
+                content: [],
+                isError: false,
+              },
+            ],
+            source: { kind: "tool", callId: ToolCallId("c") },
+          }),
+        },
+        surfaceOp: { op: "replace", start: SessionSeq(1), end: SessionSeq(2) },
+      } as unknown as SessionEvent,
+    ];
+    recomputeReplaceProvenance(events);
+    const replacement = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
+    expect(replacement.sourceEventSeqs).toEqual([1, 2]);
+  });
 });
 
 describe("remapSurfaceOp", () => {
@@ -984,6 +1187,14 @@ describe("remapShadowedRange", () => {
       start: 5,
       end: 398_871,
     });
+  });
+});
+
+describe("remapShadowedSeqs", () => {
+  it("remaps every shadowed seq through the upstream→persisted seq map", () => {
+    expect(remapShadowedSeqs([15, 398_881, 400_000], (seq) => seq - 10)).toEqual([
+      5, 398_871, 399_990,
+    ]);
   });
 });
 
@@ -2270,6 +2481,115 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     }).not.toThrow();
     expect(armed).toBe(1);
     expect(consumed).toBe(1);
+    await b.dispose();
+  });
+
+  it("loads a compact seam whose shadowedSeqs include a node the range interval misses", async () => {
+    // Regression for the reported history-load failure:
+    //   surface replace: sourceEventSeqs must include every shadowed surface
+    //   node; missing 659
+    // shadowedRange 是 surface 位置跨度（首尾节点 seq），不是数值区间：轮 2
+    // 的 replace 把高 seq 节点 6 落在位置 2 上，surface 变为 [1, 6, 3]；轮 3
+    // 压缩该跨度时 shadowedSeqs 显式列出 [1, 6, 3]，但 range [1..3] 的数值
+    // 区间不含 6。provenance 重计算必须采用 shadowedSeqs（权威列表），否则
+    // 上游 assertProvenance 报 missing 6、整个会话无法加载。
+    const path = await freshDbPath();
+    const b = await backend(path);
+    const m = meta("compact-race");
+    await b.ctx.sessionPersistence.create(m);
+    const log = [
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: createUserMessage({
+          content: [{ type: "text", text: "a" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      },
+      {
+        type: "user/message",
+        seq: SessionSeq(2),
+        time: 3,
+        data: createUserMessage({
+          content: [{ type: "text", text: "b" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      },
+      {
+        type: "user/message",
+        seq: SessionSeq(3),
+        time: 4,
+        data: createUserMessage({
+          content: [{ type: "text", text: "c" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      },
+      {
+        type: "turn/end",
+        seq: SessionSeq(4),
+        time: 5,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
+      { type: "turn/start", seq: SessionSeq(5), time: 6, data: { turn: 2 } },
+      {
+        type: "user/message",
+        seq: SessionSeq(6),
+        time: 7,
+        data: createUserMessage({
+          content: [{ type: "text", text: "replacement" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: { op: "replace", start: 2, end: 2 },
+      },
+      {
+        type: "turn/end",
+        seq: SessionSeq(7),
+        time: 8,
+        data: { turn: 2, reason: { kind: "completed" } },
+      },
+      { type: "turn/start", seq: SessionSeq(8), time: 9, data: { turn: 3 } },
+      {
+        type: "compaction/summary",
+        seq: SessionSeq(9),
+        time: 10,
+        data: {
+          turn: 3,
+          summary: "compacted",
+          shadowedRange: { start: 1, end: 3 },
+          shadowedSeqs: [1, 6, 3],
+          shadowedTokenCount: 100,
+        },
+      },
+      {
+        type: "user/message",
+        seq: SessionSeq(10),
+        time: 11,
+        data: createUserMessage({
+          content: [{ type: "text", text: "checkpoint" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: { op: "replace", start: 1, end: 3 },
+      },
+      {
+        type: "turn/end",
+        seq: SessionSeq(11),
+        time: 12,
+        data: { turn: 3, reason: { kind: "completed" } },
+      },
+    ] as unknown as SessionEvent[];
+    await b.ctx.sessionPersistence.append(m.id, log);
+
+    // 修复前：range 数值扫描漏掉 6 → load 抛 "missing 6"。
+    const loaded = await b.ctx.sessionPersistence.load(m.id);
+    const replacement = loaded.events.find((e) => e.type === "user/message" && e.seq === 10)!;
+    expect((replacement as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
+    // provenance 采用紧邻 compaction/summary 的 shadowedSeqs（权威列表）。
+    expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 6, 3]);
     await b.dispose();
   });
 

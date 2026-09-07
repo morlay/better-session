@@ -12,7 +12,8 @@ live log（上游 seq，含瞬时事件）
   ├─ surfaceOp：原样序列化到桥接行 f_surface_op（原始坐标——replace 的
   │   range 是上游 seq，读取时重映射）
   │
-  ├─ f_data：完整原始 data 原样落库（含 turn/step、shadowedRange 原始坐标）
+  ├─ f_data：完整原始 data 原样落库（含 turn/step、shadowedRange /
+  │   shadowedSeqs 原始坐标）
   │
   └─ 落库：t_events 行（完整原始 data）+ t_session_events 桥接行（f_sequence /
       f_original_seq / f_surface_op），单事务
@@ -20,8 +21,8 @@ live log（上游 seq，含瞬时事件）
 
 ## 规则
 
-- **写路径零转换**：事件内容、surfaceOp、shadowedRange 全部原样落库；坐标
-  转换集中在读取路径（有 `f_original_seq` 可查，无启发式）。
+- **写路径零转换**：事件内容、surfaceOp、shadowedRange / shadowedSeqs 全部
+  原样落库；坐标转换集中在读取路径（有 `f_original_seq` 可查，无启发式）。
 - 只含瞬时事件的批次是 no-op：不建行、不 bump revision。
 - 事件行**已存在则复用**（fork 派生会话引用父会话事件行），否则新建
   （`INSERT OR IGNORE` 语义 + 桥接行引用已存在 id）。

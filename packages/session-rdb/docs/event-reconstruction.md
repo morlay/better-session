@@ -50,8 +50,10 @@ turn/end、step/start ↔ step/end）由事件顺序 + 坐标保证，无跨事�
 
 **replace 事件**（`surfaceOp: { op: "replace", start, end }`，桥接行存原始
 坐标）：读取时经 `f_original_seq` 映射把 range 重映射到稠密坐标，并**重计算**
-`sourceEventSeqs` = range 内（稠密坐标）全部 surface 节点 seq 集合——满足
-上游 `assertProvenance` 的 shadowed 覆盖硬校验（见
+`sourceEventSeqs`——优先取紧邻 metering 事件（`compaction/summary` /
+`compaction/prune`）的 `shadowedSeqs`（权威被遮蔽节点列表，已重映射到稠密
+坐标），无 metering 事件时回退为 range 内（稠密坐标）全部 surface 节点 seq
+集合——满足上游 `assertProvenance` 的 shadowed 覆盖硬校验（见
 [read-path.md](read-path.md)）。
 
 ### 工具调用配对（tool/call ↔ tool/result）
@@ -102,13 +104,13 @@ turn/end、step/start ↔ step/end）由事件顺序 + 坐标保证，无跨事�
 | 事件                                      | data                                                   | 说明                                                                                                                                                                                  |
 | ----------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `compaction/start` / `compaction/end`     | `{ turn }`                                             | 自包含                                                                                                                                                                                |
-| `compaction/summary` / `compaction/prune` | `{ turn, summary, shadowedRange, shadowedTokenCount }` | `shadowedRange` 引用被 replace 覆盖的 surface 节点范围（上游 seq，完整落库）→ **读取时经 `f_original_seq` 映射重映射到稠密坐标**（与 replace range 同空间，token-meter 折叠正常消费） |
+| `compaction/summary` / `compaction/prune` | `{ turn, summary, shadowedRange, shadowedSeqs, shadowedTokenCount }` | `shadowedRange` 引用被 replace 覆盖的 surface 节点范围（上游 seq，完整落库）→ **读取时经 `f_original_seq` 映射重映射到稠密坐标**（与 replace range 同空间，token-meter 折叠正常消费）；`shadowedSeqs` 是权威被遮蔽节点列表（range 只是首尾边界对，压缩竞态下可能漏掉并发落地的节点），同样重映射到稠密坐标，replace 的 provenance 重计算以它为准 |
 
 ## 重建验证矩阵
 
 | 场景                                           | 设计是否满足 | 说明                                                                                                                                                                                                     |
 | ---------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 完整 log 重放（load → `Session.create(seed)`） | ✅           | seq 稠密连续；f_data 完整（turn/step 原样）；replace range / shadowedRange 经 `f_original_seq` 映射重映射；replace 重计算 provenance                                                                     |
+| 完整 log 重放（load → `Session.create(seed)`） | ✅           | seq 稠密连续；f_data 完整（turn/step 原样）；replace range / shadowedRange / shadowedSeqs 经 `f_original_seq` 映射重映射；replace 重计算 provenance（优先 shadowedSeqs，回退 range 扫描） |
 | fork 派生（复用事件行）                        | ✅           | `inspect` 返回读取视图（replace range 已重映射到父稠密坐标），前缀重编号后子会话 seq 与父稠密 seq 数值相同——无需额外坐标重映射；桥接行 `f_original_seq` 是子会话自己的上游空间（不复制父值）；事件行共享 |
 | fork 后 rewind                                 | ✅           | 子会话只删桥接行、事件行保留（父会话仍引用）；保留区 replace range 完整性不变量成立（见 [branch.md](branch.md)）                                                                                         |
 | rewind 截断                                    | ✅           | 只删桥接行；保留区 replace 重映射从保留 log 取，天然一致（range 引用更早事件 ⇒ 截断尾部不破坏保留区 range）                                                                                              |

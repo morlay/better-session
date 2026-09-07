@@ -39,19 +39,19 @@ packages/session-rdb/
   压缩重编号，**连续递增、无空洞**。
 - `t_session_events.f_original_seq` 记录**上游 seq**（事件产生时的 seq，含
   瞬时事件计数）——读取时构建 `f_original_seq → f_sequence` 映射，把
-  `shadowedRange` / replace range 从上游坐标重映射到稠密坐标（映射是存储
-  事实，无启发式）。
+  `shadowedRange` / `shadowedSeqs` / replace range 从上游坐标重映射到稠密
+  坐标（映射是存储事实，无启发式）。
 - `t_events` 是**全局事件实体**，`f_data` 存**完整原始 data**（含
-  `turn`/`step`、`shadowedRange` 原始坐标）——忠实存储，读取时按需 drop
-  或重映射。不含任何 session 专属信息——一个事件行可被多个会话的桥接行
-  引用（fork 派生会话复用父会话事件行，不复制）。
+  `turn`/`step`、`shadowedRange` / `shadowedSeqs` 原始坐标）——忠实存储，
+  读取时按需 drop 或重映射。不含任何 session 专属信息——一个事件行可被多个
+  会话的桥接行引用（fork 派生会话复用父会话事件行，不复制）。
 - session 专属信息（稠密 seq、上游 seq、surface 元数据 `surfaceOp`）全部在
   `t_session_events` 桥接行上；`sourceEventSeqs` 不落库，读取时按需重计算。
 
 ## 核心不变量（审计确认）
 
-1. **写路径零转换**：事件内容、surfaceOp、shadowedRange 原样落库；坐标转换
-   集中在读取路径（`f_original_seq` 映射是存储事实，无启发式）。
+1. **写路径零转换**：事件内容、surfaceOp、shadowedRange / shadowedSeqs 原样
+   落库；坐标转换集中在读取路径（`f_original_seq` 映射是存储事实，无启发式）。
 2. **上游 cursor ↔ 稠密 head**：首次 append 同起点（0）；load / adopt 重建
    seed 后上游 seq 与稠密 seq **恒等**（新 append 部分）——写读对齐的关键
    不变量（见 [write-path.md](write-path.md) / [read-path.md](read-path.md)）。

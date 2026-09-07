@@ -59,7 +59,7 @@ session-rdb:
 | `f_role`                 | text        | 对话角色（user / assistant / tool / turn，见下）                                                                                                                                 |
 | `f_name` / `f_action_id` | text        | 事件名称 / 配对 id（见下）                                                                                                                                                       |
 | `f_encoding`             | text        | `json`                                                                                                                                                                           |
-| `f_data`                 | text        | JSON 文本，**完整原始 data**（含 `turn`/`step` 轮次坐标、`shadowedRange` 原始坐标）——忠实存储，读取时按需 drop 或重映射                                                          |
+| `f_data`                 | text        | JSON 文本，**完整原始 data**（含 `turn`/`step` 轮次坐标、`shadowedRange` / `shadowedSeqs` 原始坐标）——忠实存储，读取时按需 drop 或重映射                                                          |
 | `f_created_at`           | bigint      | 上游 `SessionEvent.time`                                                                                                                                                         |
 
 **不含**：`sourceEventSeqs`（不落库，读取时按需重计算）、`surfaceOp`（会话
@@ -154,7 +154,7 @@ session-rdb:
 | `f_session_id`   | text FK → `t_sessions.f_session_id` (CASCADE) | 会话                                                                                                                                                                       |
 | `f_event_id`     | text FK → `t_events.f_event_id` (CASCADE)     | 事件实体（可被多会话引用）                                                                                                                                                 |
 | `f_sequence`     | integer                                       | **稠密持久化 seq**（连续递增、无空洞）                                                                                                                                     |
-| `f_original_seq` | integer                                       | **上游 seq**（事件产生时的 seq，含瞬时事件计数）——重映射查阅：读取时构建 `f_original_seq → f_sequence` 映射，把 `shadowedRange` / replace range 从上游坐标重映射到稠密坐标 |
+| `f_original_seq` | integer                                       | **上游 seq**（事件产生时的 seq，含瞬时事件计数）——重映射查阅：读取时构建 `f_original_seq → f_sequence` 映射，把 `shadowedRange` / `shadowedSeqs` / replace range 从上游坐标重映射到稠密坐标 |
 | `f_surface_op`   | text                                          | surface 元数据（`append` / `replace`，JSON 文本，**原始坐标**——replace 的 range 是上游 seq，读取时重映射；非 surface 事件为 NULL）                                         |
 
 约束：`UNIQUE(f_session_id, f_sequence)`（自动建唯一索引，覆盖全部访问模式：

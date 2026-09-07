@@ -90,6 +90,13 @@ export function remapShadowedRange(
   return { start: remap(range.start), end: remap(range.end) };
 }
 
+export function remapShadowedSeqs(
+  seqs: readonly number[],
+  remap: (seq: number) => number,
+): number[] {
+  return seqs.map(remap);
+}
+
 export function rowToEvent(row: EventRow, seqMap: ReadonlyMap<number, number>): SessionEvent {
   const remap = (seq: number): number => seqMap.get(seq) ?? seq;
   const surfaceOp =
@@ -97,11 +104,20 @@ export function rowToEvent(row: EventRow, seqMap: ReadonlyMap<number, number>): 
       ? remapSurfaceOp(JSON.parse(row.fSurfaceOp) as SurfaceOp, remap)
       : undefined;
   const data = JSON.parse(row.fData) as SessionEvent["data"];
-  // compaction 事件的 shadowedRange 是插件合并字段，经结构化视图重映射。
+  // compaction 事件的 shadowedRange / shadowedSeqs 是插件合并字段，经结构化
+  // 视图重映射到稠密坐标。shadowedSeqs 是权威的被遮蔽节点列表（range 只是
+  // 首尾边界对，压缩竞态下可能漏掉并发落地的节点），replace 的 provenance
+  // 重计算依赖它，必须与 range 同空间。
   if (row.fType === "compaction/summary" || row.fType === "compaction/prune") {
-    const metering = data as unknown as { shadowedRange?: { start: number; end: number } };
+    const metering = data as unknown as {
+      shadowedRange?: { start: number; end: number };
+      shadowedSeqs?: number[];
+    };
     if (metering.shadowedRange !== undefined) {
       metering.shadowedRange = remapShadowedRange(metering.shadowedRange, remap);
+    }
+    if (metering.shadowedSeqs !== undefined) {
+      metering.shadowedSeqs = remapShadowedSeqs(metering.shadowedSeqs, remap);
     }
   }
   return {
@@ -125,14 +141,38 @@ export function buildSeqMap(
 
 const SURFACE_EVENT_TYPES = new Set(["user/message", "assistant/message", "tool/result"]);
 
+const METERING_EVENT_TYPES = new Set(["compaction/summary", "compaction/prune"]);
+
+/**
+ * 读取时重计算 replace 的 sourceEventSeqs（sourceEventSeqs 不落库）。
+ *
+ * 优先采用紧邻 metering 事件（compaction/summary | compaction/prune）的
+ * shadowedSeqs：它是压缩事务落库的**权威被遮蔽节点列表**（range 只是首尾
+ * 边界对，压缩竞态下可能漏掉并发落地的节点——range 数值扫描会漏掉这些
+ * 节点，使上游 assertProvenance 报 missing）。shadowedSeqs 已由 rowToEvent
+ * 重映射到稠密坐标，与 replace 的 surfaceOp range 同空间。
+ *
+ * 无紧邻 metering 事件时回退到 range 数值扫描（历史数据 / 非压缩 replace，
+ * 如 tool-result pruner 的旧样式），保证既有行为不变。
+ */
 export function recomputeReplaceProvenance(events: SessionEvent[]): void {
-  for (const event of events) {
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i]!;
     const raw = event as SessionEvent & { surfaceOp?: unknown; sourceEventSeqs?: number[] };
     const op = raw.surfaceOp;
     if (typeof op !== "object" || op === null || (op as { op?: string }).op !== "replace") {
       continue;
     }
     const { start, end } = op as { start: number; end: number };
+    const metering = i > 0 ? events[i - 1] : undefined;
+    const meteringData =
+      metering !== undefined && METERING_EVENT_TYPES.has(metering.type)
+        ? (metering.data as unknown as { shadowedSeqs?: number[] })
+        : undefined;
+    if (meteringData?.shadowedSeqs !== undefined) {
+      raw.sourceEventSeqs = meteringData.shadowedSeqs;
+      continue;
+    }
     const refs: number[] = [];
     for (const candidate of events) {
       if (

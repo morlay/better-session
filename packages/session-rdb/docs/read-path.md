@@ -9,14 +9,18 @@ t_session_events JOIN t_events（按 f_sequence 排序）
   │   ├─ turn/step：保留（f_data 已含，无需注入）
   │   ├─ surfaceOp：replace 的 start/end range 经映射重映射到稠密坐标
   │   │   （append 无坐标，原样）
-  │   └─ shadowedRange（compaction/summary|prune）：经映射重映射到稠密坐标
+  │   └─ shadowedRange / shadowedSeqs（compaction/summary|prune）：经映射
+  │       重映射到稠密坐标（shadowedSeqs 是权威被遮蔽节点列表，replace 的
+  │       provenance 重计算依赖它）
   │
   ├─ scanRows：崩溃尾部语义（last turn/end 切割、torn tail 截断）
   │
   └─ recomputeReplaceProvenance（仅完整 log 读取）：
-      replace 事件 sourceEventSeqs = surfaceOp range 内（稠密坐标）的全部
-      surface 节点（user/message / assistant/message / tool/result）seq 集合
-      ——满足上游 assertProvenance 的 shadowed 覆盖硬校验
+      replace 事件 sourceEventSeqs 优先取紧邻 metering 事件
+      （compaction/summary|prune）的 shadowedSeqs（权威列表，已重映射到
+      稠密坐标）；无 metering 事件时回退为 surfaceOp range 内（稠密坐标）
+      的全部 surface 节点（user/message / assistant/message / tool/result）
+      seq 集合——满足上游 assertProvenance 的 shadowed 覆盖硬校验
 ```
 
 ## 规则
@@ -25,6 +29,12 @@ t_session_events JOIN t_events（按 f_sequence 排序）
   式——映射是存储事实，不是猜测）。
 - **suffix 读取（`readFrom`）不补 provenance**：消费者 timeline 只找版本
   事件，不重放 surface。
+- **replace 的 provenance 采用权威 shadowedSeqs**：`shadowedRange` 是
+  surface 位置跨度（首尾节点 seq），不是数值区间——压缩竞态下并发落地的
+  节点可能落在 range 数值区间之外，range 扫描会漏掉它们（上游
+  `assertProvenance` 报 missing）。紧邻 metering 事件的 `shadowedSeqs`
+  显式列出全部被遮蔽节点，是权威来源；无 metering 事件时（历史数据 /
+  非压缩 replace）回退 range 扫描。
 - 读取结果 seq 稠密连续 → `ctx.sessions.create(id, { seed })` 直接通过上游
   contiguous-from-0 校验，后续 append 从稠密 cursor 继续。
 - 崩溃尾部语义：last `turn/end` 之前的缺陷（unparsable / seq gap）拒绝；
