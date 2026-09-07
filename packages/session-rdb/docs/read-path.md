@@ -11,7 +11,7 @@ t_session_events JOIN t_events（按 f_sequence 排序）
   │   │   （append 无坐标，原样）
   │   └─ shadowedRange / shadowedSeqs（compaction/summary|prune）：经映射
   │       重映射到稠密坐标（shadowedSeqs 是权威被遮蔽节点列表，replace 的
-  │       provenance 重计算依赖它）
+  │       provenance 重计算依赖它；未持久化引用直接丢弃，不做恒等回退）
   │
   ├─ scanRows：崩溃尾部语义（last turn/end 切割、torn tail 截断）
   │
