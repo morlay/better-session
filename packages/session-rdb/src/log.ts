@@ -211,12 +211,15 @@ export function findSurfaceRepairs(events: readonly SessionEvent[]): {
   degradeToAppend: Set<number>;
   addAppendMarker: Set<number>;
   clearSurfaceOp: Set<number>;
+  clampEnd: Map<number, number>;
 } {
   const nodes: number[] = [];
   const degradeToAppend = new Set<number>();
   const addAppendMarker = new Set<number>();
   const clearSurfaceOp = new Set<number>();
-  for (const event of events) {
+  const clampEnd = new Map<number, number>();
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index]!;
     const raw = event as SessionEvent & { surfaceOp?: unknown };
     const op = raw.surfaceOp;
     if (op === undefined) {
@@ -247,7 +250,16 @@ export function findSurfaceRepairs(events: readonly SessionEvent[]): {
       isEventSeqLike(start) &&
       isEventSeqLike(end);
     const startIdx = shapeOk ? nodes.indexOf(start as number) : -1;
-    const endIdx = shapeOk ? nodes.indexOf(end as number) : -1;
+    let endIdx = shapeOk ? nodes.indexOf(end as number) : -1;
+    // 旧写入器重编号事件后，存储的 range 端点可能落在旧坐标空间：end 不在
+    // 当前 surface 中，但紧邻 metering 事件的 shadowedSeqs 仍给出被遮蔽
+    // 节点数量。按数量从 start 起夹取到当前 surface 的同长区间，保住压缩
+    // 语义（否则只能降级 append，被压缩历史全部回到派生历史）。
+    let clamped: number | undefined;
+    if (shapeOk && startIdx !== -1 && endIdx === -1) {
+      clamped = clampReplaceEnd(events, index, nodes, startIdx);
+      if (clamped !== undefined) endIdx = nodes.indexOf(clamped);
+    }
     const rangeOk = shapeOk && startIdx !== -1 && endIdx !== -1 && startIdx <= endIdx;
     let rewriteOk = true;
     if (rangeOk && event.type === "tool/result") {
@@ -265,9 +277,31 @@ export function findSurfaceRepairs(events: readonly SessionEvent[]): {
       nodes.push(event.seq);
       continue;
     }
+    if (clamped !== undefined) clampEnd.set(event.seq, clamped);
     nodes.splice(startIdx, endIdx - startIdx + 1, event.seq);
   }
-  return { degradeToAppend, addAppendMarker, clearSurfaceOp };
+  return { degradeToAppend, addAppendMarker, clearSurfaceOp, clampEnd };
+}
+
+/**
+ * 夹取一个 end 落在旧坐标空间的 replace 的结尾。
+ *
+ * 仅当 replace 紧邻一个 metering 事件且其 `shadowedSeqs` 是权威数量时成立；
+ * 夹取点是从 `start` 起的第 `shadowedSeqs.length` 个当前 surface 节点（不足
+ * 则取当前 surface 末尾）。无法夹取（start 也不在当前 surface）时返回
+ * `undefined`，由调用方降级为 append。
+ */
+function clampReplaceEnd(
+  events: readonly SessionEvent[],
+  index: number,
+  nodes: readonly number[],
+  startIdx: number,
+): number | undefined {
+  const metering = index > 0 ? events[index - 1] : undefined;
+  if (metering === undefined || !METERING_EVENT_TYPES.has(metering.type)) return undefined;
+  const shadowedSeqs = (metering.data as unknown as { shadowedSeqs?: unknown }).shadowedSeqs;
+  if (!Array.isArray(shadowedSeqs) || shadowedSeqs.length === 0) return undefined;
+  return nodes[Math.min(startIdx + shadowedSeqs.length - 1, nodes.length - 1)];
 }
 
 export function repairSurfaceOps(events: SessionEvent[]): void {
@@ -275,20 +309,84 @@ export function repairSurfaceOps(events: SessionEvent[]): void {
   if (
     repairs.degradeToAppend.size === 0 &&
     repairs.addAppendMarker.size === 0 &&
-    repairs.clearSurfaceOp.size === 0
+    repairs.clearSurfaceOp.size === 0 &&
+    repairs.clampEnd.size === 0
   ) {
     return;
   }
   for (const event of events) {
     const raw = event as SessionEvent & { surfaceOp?: unknown };
+    const clamped = repairs.clampEnd.get(event.seq);
     if (repairs.degradeToAppend.has(event.seq)) {
       raw.surfaceOp = "append";
+    } else if (clamped !== undefined) {
+      const op = raw.surfaceOp as { start: number };
+      raw.surfaceOp = { op: "replace", start: op.start, end: clamped };
     } else if (repairs.addAppendMarker.has(event.seq)) {
       raw.surfaceOp = "append";
     } else if (repairs.clearSurfaceOp.has(event.seq)) {
       delete raw.surfaceOp;
     }
   }
+}
+
+/**
+ * 读取时补全 assistant 结算字段：旧写入器不落库 `stream`（v2 才把流式记录
+ * 嵌入消息），读回时缺失即补空数组——上游 seed 校验要求 turn/step/stream
+ * 三者齐备，缺失会让整个会话加载失败。
+ */
+export function repairAssistantSettlement(events: SessionEvent[]): void {
+  for (const event of events) {
+    if (event.type !== "assistant/message" && event.type !== "assistant/attempt") continue;
+    const data = event.data as unknown as Record<string, unknown>;
+    if (!Array.isArray(data["stream"])) data["stream"] = [];
+  }
+}
+
+/**
+ * 把紧邻 replace 的 metering 事件的 `shadowedRange` / `shadowedSeqs` 对齐到
+ * replace 最终的稠密 range。
+ *
+ * 旧写入器重编号事件后，metering 与 replace 一起落在旧坐标空间：二者数值
+ * 相等但与当前 surface 无关。夹取（或 range 本身已落在稠密空间而 metering
+ * 仍是旧值）后二者不再相等，而上游 token-meter 契约要求紧邻的 metering
+ * range 与 replace range 完全一致（否则报 no adjacent shadow price）。range
+ * 已一致时不改写——当前写入器保证一致，shadowedSeqs 的额外并发节点因此
+ * 原样保留。
+ */
+export function syncMeteringRanges(events: SessionEvent[]): void {
+  for (let i = 1; i < events.length; i++) {
+    const metering = events[i - 1]!;
+    if (!METERING_EVENT_TYPES.has(metering.type)) continue;
+    const event = events[i]!;
+    const op = (event as SessionEvent & { surfaceOp?: unknown }).surfaceOp;
+    if (typeof op !== "object" || op === null || (op as { op?: string }).op !== "replace") continue;
+    const { start, end } = op as { start: number; end: number };
+    const data = metering.data as unknown as {
+      shadowedRange?: { start: number; end: number };
+      shadowedSeqs?: number[];
+    };
+    if (data.shadowedRange?.start === start && data.shadowedRange.end === end) continue;
+    data.shadowedRange = { start, end };
+    data.shadowedSeqs = events
+      .filter(
+        (candidate) =>
+          candidate.seq >= start && candidate.seq <= end && SURFACE_EVENT_TYPES.has(candidate.type),
+      )
+      .map((candidate) => candidate.seq);
+  }
+}
+
+/**
+ * 读取视图修复总入口：结算字段补全 → surface 语义修复 → metering 对齐 →
+ * provenance 重算 → 孤儿 inbox splice 改写。全部只作用于内存视图，不落库。
+ */
+export function repairReadView(events: SessionEvent[]): void {
+  repairAssistantSettlement(events);
+  repairSurfaceOps(events);
+  syncMeteringRanges(events);
+  recomputeReplaceProvenance(events);
+  repairOrphanInboxSplices(events);
 }
 
 interface InboxSpliceLike {

@@ -18,7 +18,7 @@ packages/session-rdb/
 │   ├── write-path.md            # 写路径流程
 │   ├── read-path.md             # 读路径流程
 │   ├── branch.md                # 分支能力（forkFrom / rewind / timeline）
-│   ├── legacy-clean.md          # 旧数据修复（导出即修复）
+│   ├── legacy-clean.md          # 旧数据修复（读取/导出视图修复）
 │   ├── concurrency.md           # 并发写入者检测
 │   └── event-reconstruction.md  # 事件 id 关联与重建可行性分析
 ├── package.json                 # 包元数据；exports 指向 lib/ 产物
@@ -59,8 +59,8 @@ packages/session-rdb/
    不破坏保留区 range（见 [branch.md](branch.md)）。
 5. **SCHEMA_VERSION 门禁**：破坏性表结构变更必须 bump；表结构级升级走
    drizzle-kit 生成的迁移（`drizzle/` 目录，运行时 drizzle `migrate()` 执行），
-   同版本内数据格式差异（含 surface 语义损坏）在导出时修复（导出即修复，
-   见 [schema.md](schema.md) / [legacy-clean.md](legacy-clean.md)）。
+   同版本内数据格式差异（含 surface 语义损坏）在读取/导出视图修复（不落库，
+   见 [read-path.md](read-path.md) / [legacy-clean.md](legacy-clean.md)）。
 
 ## 文档导航
 
@@ -70,6 +70,6 @@ packages/session-rdb/
 | 写路径流程（appendBatch）                  | [write-path.md](write-path.md)                     |
 | 读路径流程（load / readFrom）              | [read-path.md](read-path.md)                       |
 | 分支能力（forkFrom / rewind / timeline）   | [branch.md](branch.md)                             |
-| 旧数据修复（导出即修复）                   | [legacy-clean.md](legacy-clean.md)                 |
+| 旧数据修复（读取/导出视图修复）            | [legacy-clean.md](legacy-clean.md)                 |
 | 并发写入者检测                             | [concurrency.md](concurrency.md)                   |
 | 事件 id 关联与重建可行性分析               | [event-reconstruction.md](event-reconstruction.md) |

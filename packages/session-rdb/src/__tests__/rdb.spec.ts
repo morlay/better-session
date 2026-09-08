@@ -21,9 +21,11 @@ import { parseJsonlArtifact } from "@morlay/session-rdb/artifact";
 import {
   findSurfaceRepairs,
   recomputeReplaceProvenance,
+  repairAssistantSettlement,
   rowToEvent,
   rowToMeta,
   scanRows,
+  syncMeteringRanges,
 } from "@morlay/session-rdb/artifact";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
@@ -680,6 +682,246 @@ describe("findSurfaceRepairs", () => {
     ];
     const repairs = findSurfaceRepairs(events);
     expect([...repairs.degradeToAppend]).toEqual([1]);
+  });
+
+  it("clamps a replace end that fell into the old coordinate space onto the metering count", () => {
+    // 旧写入器重编号后 range 端点仍是旧坐标：end 999 不在当前 surface，但
+    // 紧邻 metering 的 shadowedSeqs 给出被遮蔽数量 2，夹取到当前 surface 的
+    // 同长区间 [1, 3]（降级 append 会把被压缩历史全部放回派生历史）。
+    const events: SessionEvent[] = [
+      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: createUserMessage({
+          content: [{ type: "text", text: "hi" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      } as unknown as SessionEvent,
+      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
+      {
+        type: "assistant/message",
+        seq: SessionSeq(3),
+        time: 4,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+          stream: [] as const,
+        },
+        surfaceOp: "append",
+      } as unknown as SessionEvent,
+      { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
+      {
+        type: "turn/end",
+        seq: SessionSeq(5),
+        time: 6,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
+      {
+        type: "compaction/summary",
+        seq: SessionSeq(6),
+        time: 7,
+        data: {
+          turn: 1,
+          summary: "compacted",
+          shadowedRange: { start: 1, end: 999 },
+          shadowedSeqs: [1, 3],
+          shadowedTokenCount: 5,
+          provider: "mock",
+          model: "mock",
+        },
+      } as unknown as SessionEvent,
+      {
+        type: "user/message",
+        seq: SessionSeq(7),
+        time: 8,
+        data: createUserMessage({
+          content: [{ type: "text", text: "compacted" }],
+          source: { kind: "plugin", plugin: "compact" },
+        }),
+        surfaceOp: { op: "replace", start: 1, end: 999 },
+      } as unknown as SessionEvent,
+    ];
+    const repairs = findSurfaceRepairs(events);
+    expect([...repairs.clampEnd]).toEqual([[7, 3]]);
+    expect(repairs.degradeToAppend.size).toBe(0);
+  });
+
+  it("degrades an out-of-range replace whose start is also off the current surface", () => {
+    const events: SessionEvent[] = [
+      {
+        type: "compaction/summary",
+        seq: SessionSeq(0),
+        time: 1,
+        data: {
+          turn: 1,
+          summary: "compacted",
+          shadowedRange: { start: 40, end: 999 },
+          shadowedSeqs: [40, 41],
+          shadowedTokenCount: 5,
+          provider: "mock",
+          model: "mock",
+        },
+      } as unknown as SessionEvent,
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: createUserMessage({
+          content: [{ type: "text", text: "compacted" }],
+          source: { kind: "plugin", plugin: "compact" },
+        }),
+        surfaceOp: { op: "replace", start: 40, end: 999 },
+      } as unknown as SessionEvent,
+    ];
+    const repairs = findSurfaceRepairs(events);
+    expect([...repairs.degradeToAppend]).toEqual([1]);
+    expect(repairs.clampEnd.size).toBe(0);
+  });
+});
+
+describe("read-view repair", () => {
+  it("fills a missing assistant settlement stream with an empty array", () => {
+    const events = [
+      {
+        type: "assistant/message",
+        seq: SessionSeq(0),
+        time: 1,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+      },
+      {
+        type: "assistant/attempt",
+        seq: SessionSeq(1),
+        time: 2,
+        data: { turn: 1, step: 1 },
+      },
+      {
+        type: "turn/end",
+        seq: SessionSeq(2),
+        time: 3,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
+    ] as unknown as SessionEvent[];
+    repairAssistantSettlement(events);
+    expect((events[0]!.data as unknown as { stream: unknown }).stream).toEqual([]);
+    expect((events[1]!.data as unknown as { stream: unknown }).stream).toEqual([]);
+  });
+
+  it("rewrites a stale metering range onto the adjacent replace's dense range", () => {
+    const events = [
+      {
+        type: "compaction/summary",
+        seq: SessionSeq(0),
+        time: 1,
+        data: {
+          turn: 1,
+          summary: "compacted",
+          shadowedRange: { start: 1, end: 999 },
+          shadowedSeqs: [1, 3],
+          shadowedTokenCount: 5,
+          provider: "mock",
+          model: "mock",
+        },
+      },
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: createUserMessage({
+          content: [{ type: "text", text: "compacted" }],
+          source: { kind: "plugin", plugin: "compact" },
+        }),
+        surfaceOp: { op: "replace", start: 1, end: 3 },
+      },
+      {
+        type: "user/message",
+        seq: SessionSeq(2),
+        time: 3,
+        data: createUserMessage({
+          content: [{ type: "text", text: "later" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      },
+      {
+        type: "tool/result",
+        seq: SessionSeq(3),
+        time: 4,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "user",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: ToolCallId("call-1"),
+                content: [{ type: "text", text: "result" }],
+                isError: false,
+              },
+            ],
+            source: { kind: "tool", callId: ToolCallId("call-1") },
+          }),
+        },
+        surfaceOp: "append",
+      },
+    ] as unknown as SessionEvent[];
+    syncMeteringRanges(events);
+    expect((events[0]!.data as unknown as { shadowedRange: unknown }).shadowedRange).toEqual({
+      start: 1,
+      end: 3,
+    });
+    // 用稠密 range 内的全部 surface 节点重写（旧值是旧坐标空间）。
+    expect((events[0]!.data as unknown as { shadowedSeqs: unknown }).shadowedSeqs).toEqual([
+      1, 2, 3,
+    ]);
+  });
+
+  it("leaves an already-aligned metering event (and its extra concurrent seqs) untouched", () => {
+    const events = [
+      {
+        type: "compaction/summary",
+        seq: SessionSeq(0),
+        time: 1,
+        data: {
+          turn: 1,
+          summary: "compacted",
+          shadowedRange: { start: 1, end: 1 },
+          // 压缩竞态下 range 外的并发落地节点：当前写入器的权威列表，不得改写。
+          shadowedSeqs: [1, 3],
+          shadowedTokenCount: 5,
+          provider: "mock",
+          model: "mock",
+        },
+      },
+      {
+        type: "user/message",
+        seq: SessionSeq(1),
+        time: 2,
+        data: createUserMessage({
+          content: [{ type: "text", text: "compacted" }],
+          source: { kind: "plugin", plugin: "compact" },
+        }),
+        surfaceOp: { op: "replace", start: 1, end: 1 },
+      },
+    ] as unknown as SessionEvent[];
+    syncMeteringRanges(events);
+    expect((events[0]!.data as unknown as { shadowedSeqs: unknown }).shadowedSeqs).toEqual([1, 3]);
   });
 });
 

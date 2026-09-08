@@ -39,14 +39,7 @@ import {
 } from "@deepseek-ai/dsh-session";
 import { type Backend, type BackendTx, type EventInsert } from "./backend.ts";
 import { WriteGuard } from "./write-guard.ts";
-import {
-  recomputeReplaceProvenance,
-  repairOrphanInboxSplices,
-  repairSurfaceOps,
-  rowToMeta,
-  scanRows,
-  toJsonlArtifact,
-} from "./log.ts";
+import { repairReadView, rowToMeta, scanRows, toJsonlArtifact } from "./log.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   eventDimensions,
@@ -57,7 +50,7 @@ import { SqliteBackend } from "./sqlite.ts";
 import { PostgresBackend } from "./postgres.ts";
 import { SessionBranchRdb } from "./branch.ts";
 import { registerSessionImport } from "./import.ts";
-import { convertLegacyRows, isLegacyVersion } from "./legacy.ts";
+import { adoptLegacyRows, convertLegacyRows, isLegacyVersion } from "./legacy.ts";
 
 export { SCHEMA_VERSION } from "./schema.ts";
 export { SessionBranchRdb, SessionBranchRdbProvider, locateTurnEnd } from "./branch.ts";
@@ -278,11 +271,10 @@ class RdbSessionHandle implements SessionHandle {
       }
       throw new SessionPersistenceNotFoundError(this.id);
     }
-    // 读取时修复（视图只读，不落库）：surface 替换 provenance 重计算、孤儿
-    // inbox splice 改写、非法 surface 替换降级。
-    repairSurfaceOps(log.events);
-    recomputeReplaceProvenance(log.events);
-    repairOrphanInboxSplices(log.events);
+    // 读取时修复（视图只读，不落库）：结算字段补全、非法 surface 替换降级
+    // 或按 metering 数量夹取、metering range 对齐、provenance 重算、孤儿
+    // inbox splice 改写。
+    repairReadView(log.events);
     return { eventState: "detached", events: log.events.slice(offset, offset + length) };
   }
 
@@ -593,6 +585,12 @@ export class SessionPersistenceRdb extends SessionPersistence {
       const log = await this.readLog(id, {}, options?.signal);
       if (log === undefined) throw new SessionPersistenceNotFoundError(id);
       validateStoredEvents(log.meta, log.events);
+      // 迁移链会生成/合并事件（end-seed / attempt / chunk 合并），事件坐标与
+      // 存储桥接行数不再相等——写打开时把迁移视图整体落库，使读写同坐标；
+      // 否则 append 按存储 head 重编号会撞上已有行或写坏 log。
+      if (log.migrated && log.events.length !== log.storedCount) {
+        await this.rewriteMigratedLog(id, log);
+      }
       // 确认 head：本实例已读该会话，后续 append 的并发校验以此为基准。
       this.writeGuard.confirmHead(id, log.events.at(-1)?.seq ?? -1);
       return this.tracker.adopt(
@@ -669,8 +667,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
     signal?.throwIfAborted();
     const log = await this.readLog(id, {}, signal);
     if (log === undefined) return undefined;
-    repairSurfaceOps(log.events);
-    recomputeReplaceProvenance(log.events);
+    repairReadView(log.events);
     const inheritedEventCount = Math.min(log.inheritedEventCount, log.events.length);
     return {
       meta: log.meta,
@@ -762,6 +759,12 @@ export class SessionPersistenceRdb extends SessionPersistence {
         incarnation: string;
 
         revision: number;
+
+        /** 存储桥接行数（迁移链可能生成/合并事件，与 `events.length` 不同）。 */
+        storedCount: number;
+
+        /** 是否经上游迁移链转换（v0/v1 → 当前格式）。 */
+        migrated: boolean;
       }
     | undefined
   > {
@@ -778,15 +781,36 @@ export class SessionPersistenceRdb extends SessionPersistence {
     signal?.throwIfAborted();
     // 旧格式（v0/v1）历史数据：行重建为物理记录，经上游迁移链转 v2 逻辑事件。
     // 迁移链自带 seq gap / torn tail 校验（strict recovery），无需 scanRows。
+    // 混合世代 log（旧写入器跨上游版本追加）不是任何单一已发布格式，迁移链
+    // 必然拒绝——回退为当前格式视图（header 版本归一 + 读取视图修复）。
     if (isLegacyVersion(row.fVersion)) {
-      const converted = convertLegacyRows(row, eventRows);
-      return {
-        meta: converted.meta,
-        inheritedEventCount: converted.inheritedEventCount,
-        events: converted.events,
-        incarnation: row.fIncarnation,
-        revision: row.fRevision,
-      };
+      try {
+        const converted = convertLegacyRows(row, eventRows);
+        return {
+          meta: converted.meta,
+          inheritedEventCount: converted.inheritedEventCount,
+          events: converted.events,
+          incarnation: row.fIncarnation,
+          revision: row.fRevision,
+          storedCount: eventRows.length,
+          migrated: true,
+        };
+      } catch (error: unknown) {
+        this.ctx.logger.warn(
+          `session-rdb: session "${id}" is not a single released format; adopting its stored rows as current-format data (${error instanceof Error ? error.message : String(error)})`,
+        );
+        const adopted = adoptLegacyRows(row, eventRows);
+        return {
+          meta: adopted.meta,
+          inheritedEventCount: adopted.inheritedEventCount,
+          events: adopted.events,
+          incarnation: row.fIncarnation,
+          revision: row.fRevision,
+          storedCount: eventRows.length,
+          migrated: false,
+          ...(adopted.tornFrom !== undefined ? { tornFrom: adopted.tornFrom } : {}),
+        };
+      }
     }
     const { preserved, tornFrom } = scanRows(eventRows, options.fromSeq ?? 0);
     return {
@@ -795,8 +819,38 @@ export class SessionPersistenceRdb extends SessionPersistence {
       events: preserved,
       incarnation: row.fIncarnation,
       revision: row.fRevision,
+      storedCount: eventRows.length,
+      migrated: false,
       ...(tornFrom !== undefined ? { tornFrom } : {}),
     };
+  }
+
+  /**
+   * 把迁移链读出的 v2 视图整体落库（旧格式会话写打开时的一次性迁移）。
+   *
+   * 迁移链会生成/合并事件（end-seed / attempt / chunk 合并），事件 seq 空间
+   * 与存储桥接行数不再相等；写路径以存储 head 为锚点重编号，二者不一致会让
+   * append 撞上已有行。这里在同一事务内删光本会话桥接行、按迁移视图重建
+   * （新事件行，完整信封），并更新 head 与 revision；旧事件行保留（可能被
+   * fork 子会话引用，孤儿由惰性 GC 处理）。
+   */
+  private async rewriteMigratedLog(
+    id: SessionId,
+    log: { meta: SessionHeader; inheritedEventCount: number; events: SessionEvent[] },
+  ): Promise<void> {
+    await this.backend.transaction(async (tx) => {
+      await tx.deleteBridgeTail(id, 0);
+      await tx.upsertSession(
+        { meta: log.meta, inheritedEventCount: SessionLogOffset(log.inheritedEventCount) },
+        randomUUID(),
+      );
+      const { headEventId, headSequence } = await appendEventTail(tx, log.meta, log.events, {
+        parentId: "",
+        nextSeq: 0,
+      });
+      await tx.updateHead(id, headEventId, headSequence);
+      await tx.bumpRevision(id);
+    });
   }
 
   async listSnapshots(
@@ -1068,6 +1122,9 @@ export class SessionPersistenceRdb extends SessionPersistence {
         );
       }
       assertVersion(stored.meta);
+      // adopt 比较必须与读取视图同源：live seed 来自修复后的读取视图（补
+      // stream、surface 修复），未修复的存储视图会把修复差异误判为 id 冲突。
+      repairReadView(stored.events);
       const seed = session.snapshotEvents();
       if (!seedCoversPrefix(seed, stored.events)) {
         throw new Error(

@@ -21,7 +21,9 @@ live log（上游 seq）
 - **写路径 v2 校验（fail-closed）**：`appendBatch` 落库前经
   `validateStoredEvents` 校验——未知类型（非 ignorable）与非法消息形状拒绝
   入库，新入库数据只能是 v2 形状。旧格式（v0/v1）数据只在读取时经 legacy
-  转换链动态转换，不落新库。
+  转换链动态转换；写打开时若迁移视图与存储桥接行数不一致（迁移链会生成/
+  合并事件），先整体落库一次，使读写同坐标（见
+  [legacy-clean.md](legacy-clean.md)）。
 - 事件行**已存在则复用**（fork 派生会话引用父会话事件行），否则新建
   （`INSERT OR IGNORE` 语义 + 桥接行引用已存在 id）。
 - 事务是原子性 + 持久性边界：mid-batch 失败（UNIQUE 冲突）整体回滚。
@@ -34,4 +36,7 @@ live log（上游 seq）
 ## 上游 seq 与稠密 seq 的关系
 
 原样存储下事件 seq 即稠密 seq（`f_sequence`），写读天然对齐——无需坐标
-映射（见 [read-path.md](read-path.md)）。
+映射（见 [read-path.md](read-path.md)）。旧格式会话经迁移链读取时事件数可能
+与存储行数不同（生成 end-seed / 合并 chunk），写打开会把迁移视图整体落库
+（`rewriteMigratedLog`，事务内删桥接行 + 按视图重建 + head/revision 更新），
+此后该会话即普通 v2 会话。

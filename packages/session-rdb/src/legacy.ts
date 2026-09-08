@@ -3,9 +3,15 @@
 // delta（assistant/chunk）落盘被过滤——v1→v2 迁移对无 chunk 引用的
 // assistant/message 走「无 pending 直接 emit」路径，生成 stream: [] 的 v2 事件。
 
-import type { SessionEvent, SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
+import {
+  SESSION_FORMAT_VERSION,
+  type SessionEvent,
+  type SessionHeader,
+  type SessionId,
+} from "@deepseek-ai/dsh-session";
 import { sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
 import type { EventRow, SessionRow } from "./backend.ts";
+import { rowToMeta, scanRows } from "./log.ts";
 
 /** 重建 v0/v1 物理 header 记录（RDB 行 → 物理 JSON 对象）。 */
 function physicalHeader(row: SessionRow): Record<string, unknown> {
@@ -62,6 +68,43 @@ export function convertLegacyRows(
 /** 会话行是否携带旧格式（v0/v1）数据。 */
 export function isLegacyVersion(version: number): boolean {
   return version < 2;
+}
+
+/**
+ * 迁移链拒绝后，把旧格式行直接当**当前格式**事件视图采用。
+ *
+ * 旧写入器只在建会话时落一次 header version，之后跟随上游演进继续追加
+ * 事件——同一个 log 因此可能是混合世代（v0 时代的行 + 新版本字段），不是
+ * 任何单一已发布格式，严格迁移链必然拒绝。这些行的数据形状（消息包装、
+ * 类型名）已经是当前格式，只需 header 版本归一到当前、按稠密 seq 读取；
+ * 事件数据的补全与 surface 修复由读取视图修复（repairReadView）负责。
+ *
+ * 调用方须在此之后执行 `validateStoredEvents`：真正属于旧格式的类型
+ * （`assistant/chunk` / `compact/*` 等）仍会被 fail-loud 拒绝。
+ *
+ * @param row - 会话行（f_version < 2）。
+ * @param eventRows - 该会话全部桥接行（按 f_sequence 升序）。
+ * @returns 当前格式 header（version 归一到 SESSION_FORMAT_VERSION）、收缩后的
+ *   继承前缀长度、稠密事件与可选 torn tail 起点。
+ * @throws scanRows 的已提交区损坏错误（seq gap / 不可解析行）。
+ */
+export function adoptLegacyRows(
+  row: SessionRow,
+  eventRows: readonly EventRow[],
+): {
+  meta: SessionHeader;
+  inheritedEventCount: number;
+  events: SessionEvent[];
+  tornFrom?: number;
+} {
+  const { preserved, tornFrom } = scanRows(eventRows, 0);
+  return {
+    meta: { ...rowToMeta(row), version: SESSION_FORMAT_VERSION },
+    // 继承前缀不得超过事件数（历史 rewind 未收缩的损坏样式），上游 load 判损坏。
+    inheritedEventCount: Math.min(row.fSeedLength ?? 0, preserved.length),
+    events: preserved,
+    ...(tornFrom !== undefined ? { tornFrom } : {}),
+  };
 }
 
 export type { SessionId };

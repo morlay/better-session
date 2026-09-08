@@ -15,12 +15,14 @@
 - 表结构级升级由 **drizzle-kit 生成迁移**（`drizzle/` 目录，sqlite/pg 各一
   份；`pnpm db:generate` 重新生成），运行时经 drizzle `migrate()` 执行；
   旧版本库首次打开时把 v2 baseline 标记为已应用，只执行 v3 diff。同版本内
-  的数据格式差异（含 surface 语义损坏）在**导出时修复**（导出即修复，见
-  [legacy-clean.md](legacy-clean.md)）。
+  的数据格式差异（含 surface 语义损坏）在**读取/导出视图**修复（不落库，见
+  [read-path.md](read-path.md) / [legacy-clean.md](legacy-clean.md)）。
 - 本设计相对 v1 的破坏性变更：`t_events` 删 `f_source_event_seqs` /
   `f_surface_op` 列、`f_kind` 语义从「= type」改为「事件种类」、`t_events`
   加 `f_type` 列、`t_session_events` 加 `f_surface_op` 列——**已 bump 到 v2**；
-  v3 删 `t_session_events.f_original_seq`（原样存储下恒等于 `f_sequence`）。
+  v3 删 `t_session_events.f_original_seq`（当前写入器原样存储下恒等于
+  `f_sequence`；旧写入器重编号后的坐标差异由读取视图修复，见
+  [legacy-clean.md](legacy-clean.md)）。
 
 ## PostgreSQL schema 配置
 
