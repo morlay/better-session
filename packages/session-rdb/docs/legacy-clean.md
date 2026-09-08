@@ -23,15 +23,19 @@ drizzle-kit 生成迁移（`drizzle/` 目录，删 `t_session_events.f_original_
 旧写入器只在建会话时落一次 `f_version`，之后跟随上游演进继续追加事件：同一个
 log 可能是**混合世代**（v0 时代的行 + 新版本字段，如 `permission/preset.origin`、
 `subagent/descriptor` version 2），不是任何单一已发布格式。严格的上游迁移链
-（v0 → v1 → v2）对这种 log 必然拒绝。
+（v0 → v1 → v2 → v3）对这种 log 必然拒绝。
 
-`readLog` 因此先尝试迁移链（真 v0/v1 数据，含 `assistant/chunk`、旧消息形状），
+`readLog` 因此先尝试迁移链（真旧格式数据，含 `assistant/chunk`、旧消息形状），
 拒绝后回退 `adoptLegacyRows`：
 
 1. header 版本归一到 `SESSION_FORMAT_VERSION`（其余 header 字段来自存储行）；
-2. 按稠密 seq 采用行数据（`rowToEvent` 兼容纯 data 形状）；
+2. 按稠密 seq 采用行数据（`rowToEvent` 兼容纯 data 形状、归一面字段名）；
 3. 继承前缀收缩到实际事件数；
-4. 交给读取视图修复（`repairReadView`）：补 `assistant/message.stream`、越界
+4. `repairRequestHeaders` 把旧格式 `request/header` 归一为当前格式（v3 起
+   system prompt 由 surface 上的 `system/message` 承载，header 必须省略
+   `system` / 空 `tools` / 空 `adapterDefaults`）——必须发生在调用方
+   `validateStoredEvents` 之前，否则会话加载失败；
+5. 交给读取视图修复（`repairReadView`）：补 `assistant/message.stream`、越界
    replace 按 metering 数量夹取或降级、metering range 对齐、provenance 重算、
    孤儿 inbox splice 改写（见 [read-path.md](read-path.md)）。
 
@@ -48,7 +52,7 @@ log 可能是**混合世代**（v0 时代的行 + 新版本字段，如 `permiss
 
 因此 `open(id, "write")` 检测到「迁移视图事件数 ≠ 存储行数」时，在同一事务
 内执行 `rewriteMigratedLog`：删光本会话桥接行 → 按迁移视图重建（新事件行，
-完整信封 + 桥接行）→ 更新 head 与 revision。此后该会话是普通 v2 会话，
+完整信封 + 桥接行）→ 更新 head 与 revision。此后该会话是普通当前格式会话，
 读写同坐标；旧事件行保留（可能被 fork 子会话引用，孤儿由惰性 GC 处理）。
 混合世代回退视图（`adoptLegacyRows`）与存储行同坐标，不触发落库迁移。
 

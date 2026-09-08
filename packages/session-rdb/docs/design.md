@@ -45,7 +45,7 @@ packages/session-rdb/
 
 ## 核心不变量（审计确认）
 
-1. **写路径零转换**：事件内容、surfaceOp 原样落库；写路径 v2 校验
+1. **写路径零转换**：事件内容、surfaceOp 原样落库；写路径当前格式校验
    （`validateStoredEvents`）只拒绝未知类型（非 ignorable）与非法消息形状，
    不做坐标转换。
 2. **上游 seq 与稠密 seq 恒等**：原样存储下事件 seq 即稠密 seq，写读天然

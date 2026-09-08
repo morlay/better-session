@@ -535,7 +535,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         const m = meta("foreign-vocabulary");
         const handle = await persistence.create(m);
         await handle.append(oneTurnLog());
-        // 写路径 v2 校验：未知类型（非 ignorable）拒绝入库，批次不落库。
+        // 写路径当前格式校验：未知类型（非 ignorable）拒绝入库，批次不落库。
         await expect(
           handle.append([
             { type: "mystery/event", seq: SessionSeq(6), time: 7, data: { payload: true } },

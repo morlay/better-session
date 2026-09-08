@@ -11,6 +11,7 @@ import {
   SessionLogOffset,
   SessionSeq,
   SessionStore,
+  SESSION_FORMAT_VERSION,
 } from "@deepseek-ai/dsh-session";
 import SessionPersistenceSqlite from "@morlay/session-rdb";
 
@@ -161,7 +162,9 @@ describe("migrate v2 → v3", () => {
 
   it("reads a v0-format session through the legacy conversion chain (no id messages, old assistant shape)", async () => {
     // 历史 v0 数据：f_version = 0，消息无 id、assistant/message 用旧形状
-    // （content/provenance 顶层字段）。读取时经上游迁移链转 v2 逻辑事件。
+    // （content/provenance 顶层字段）。读取时经上游迁移链转当前逻辑事件。
+    // surface 事件按上游 v2→v3 迁移的可迁移形状排在 step 内：迁移链只在
+    // 首个 step/start 处注入 system head，pre-step surface 会被拒绝。
     const path = await freshDbPath();
     const db = new DatabaseSync(path);
     db.exec(`
@@ -220,17 +223,17 @@ describe("migrate v2 → v3", () => {
       VALUES
         ('evt-0', '', 'turn/start', 'turn', '', '', '', 'json',
          '{"turn":1}', 1000),
-        ('evt-1', 'evt-0', 'user/message', 'message', 'user', '', '', 'json',
-         '{"content":[{"type":"text","text":"hi"}],"source":{"kind":"user"}}', 1001),
-        ('evt-2', 'evt-1', 'step/start', 'turn', '', '', '', 'json',
-         '{"turn":1,"step":1}', 1002),
+        ('evt-1', 'evt-0', 'step/start', 'turn', '', '', '', 'json',
+         '{"turn":1,"step":1}', 1001),
+        ('evt-2', 'evt-1', 'user/message', 'message', 'user', '', '', 'json',
+         '{"content":[{"type":"text","text":"hi"}],"source":{"kind":"user"}}', 1002),
         ('evt-3', 'evt-2', 'assistant/message', 'message', 'assistant', '', '', 'json',
          '{"turn":1,"step":1,"content":[{"type":"text","text":"hello"}],"provenance":{"provider":"mock","model":"mock"}}', 1003);
       INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_original_seq, f_surface_op)
       VALUES
         ('v0-session', 'evt-0', 0, 0, NULL),
-        ('v0-session', 'evt-1', 1, 1, '"append"'),
-        ('v0-session', 'evt-2', 2, 2, NULL),
+        ('v0-session', 'evt-1', 1, 1, NULL),
+        ('v0-session', 'evt-2', 2, 2, '"append"'),
         ('v0-session', 'evt-3', 3, 3, '"append"');
     `);
     db.close();
@@ -241,21 +244,311 @@ describe("migrate v2 → v3", () => {
     const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
     try {
       const loaded = await rdb(ctx).load(SessionId("v0-session"));
-      // 迁移链补 id / 旧形状转 v2（assistant/message 嵌入 stream）。
-      expect(loaded.meta.version).toBe(2);
-      expect(loaded.events).toHaveLength(4);
-      const user = loaded.events[1]!;
+      // 迁移链补 id / 旧形状转当前格式，并在首个 step 后注入 system head。
+      expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
+      expect(loaded.events).toHaveLength(5);
+      expect(loaded.events[2]?.type).toBe("system/message");
+      const user = loaded.events[3]!;
       expect(user.type).toBe("user/message");
       expect(
         user.type === "user/message" && typeof user.data.id === "string" && user.data.id.length > 0,
       ).toBe(true);
-      const assistant = loaded.events[3]!;
+      const assistant = loaded.events[4]!;
       expect(assistant.type).toBe("assistant/message");
       expect(
         assistant.type === "assistant/message" &&
           Array.isArray(assistant.data.stream) &&
           assistant.data.message.source.kind === "model",
       ).toBe(true);
+    } finally {
+      await fiber.dispose();
+    }
+  });
+
+  it("migrates a v2 session through the chain: in-step surface keeps chronology and promotes the system prompt to a head", async () => {
+    // v2 已发布形状：消息带 id、assistant/message 内嵌 message+stream，
+    // request/header 携带 header.system。v2→v3 迁移把 system 提升为
+    // system/message 并剥离 header.system——升级后历史会话的主路径。
+    const path = await freshDbPath();
+    createV0SessionDatabase(
+      path,
+      [
+        { id: "evt-0", type: "turn/start", data: '{"turn":1}', surfaceOp: null },
+        { id: "evt-1", type: "step/start", data: '{"turn":1,"step":1}', surfaceOp: null },
+        {
+          id: "evt-2",
+          type: "user/message",
+          data: '{"id":"u1","role":"user","content":[{"type":"text","text":"hi"}],"source":{"kind":"user"}}',
+          surfaceOp: '"append"',
+        },
+        {
+          id: "evt-3",
+          type: "request/header",
+          data: '{"reason":"initial","header":{"config":{"provider":"mock","model":"mock"},"system":"sys prompt"}}',
+          surfaceOp: null,
+        },
+        {
+          id: "evt-4",
+          type: "assistant/message",
+          data: '{"turn":1,"step":1,"message":{"id":"a1","role":"assistant","content":[{"type":"text","text":"hello"}],"source":{"kind":"model","provider":"mock","model":"mock"}},"stream":[]}',
+          surfaceOp: '"append"',
+        },
+        { id: "evt-5", type: "step/end", data: '{"turn":1,"step":1}', surfaceOp: null },
+        {
+          id: "evt-6",
+          type: "turn/end",
+          data: '{"turn":1,"reason":{"kind":"completed"}}',
+          surfaceOp: null,
+        },
+      ],
+      { version: 2 },
+    );
+
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
+    try {
+      const loaded = await rdb(ctx).load(SessionId("v0-session"));
+      expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
+      // 首个 step 注入空 system head，request/header 的 system 再以 replace
+      // 更新它：源 7 事件 → 9。
+      expect(loaded.events).toHaveLength(9);
+      const emptyHead = loaded.events[2]!;
+      expect(emptyHead.type).toBe("system/message");
+      expect(emptyHead.type === "system/message" && emptyHead.data.message.content).toEqual([]);
+      const head = loaded.events[4]!;
+      expect(head.type).toBe("system/message");
+      expect(head.type === "system/message" && head.data.message.content).toEqual([
+        { type: "text", text: "sys prompt" },
+      ]);
+      const request = loaded.events[5]!;
+      expect(request.type).toBe("request/header");
+      expect(
+        request.type === "request/header" &&
+          Object.hasOwn(request.data.header as unknown as object, "system"),
+      ).toBe(false);
+    } finally {
+      await fiber.dispose();
+    }
+  });
+
+  it("adopts a pre-step v2 session and normalizes request/header to the v3 shape", async () => {
+    // 本仓库编辑/重试种子（appendManualTurn）写入 pre-step surface，上游
+    // v2→v3 迁移链拒绝这类日志（不重排历史）。回退视图把 request/header 归一
+    // 为 v3 形状（省略 system / 空 tools / 空 adapterDefaults），会话保持可读；
+    // system prompt 不再进入模型请求，下次运行由 system/message 机制重建。
+    const path = await freshDbPath();
+    createV0SessionDatabase(
+      path,
+      [
+        { id: "evt-0", type: "turn/start", data: '{"turn":1}', surfaceOp: null },
+        {
+          id: "evt-1",
+          type: "user/message",
+          data: '{"id":"u1","role":"user","content":[{"type":"text","text":"hi"}],"source":{"kind":"user"}}',
+          surfaceOp: '"append"',
+        },
+        { id: "evt-2", type: "step/start", data: '{"turn":1,"step":1}', surfaceOp: null },
+        {
+          id: "evt-3",
+          type: "request/header",
+          data: '{"reason":"initial","header":{"config":{"provider":"mock","model":"mock"},"system":"sys prompt","tools":[],"adapterDefaults":{}}}',
+          surfaceOp: null,
+        },
+        {
+          id: "evt-4",
+          type: "assistant/message",
+          data: '{"turn":1,"step":1,"message":{"id":"a1","role":"assistant","content":[{"type":"text","text":"hello"}],"source":{"kind":"model","provider":"mock","model":"mock"}},"stream":[]}',
+          surfaceOp: '"append"',
+        },
+        { id: "evt-5", type: "step/end", data: '{"turn":1,"step":1}', surfaceOp: null },
+        {
+          id: "evt-6",
+          type: "turn/end",
+          data: '{"turn":1,"reason":{"kind":"completed"}}',
+          surfaceOp: null,
+        },
+      ],
+      { version: 2 },
+    );
+
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
+    try {
+      const loaded = await rdb(ctx).load(SessionId("v0-session"));
+      expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
+      expect(loaded.events).toHaveLength(7);
+      expect(loaded.events.some((event) => event.type === "system/message")).toBe(false);
+      const request = loaded.events[3]!;
+      expect(request.type).toBe("request/header");
+      const header =
+        request.type === "request/header"
+          ? (request.data.header as unknown as Record<string, unknown>)
+          : {};
+      expect(Object.hasOwn(header, "system")).toBe(false);
+      expect(Object.hasOwn(header, "tools")).toBe(false);
+      expect(Object.hasOwn(header, "adapterDefaults")).toBe(false);
+      expect(header["config"]).toEqual({ provider: "mock", model: "mock" });
+    } finally {
+      await fiber.dispose();
+    }
+  });
+
+  it("loads a session whose replace range escaped into the old coordinate space (repair precedes validation)", async () => {
+    // 真实历史数据的形状：旧写入器重编号事件后，桥接行里的 replace range
+    // 仍落在旧坐标空间（end 远大于自身 seq）。读取视图修复（夹取/降级）必须
+    // 在 open 的 validateStoredEvents 之前运行，否则上游以
+    // 「startSeq and endSeq must reference earlier events」拒绝整个会话。
+    const path = await freshDbPath();
+    createV0SessionDatabase(
+      path,
+      [
+        { id: "evt-0", type: "turn/start", data: '{"turn":1}', surfaceOp: null },
+        {
+          id: "evt-1",
+          type: "user/message",
+          data: '{"id":"u1","role":"user","content":[{"type":"text","text":"hi"}],"source":{"kind":"user"}}',
+          surfaceOp: '"append"',
+        },
+        { id: "evt-2", type: "step/start", data: '{"turn":1,"step":1}', surfaceOp: null },
+        {
+          id: "evt-3",
+          type: "assistant/message",
+          data: '{"turn":1,"step":1,"message":{"id":"a1","role":"assistant","content":[{"type":"text","text":"hello"}],"source":{"kind":"model","provider":"mock","model":"mock"}},"stream":[]}',
+          surfaceOp: '"append"',
+        },
+        { id: "evt-4", type: "step/end", data: '{"turn":1,"step":1}', surfaceOp: null },
+        {
+          id: "evt-5",
+          type: "turn/end",
+          data: '{"turn":1,"reason":{"kind":"completed"}}',
+          surfaceOp: null,
+        },
+        {
+          id: "evt-6",
+          type: "compaction/summary",
+          data: '{"turn":1,"summary":[{"type":"text","text":"s"}],"shadowedRange":{"start":1,"end":3},"shadowedSeqs":[1,3],"shadowedTokenCount":10}',
+          surfaceOp: null,
+        },
+        {
+          id: "evt-7",
+          type: "user/message",
+          data: '{"id":"ckpt","role":"user","content":[{"type":"text","text":"checkpoint"}],"source":{"kind":"plugin","plugin":"compact"}}',
+          surfaceOp: '{"op":"replace","start":1,"end":9999}',
+        },
+        { id: "evt-8", type: "compaction/end", data: '{"turn":1}', surfaceOp: null },
+      ],
+      { version: 2 },
+    );
+
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
+    try {
+      const loaded = await rdb(ctx).load(SessionId("v0-session"));
+      expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
+      const checkpoint = loaded.events[7]!;
+      expect(checkpoint.type).toBe("user/message");
+      // end 越界但 start 在 surface 且紧邻 metering 给出被遮蔽数量 → 夹取到
+      // 当前 surface 的同长区间（保住压缩语义）。
+      expect(checkpoint.surfaceOp).toEqual({
+        op: "replace",
+        startSeq: SessionSeq(1),
+        endSeq: SessionSeq(3),
+      });
+      expect(() =>
+        Session.fromRestore(
+          SessionId("v0-session"),
+          loaded.events,
+          loaded.meta,
+          SessionLogOffset(loaded.inheritedEventCount),
+          "detached",
+        ),
+      ).not.toThrow();
+    } finally {
+      await fiber.dispose();
+    }
+  });
+
+  it("renames v2 PTC vocabulary in the adopted view (tool/code-dispatch-* and tools-code-mode)", async () => {
+    // 上游 v2→v3 迁移把 PTC 词汇改名（tool/code-dispatch-* → tool/ptc-dispatch-*、
+    // tools-code-mode → tools-ptc）。混合世代回退视图直接采用存储行，必须做
+    // 同样的归一，否则上游以「unknown event type」拒绝整个会话。
+    const path = await freshDbPath();
+    createV0SessionDatabase(
+      path,
+      [
+        { id: "evt-0", type: "turn/start", data: '{"turn":1}', surfaceOp: null },
+        {
+          id: "evt-1",
+          type: "user/message",
+          data: '{"id":"u1","role":"user","content":[{"type":"text","text":"hi"}],"source":{"kind":"plugin","plugin":"tools-code-mode"}}',
+          surfaceOp: '"append"',
+        },
+        { id: "evt-2", type: "step/start", data: '{"turn":1,"step":1}', surfaceOp: null },
+        {
+          id: "evt-3",
+          type: "tool/code-dispatch-start",
+          data: '{"rootCallId":"r1","parentCallId":"r1","subCallId":"r1:code:1","name":"bash","arguments":{}}',
+          surfaceOp: null,
+        },
+        {
+          id: "evt-4",
+          type: "tool/code-dispatch",
+          data: '{"rootCallId":"r1","parentCallId":"r1","subCallId":"r1:code:1","name":"bash","arguments":{},"isError":false,"content":[]}',
+          surfaceOp: null,
+        },
+        {
+          id: "evt-5",
+          type: "assistant/message",
+          data: '{"turn":1,"step":1,"message":{"id":"a1","role":"assistant","content":[{"type":"text","text":"hello"}],"source":{"kind":"model","provider":"mock","model":"mock"}},"stream":[]}',
+          surfaceOp: '"append"',
+        },
+        { id: "evt-6", type: "step/end", data: '{"turn":1,"step":1}', surfaceOp: null },
+        {
+          id: "evt-7",
+          type: "turn/end",
+          data: '{"turn":1,"reason":{"kind":"completed"}}',
+          surfaceOp: null,
+        },
+      ],
+      { version: 2 },
+    );
+
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
+    try {
+      const loaded = await rdb(ctx).load(SessionId("v0-session"));
+      expect(loaded.events.map((event) => event.type)).toEqual([
+        "turn/start",
+        "user/message",
+        "step/start",
+        "tool/ptc-dispatch-start",
+        "tool/ptc-dispatch",
+        "assistant/message",
+        "step/end",
+        "turn/end",
+      ]);
+      const user = loaded.events[1]!;
+      expect(
+        user.type === "user/message" &&
+          (user.data.source as { plugin?: string }).plugin === "tools-ptc",
+      ).toBe(true);
+      expect(() =>
+        Session.fromRestore(
+          SessionId("v0-session"),
+          loaded.events,
+          loaded.meta,
+          SessionLogOffset(loaded.inheritedEventCount),
+          "detached",
+        ),
+      ).not.toThrow();
     } finally {
       await fiber.dispose();
     }
@@ -302,7 +595,7 @@ describe("migrate v2 → v3", () => {
     const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
     try {
       const loaded = await rdb(ctx).load(SessionId("v0-session"));
-      expect(loaded.meta.version).toBe(2);
+      expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
       expect(loaded.events).toHaveLength(7);
       // 回退路径补全结算字段：assistant/message 缺 stream。
       const assistant = loaded.events[4]!;
@@ -365,13 +658,13 @@ describe("migrate v2 → v3", () => {
       path,
       [
         { id: "evt-0", type: "turn/start", data: '{"turn":1}', surfaceOp: null },
+        { id: "evt-1", type: "step/start", data: '{"turn":1,"step":1}', surfaceOp: null },
         {
-          id: "evt-1",
+          id: "evt-2",
           type: "user/message",
           data: '{"content":[{"type":"text","text":"hi"}],"source":{"kind":"user"}}',
           surfaceOp: '"append"',
         },
-        { id: "evt-2", type: "step/start", data: '{"turn":1,"step":1}', surfaceOp: null },
         {
           id: "evt-3",
           type: "assistant/message",
@@ -396,38 +689,38 @@ describe("migrate v2 → v3", () => {
     try {
       const handle = await rdb(ctx).open(SessionId("v0-session"), "write");
       const read = await handle.read(0, undefined);
-      expect(read.events).toHaveLength(7);
-      await handle.append([{ type: "session/end-seed", seq: SessionSeq(7), time: 2000, data: {} }]);
+      expect(read.events).toHaveLength(8);
+      await handle.append([{ type: "session/end-seed", seq: SessionSeq(8), time: 2000, data: {} }]);
       await handle.close();
 
-      // 存储已重写为 v2：head 与事件数一致，续写落在同一坐标空间。
+      // 存储已重写为当前格式：head 与事件数一致，续写落在同一坐标空间。
       const db = new DatabaseSync(path, { readOnly: true });
       const session = db
         .prepare(
           "SELECT f_version, f_head_sequence FROM t_sessions WHERE f_session_id = 'v0-session'",
         )
         .get() as { f_version: number; f_head_sequence: number };
-      expect(session).toEqual({ f_version: 2, f_head_sequence: 7 });
+      expect(session).toEqual({ f_version: SESSION_FORMAT_VERSION, f_head_sequence: 8 });
       const { count } = db
         .prepare("SELECT COUNT(*) AS count FROM t_session_events WHERE f_session_id = 'v0-session'")
         .get() as { count: number };
-      expect(count).toBe(8);
+      expect(count).toBe(9);
       db.close();
 
       const loaded = await rdb(ctx).load(SessionId("v0-session"));
-      expect(loaded.meta.version).toBe(2);
-      expect(loaded.events).toHaveLength(8);
+      expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
+      expect(loaded.events).toHaveLength(9);
     } finally {
       await fiber.dispose();
     }
   });
 });
 
-/** 建 v0 header 的库，事件行按给定顺序落桥接表（f_original_seq = 稠密 seq）。 */
+/** 建旧格式 header 的库，事件行按给定顺序落桥接表（f_original_seq = 稠密 seq）。 */
 function createV0SessionDatabase(
   path: string,
   rows: ReadonlyArray<{ id: string; type: string; data: string; surfaceOp: string | null }>,
-  options: { seedLength?: number } = {},
+  options: { seedLength?: number; version?: number } = {},
 ): void {
   const db = new DatabaseSync(path);
   db.exec(`
@@ -479,7 +772,7 @@ function createV0SessionDatabase(
     INSERT INTO t_sessions
       (f_session_id, f_head_event_id, f_head_sequence, f_version, f_created_at, f_cwd,
        f_parent_session, f_seed_length, f_origin, f_delegation_depth, f_incarnation, f_revision)
-    VALUES ('v0-session', '', ${rows.length - 1}, 0, 1000, '/work', NULL, ${options.seedLength ?? null}, NULL, NULL, 'inc-0', 1);
+    VALUES ('v0-session', '', ${rows.length - 1}, ${options.version ?? 0}, 1000, '/work', NULL, ${options.seedLength ?? null}, NULL, NULL, 'inc-0', 1);
   `);
   const insertEvent = db.prepare(
     `INSERT INTO t_events (f_event_id, f_parent_id, f_type, f_data, f_created_at)

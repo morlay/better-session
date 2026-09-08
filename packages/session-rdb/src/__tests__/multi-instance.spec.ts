@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Context } from "@deepseek-ai/cordis";
-import { SessionStore, SessionId, SessionSeq } from "@deepseek-ai/dsh-session";
+import {
+  SessionStore,
+  SessionId,
+  SessionSeq,
+  SESSION_FORMAT_VERSION,
+} from "@deepseek-ai/dsh-session";
 import type { SessionEvent, SessionHeader } from "@deepseek-ai/dsh-session";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { EmptySettings } from "@morlay/session-rdb/testing";
@@ -62,7 +67,7 @@ function oneTurn(offset: number): SessionEvent[] {
 
 function header(id: SessionId, cwd?: string): SessionHeader {
   return {
-    version: 2,
+    version: SESSION_FORMAT_VERSION,
     id,
     createdAt: 1,
     isSeeded: false,

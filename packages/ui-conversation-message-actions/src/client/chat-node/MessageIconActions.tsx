@@ -97,7 +97,8 @@ export function MessageIconActions({
   }, [copied, text]);
   // The dot is decorative and stays hidden, but its margins separate the
   // readings only on screen: without the flanking spaces a reader hears one
-  // run-on string ("Ran for 13sTTFT 0.2s12 tok/s") instead of three facts.
+  // run-on string ("Ran for 13sTime to first token (TTFT) 0.2s12 tok/s")
+  // instead of three facts.
   const clockEl =
     time === undefined ? null : (
       <span className={clock === "start" ? css.timeStart : css.timeEnd}>
@@ -117,7 +118,8 @@ export function MessageIconActions({
             <span className={css.runTimeDot} aria-hidden>
               ·
             </span>{" "}
-            {t("stats.ttftAverage", { duration: formatLatencySeconds(ttftMs) })}
+            {t("message.turnTime.ttft")}{" "}
+            {t("duration.seconds", { seconds: formatLatencySeconds(ttftMs) })}
           </>
         )}
         {tokensPerSecond !== undefined && (

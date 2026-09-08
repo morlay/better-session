@@ -1,8 +1,29 @@
+import { SessionSeq } from "@deepseek-ai/dsh-session";
 import type { SessionEvent, SessionHeader, SessionId, SurfaceOp } from "@deepseek-ai/dsh-session";
 import type { SessionFormatEvent, SessionFormatHeader } from "@deepseek-ai/dsh-session-format";
 import { sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import type { EventRow, SessionRow } from "./backend.ts";
+
+/**
+ * 把桥接行列里的 replace surfaceOp 归一到当前字段名。
+ *
+ * v2 时代落库的 JSON 用 `start`/`end`，当前格式用 `startSeq`/`endSeq`；
+ * 混合世代回退路径直接采用存储行，必须在此归一，否则上游 v3 surface 校验
+ * 以「invalid replace surfaceOp」拒绝整个会话。非 replace 形状原样返回，
+ * 由读取视图修复决定降级。
+ */
+function normalizeSurfaceOp(value: unknown): SurfaceOp {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return value as SurfaceOp;
+  }
+  const record = value as Record<string, unknown>;
+  if (record["op"] !== "replace") return value as SurfaceOp;
+  const startSeq = record["startSeq"] ?? record["start"];
+  const endSeq = record["endSeq"] ?? record["end"];
+  if (typeof startSeq !== "number" || typeof endSeq !== "number") return value as SurfaceOp;
+  return { op: "replace", startSeq: SessionSeq(startSeq), endSeq: SessionSeq(endSeq) };
+}
 
 export function rowToMeta(row: SessionRow): SessionHeader {
   if (!Number.isSafeInteger(row.fCreatedAt) || row.fCreatedAt < 0) {
@@ -76,7 +97,8 @@ export function sessionConflictRow(storage: SessionStorageMetadata): {
 }
 
 export function rowToEvent(row: EventRow): SessionEvent {
-  const surfaceOp = row.fSurfaceOp !== null ? (JSON.parse(row.fSurfaceOp) as SurfaceOp) : undefined;
+  const surfaceOp =
+    row.fSurfaceOp !== null ? normalizeSurfaceOp(JSON.parse(row.fSurfaceOp) as unknown) : undefined;
   const record = JSON.parse(row.fData) as unknown;
   // fData 形状判别：新写入的完整事件（含 ignorable 信封，与 JSONL 每行
   // 同构）vs 旧 v2 库的纯 data 部分。完整事件必有 type/seq/time/data 四键。
@@ -107,7 +129,12 @@ export function rowToEvent(row: EventRow): SessionEvent {
   } as SessionEvent;
 }
 
-const SURFACE_EVENT_TYPES = new Set(["user/message", "assistant/message", "tool/result"]);
+const SURFACE_EVENT_TYPES = new Set([
+  "system/message",
+  "user/message",
+  "assistant/message",
+  "tool/result",
+]);
 
 const METERING_EVENT_TYPES = new Set(["compaction/summary", "compaction/prune"]);
 
@@ -126,12 +153,12 @@ const METERING_EVENT_TYPES = new Set(["compaction/summary", "compaction/prune"])
 export function recomputeReplaceProvenance(events: SessionEvent[]): void {
   for (let i = 0; i < events.length; i++) {
     const event = events[i]!;
-    const raw = event as SessionEvent & { surfaceOp?: unknown; sourceEventSeqs?: number[] };
+    const raw = event as unknown as { surfaceOp?: unknown; sourceEventSeqs?: number[] };
     const op = raw.surfaceOp;
     if (typeof op !== "object" || op === null || (op as { op?: string }).op !== "replace") {
       continue;
     }
-    const { start, end } = op as { start: number; end: number };
+    const { startSeq, endSeq } = op as { startSeq: number; endSeq: number };
     const metering = i > 0 ? events[i - 1] : undefined;
     const meteringData =
       metering !== undefined && METERING_EVENT_TYPES.has(metering.type)
@@ -144,8 +171,8 @@ export function recomputeReplaceProvenance(events: SessionEvent[]): void {
     const refs: number[] = [];
     for (const candidate of events) {
       if (
-        candidate.seq >= start &&
-        candidate.seq <= end &&
+        candidate.seq >= startSeq &&
+        candidate.seq <= endSeq &&
         SURFACE_EVENT_TYPES.has(candidate.type)
       ) {
         refs.push(candidate.seq);
@@ -242,8 +269,8 @@ export function findSurfaceRepairs(events: readonly SessionEvent[]): {
       typeof op === "object" && op !== null && !Array.isArray(op)
         ? (op as Record<string, unknown>)
         : undefined;
-    const start = replace?.["start"];
-    const end = replace?.["end"];
+    const start = replace?.["startSeq"];
+    const end = replace?.["endSeq"];
     const shapeOk =
       replace !== undefined &&
       replace["op"] === "replace" &&
@@ -261,6 +288,10 @@ export function findSurfaceRepairs(events: readonly SessionEvent[]): {
       if (clamped !== undefined) endIdx = nodes.indexOf(clamped);
     }
     const rangeOk = shapeOk && startIdx !== -1 && endIdx !== -1 && startIdx <= endIdx;
+    // assistant/message 的来源内嵌在 stream，上游禁止其携带 sourceEventSeqs，
+    // replace 的 provenance 因此永远无法满足 fold 校验——降级 append 是唯一
+    // 可加载形态。
+    const provenanceOk = event.type !== "assistant/message";
     let rewriteOk = true;
     if (rangeOk && event.type === "tool/result") {
       const shadowed = nodes.slice(startIdx, endIdx + 1);
@@ -272,7 +303,7 @@ export function findSurfaceRepairs(events: readonly SessionEvent[]): {
           original?.type === "tool/result" && toolResultRewriteContentOnly(original, event);
       }
     }
-    if (!rangeOk || !rewriteOk) {
+    if (!rangeOk || !rewriteOk || !provenanceOk) {
       degradeToAppend.add(event.seq);
       nodes.push(event.seq);
       continue;
@@ -320,8 +351,12 @@ export function repairSurfaceOps(events: SessionEvent[]): void {
     if (repairs.degradeToAppend.has(event.seq)) {
       raw.surfaceOp = "append";
     } else if (clamped !== undefined) {
-      const op = raw.surfaceOp as { start: number };
-      raw.surfaceOp = { op: "replace", start: op.start, end: clamped };
+      const op = raw.surfaceOp as { startSeq: number };
+      raw.surfaceOp = {
+        op: "replace",
+        startSeq: SessionSeq(op.startSeq),
+        endSeq: SessionSeq(clamped),
+      };
     } else if (repairs.addAppendMarker.has(event.seq)) {
       raw.surfaceOp = "append";
     } else if (repairs.clearSurfaceOp.has(event.seq)) {
@@ -344,6 +379,34 @@ export function repairAssistantSettlement(events: SessionEvent[]): void {
 }
 
 /**
+ * 读取时把旧格式 `request/header` 归一为当前格式：v3 起 system prompt 由
+ * surface 上的 `system/message` 承载，header 必须省略 `system`，空 `tools` /
+ * `adapterDefaults` 也必须省略（上游 v3 事件校验 fail loud）。混合世代回退
+ * 视图直接采用存储行，不归一会让整个会话加载失败。system prompt 因此不再
+ * 进入模型请求；会话下次运行由 v3 的 system/message 机制重建。
+ */
+export function repairRequestHeaders(events: SessionEvent[]): void {
+  for (const event of events) {
+    if (event.type !== "request/header") continue;
+    const data = event.data as unknown as Record<string, unknown>;
+    const header = data["header"];
+    if (typeof header !== "object" || header === null || Array.isArray(header)) continue;
+    const record = header as Record<string, unknown>;
+    delete record["system"];
+    if (Array.isArray(record["tools"]) && record["tools"].length === 0) delete record["tools"];
+    const defaults = record["adapterDefaults"];
+    if (
+      typeof defaults === "object" &&
+      defaults !== null &&
+      !Array.isArray(defaults) &&
+      Object.keys(defaults).length === 0
+    ) {
+      delete record["adapterDefaults"];
+    }
+  }
+}
+
+/**
  * 把紧邻 replace 的 metering 事件的 `shadowedRange` / `shadowedSeqs` 对齐到
  * replace 最终的稠密 range。
  *
@@ -361,28 +424,108 @@ export function syncMeteringRanges(events: SessionEvent[]): void {
     const event = events[i]!;
     const op = (event as SessionEvent & { surfaceOp?: unknown }).surfaceOp;
     if (typeof op !== "object" || op === null || (op as { op?: string }).op !== "replace") continue;
-    const { start, end } = op as { start: number; end: number };
+    const { startSeq, endSeq } = op as { startSeq: number; endSeq: number };
     const data = metering.data as unknown as {
       shadowedRange?: { start: number; end: number };
       shadowedSeqs?: number[];
     };
-    if (data.shadowedRange?.start === start && data.shadowedRange.end === end) continue;
-    data.shadowedRange = { start, end };
+    if (data.shadowedRange?.start === startSeq && data.shadowedRange.end === endSeq) continue;
+    data.shadowedRange = { start: startSeq, end: endSeq };
     data.shadowedSeqs = events
       .filter(
         (candidate) =>
-          candidate.seq >= start && candidate.seq <= end && SURFACE_EVENT_TYPES.has(candidate.type),
+          candidate.seq >= startSeq &&
+          candidate.seq <= endSeq &&
+          SURFACE_EVENT_TYPES.has(candidate.type),
       )
       .map((candidate) => candidate.seq);
   }
 }
 
+const PTC_EVENT_RENAMES: Record<string, string> = {
+  "tool/code-dispatch-start": "tool/ptc-dispatch-start",
+  "tool/code-dispatch": "tool/ptc-dispatch",
+};
+
+/** 把消息的 `tools-code-mode` 插件来源改写为 `tools-ptc`（非该来源原样返回）。 */
+function renamePtcMessageSource(message: unknown): unknown {
+  if (typeof message !== "object" || message === null || Array.isArray(message)) return message;
+  const record = message as Record<string, unknown>;
+  const source = record["source"];
+  if (typeof source !== "object" || source === null || Array.isArray(source)) return message;
+  const sourceRecord = source as Record<string, unknown>;
+  if (sourceRecord["kind"] !== "plugin" || sourceRecord["plugin"] !== "tools-code-mode") {
+    return message;
+  }
+  return { ...record, source: { ...sourceRecord, plugin: "tools-ptc" } };
+}
+
+/** 宽类型事件视图：PTC 词汇归一涉及本包 SessionEventMap 之外的插件类型。 */
+interface LegacyPtcEvent {
+  type: string;
+  data: unknown;
+  [key: string]: unknown;
+}
+
 /**
- * 读取视图修复总入口：结算字段补全 → surface 语义修复 → metering 对齐 →
- * provenance 重算 → 孤儿 inbox splice 改写。全部只作用于内存视图，不落库。
+ * 读取时把 v2 时代的 PTC 词汇归一为当前词汇。
+ *
+ * 上游 v2→v3 迁移把 `tool/code-dispatch(-start)` 改名为
+ * `tool/ptc-dispatch(-start)`、把 `tools-code-mode` 插件来源改名为 `tools-ptc`、
+ * 把 agent preset 值 `code` 改名为 `ptc`。混合世代回退视图直接采用存储行，
+ * 不重命名会被上游 v3 校验以「unknown event type」拒绝整个会话。词汇改写
+ * 与上游迁移链的 renamePtcEvent 对齐。
+ */
+export function renameLegacyPtcEvents(events: SessionEvent[]): void {
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index] as unknown as LegacyPtcEvent;
+    const renamedType = PTC_EVENT_RENAMES[event.type];
+    if (renamedType !== undefined) {
+      events[index] = { ...event, type: renamedType } as unknown as SessionEvent;
+      continue;
+    }
+    if (event.type === "agent-preset/selected") {
+      const data = event.data as Record<string, unknown>;
+      if (data["agentPreset"] === "code") {
+        events[index] = {
+          ...event,
+          data: { ...data, agentPreset: "ptc" },
+        } as unknown as SessionEvent;
+      }
+      continue;
+    }
+    if (event.type === "user/message") {
+      const renamed = renamePtcMessageSource(event.data);
+      if (renamed !== event.data) {
+        events[index] = { ...event, data: renamed } as unknown as SessionEvent;
+      }
+      continue;
+    }
+    if (event.type === "agent/inbox/spliced" || event.type === "session/title-llm-request") {
+      const data = event.data as Record<string, unknown>;
+      const key = event.type === "agent/inbox/spliced" ? "inserted" : "messages";
+      const list = data[key];
+      if (!Array.isArray(list)) continue;
+      const renamed = list.map(renamePtcMessageSource);
+      if (renamed.some((message, position) => message !== list[position])) {
+        events[index] = {
+          ...event,
+          data: { ...data, [key]: renamed },
+        } as unknown as SessionEvent;
+      }
+    }
+  }
+}
+
+/**
+ * 读取视图修复总入口：形状补全（结算字段 / request header）→ PTC 词汇归一
+ * → surface 语义修复 → metering 对齐 → provenance 重算 → 孤儿 inbox splice
+ * 改写。全部只作用于内存视图，不落库。
  */
 export function repairReadView(events: SessionEvent[]): void {
   repairAssistantSettlement(events);
+  repairRequestHeaders(events);
+  renameLegacyPtcEvents(events);
   repairSurfaceOps(events);
   syncMeteringRanges(events);
   recomputeReplaceProvenance(events);

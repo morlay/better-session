@@ -38,13 +38,13 @@ turn/end、step/start ↔ step/end）由事件顺序 + 坐标保证，无跨事�
 
 ### surface 消息事件（user/assistant/tool，桥接行存 surfaceOp）
 
-| 事件                | data（上游，完整落库）                          | 桥接行         | id 关联                                                                            |
-| ------------------- | ----------------------------------------------- | -------------- | ---------------------------------------------------------------------------------- |
-| `user/message`      | `UserMessage`（含 `id`）                        | `f_surface_op` | 消息 `id` 自包含（inbox 配对用，见下）                                             |
-| `assistant/message` | `{ turn, step, message, usage?, interrupted? }` | `f_surface_op` | 无 seq 引用（v2 禁止 `sourceEventSeqs`，流式 delta 嵌入 `stream`）                 |
-| `tool/result`       | `{ turn, step, message, error?, meta? }`        | `f_surface_op` | `message.source.callId` 配对 `tool/call`；无 seq 引用（v2 禁止 `sourceEventSeqs`） |
+| 事件                | data（上游，完整落库）                          | 桥接行         | id 关联                                                                             |
+| ------------------- | ----------------------------------------------- | -------------- | ----------------------------------------------------------------------------------- |
+| `user/message`      | `UserMessage`（含 `id`）                        | `f_surface_op` | 消息 `id` 自包含（inbox 配对用，见下）                                              |
+| `assistant/message` | `{ turn, step, message, usage?, interrupted? }` | `f_surface_op` | 无 seq 引用（上游禁止 `sourceEventSeqs`，流式 delta 嵌入 `stream`）                 |
+| `tool/result`       | `{ turn, step, message, error?, meta? }`        | `f_surface_op` | `message.source.callId` 配对 `tool/call`；无 seq 引用（上游禁止 `sourceEventSeqs`） |
 
-**replace 事件**（`surfaceOp: { op: "replace", start, end }`，桥接行原样存）：
+**replace 事件**（`surfaceOp: { op: "replace", startSeq, endSeq }`，桥接行原样存）：
 读取时**重计算** `sourceEventSeqs`——优先取紧邻 metering 事件
 （`compaction/summary` / `compaction/prune`）的 `shadowedSeqs`（权威被遮蔽
 节点列表），无 metering 事件时回退为 range 内全部 surface 节点 seq 集合——

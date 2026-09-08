@@ -4,7 +4,8 @@
 t_session_events JOIN t_events（按 f_sequence 排序）
   │
   ├─ rowToEvent：f_data 解析（完整事件，含 ignorable 信封；兼容旧 v2 库的
-  │   纯 data 形状——判别完整事件四键）
+  │   纯 data 形状——判别完整事件四键）；replace surfaceOp 字段名归一到
+  │   `startSeq`/`endSeq`
   │
   ├─ scanRows：崩溃尾部语义（last turn/end 切割、torn tail 截断）
   │
@@ -12,6 +13,13 @@ t_session_events JOIN t_events（按 f_sequence 排序）
       ├─ repairAssistantSettlement：assistant/message|attempt 缺 `stream` 补
       │   `[]`——旧写入器不落库流式记录，上游 seed 校验要求 turn/step/stream
       │   齐备
+      ├─ repairRequestHeaders：旧格式 request/header 归一为当前格式（省略
+      │   `system` / 空 `tools` / 空 `adapterDefaults`）——v3 起 system prompt
+      │   由 surface 上的 `system/message` 承载；回退视图在
+      │   `validateStoredEvents` 之前也已归一（见 [legacy-clean.md](legacy-clean.md)）
+      ├─ renameLegacyPtcEvents：v2 时代 PTC 词汇归一（`tool/code-dispatch-*`
+      │   → `tool/ptc-dispatch-*`、`tools-code-mode` → `tools-ptc`、
+      │   agent preset `code` → `ptc`）——上游 v3 校验拒绝旧类型名
       ├─ repairSurfaceOps：非法 replace 降级 append；end 落在旧坐标空间的
       │   replace 按紧邻 metering 的 shadowedSeqs 数量夹取到当前 surface 的
       │   同长区间（保住压缩语义，否则降级会让被压缩历史全部回到派生历史）；
@@ -31,6 +39,11 @@ t_session_events JOIN t_events（按 f_sequence 排序）
 
 - **原样存储、原样读取**：事件 seq 即稠密 seq，无坐标映射；`f_data` 存完整
   事件（含 ignorable 信封），读回时整体解析。
+- **修复先于校验**：`open`/`load` 在 `validateStoredEvents` 之前应用
+  `repairReadView`。旧写入器重编号事件后，桥接行里的 replace range 可能仍
+  落在旧坐标空间（`end` 远大于自身 seq），上游 v3 事件校验以
+  「startSeq and endSeq must reference earlier events」fail loud——夹取/降级
+  必须在校验看到它们之前完成，否则历史会话无法加载。
 - **suffix 读取（`readFrom`）不补 provenance**：消费者 timeline 只找版本
   事件，不重放 surface。
 - **replace 的 provenance 采用权威 shadowedSeqs**：`shadowedRange` 是
@@ -47,7 +60,8 @@ t_session_events JOIN t_events（按 f_sequence 排序）
   之后的缺陷容忍为 torn tail（`tornFrom` 标记，load 时物理删除）。
 - 未闭合轮次（无 turn/end）**原样保留**：持久化层不补合成 closers，补
   closers 由消费方（Session 恢复 / agent-loop resume）负责。
-- **混合世代 log 回退**：`f_version < 2` 的会话先走上游迁移链；迁移链拒绝
-  （旧写入器跨上游版本追加、log 不是任何单一已发布格式）时回退为当前格式
-  视图（header 版本归一 + 上述修复），旧类型（`assistant/chunk` 等）仍由
-  `validateStoredEvents` fail-loud 拒绝（见 [legacy-clean.md](legacy-clean.md)）。
+- **混合世代 log 回退**：`f_version < SESSION_FORMAT_VERSION` 的会话先走上游
+  迁移链；迁移链拒绝（旧写入器跨上游版本追加、log 不是任何单一已发布格式）
+  时回退为当前格式视图（header 版本归一 + 上述修复），旧类型
+  （`assistant/chunk` 等）仍由 `validateStoredEvents` fail-loud 拒绝（见
+  [legacy-clean.md](legacy-clean.md)）。

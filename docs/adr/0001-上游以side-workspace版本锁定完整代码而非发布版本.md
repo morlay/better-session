@@ -1,7 +1,7 @@
 # 0001-上游以 side workspace 版本锁定完整代码而非发布版本
 
-上游 deepseek-harness 改动频繁且处于 pre-release 阶段（`SESSION_FORMAT_VERSION`
-保持 0、无兼容承诺），而本仓库的插件需要**完整源码上下文**才能扩展：类型
+上游 deepseek-harness 改动频繁且处于 pre-release 阶段（无兼容承诺），而本
+仓库的插件需要**完整源码上下文**才能扩展：类型
 定义、事件映射、coordinator 内部状态（rewind 需同步其私有 `states`）、
 `PersistenceBackend` 契约。因此把上游**按版本克隆的完整源码**以 side
 workspace 形式 vendor 到 `vendor/deepseek-harness/`（独立 git 仓库，主仓库

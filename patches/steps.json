@@ -1,4 +1,11 @@
 [
   { "type": "rm", "path": "apps/cli/tests/profiles/acp/cordis.yml" },
+  {
+    "type": "text",
+    "file": "native/system/package.json",
+    "pattern": "^\\s*\"@deepseek-ai/node-addon-system\": \"workspace:\\*\",\\n",
+    "flags": "m",
+    "to": ""
+  },
   { "type": "git", "patch": "css-inline-query.patch" }
 ]

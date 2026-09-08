@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SESSION_FORMAT_VERSION } from "@deepseek-ai/dsh-session";
+import { SESSION_FORMAT_VERSION, SessionSeq } from "@deepseek-ai/dsh-session";
 import type { SessionEvent, SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { SessionPersistenceRevision } from "@deepseek-ai/dsh-session-persistence";
 import {
@@ -33,7 +33,12 @@ function snapshot(
 }
 
 function versionEvent(seq: number, event: SessionBranchVersionEvent): SessionEvent {
-  return { type: "session-branch/version", seq, time: 0, data: event } as SessionEvent;
+  return {
+    type: "session-branch/version",
+    seq: SessionSeq(seq),
+    time: 0,
+    data: event,
+  } as unknown as SessionEvent;
 }
 
 function pair(id: string, parent: string): SessionBranchVersionEvent {

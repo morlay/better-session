@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Context } from "@deepseek-ai/cordis";
 import { MessageId, freezeMessage } from "@deepseek-ai/dsh-llm";
-import { SessionId, SessionLogOffset, SessionSeq, SessionStore } from "@deepseek-ai/dsh-session";
+import {
+  SessionId,
+  SessionLogOffset,
+  SessionSeq,
+  SessionStore,
+  SESSION_FORMAT_VERSION,
+} from "@deepseek-ai/dsh-session";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { strToU8, zipSync } from "fflate";
 import SessionPersistenceSqlite from "@morlay/session-rdb";
@@ -101,7 +107,9 @@ describe("parseJsonlArtifact", () => {
 
   it("converts a v0 artifact with legacy message shapes through the migration chain", () => {
     // 历史 v0 artifact：消息无 id、assistant/message 用 content/provenance
-    // 顶层字段。导入时经上游迁移链转 v2 逻辑事件（补 id、嵌入 stream）。
+    // 顶层字段。导入时经上游迁移链转当前逻辑事件（补 id、嵌入 stream，并在
+    // 首个 step 后注入 system head）。surface 事件必须排在 step 内——上游
+    // v2→v3 迁移拒绝 pre-step surface，而不是重排来源历史。
     const parsed = parseJsonlArtifact(
       [
         JSON.stringify({
@@ -113,14 +121,14 @@ describe("parseJsonlArtifact", () => {
           delegationDepth: 0,
         }),
         JSON.stringify({ type: "turn/start", seq: 0, time: 1, data: { turn: 1 } }),
+        JSON.stringify({ type: "step/start", seq: 1, time: 2, data: { turn: 1, step: 1 } }),
         JSON.stringify({
           type: "user/message",
-          seq: 1,
-          time: 2,
+          seq: 2,
+          time: 3,
           data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
           surfaceOp: "append",
         }),
-        JSON.stringify({ type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } }),
         JSON.stringify({
           type: "assistant/message",
           seq: 3,
@@ -142,14 +150,19 @@ describe("parseJsonlArtifact", () => {
         }),
       ].join("\n"),
     );
-    expect(parsed.meta).toMatchObject({ id: "v0-import", version: 2, isSeeded: false });
-    expect(parsed.events).toHaveLength(6);
-    const user = parsed.events[1]!;
+    expect(parsed.meta).toMatchObject({
+      id: "v0-import",
+      version: SESSION_FORMAT_VERSION,
+      isSeeded: false,
+    });
+    expect(parsed.events).toHaveLength(7);
+    expect(parsed.events[2]?.type).toBe("system/message");
+    const user = parsed.events[3]!;
     expect(user.type).toBe("user/message");
     expect(
       user.type === "user/message" && typeof user.data.id === "string" && user.data.id.length > 0,
     ).toBe(true);
-    const assistant = parsed.events[3]!;
+    const assistant = parsed.events[4]!;
     expect(assistant.type).toBe("assistant/message");
     expect(
       assistant.type === "assistant/message" &&
@@ -180,7 +193,8 @@ describe("parseJsonlArtifact", () => {
       isSeeded: true,
       delegationDepth: 1,
     });
-    expect(parsed.inheritedEventCount).toBe(SessionLogOffset(2));
+    // 继承前缀按目标坐标计：源前缀 2 个事件 + 迁移注入的 system head = 3。
+    expect(parsed.inheritedEventCount).toBe(SessionLogOffset(3));
   });
 
   it("rejects an empty log, a bad header, and a bad event line", () => {

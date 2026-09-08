@@ -6,8 +6,7 @@
 ## 问题
 
 要在不修改上游 `@deepseek-ai/*` 代码的前提下，开发跟随上游演进、且需要
-版本可控的完整 cordis 插件集合。上游 deepseek-harness（dsh）处于
-pre-release（`SESSION_FORMAT_VERSION` 保持 0、无兼容承诺）且改动频繁，
+版本可控的完整 cordis 插件集合。上游 deepseek-harness（dsh）改动频繁且处于 pre-release 阶段（无兼容承诺），
 插件扩展往往依赖**发布包不含的上下文**：
 
 - **上游私有实现**：许多扩展要协调上游服务内部状态（例如持久化后端的

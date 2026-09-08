@@ -560,6 +560,10 @@ export class SessionPersistenceRdb extends SessionPersistence {
       }
       const log = await this.readLog(id, {}, options?.signal);
       if (log === undefined) throw new SessionPersistenceNotFoundError(id);
+      // 读取视图修复必须先于校验：越界 replace（旧写入器重编号遗留的旧坐标）
+      // 降级/夹取、request/header 归一，否则上游事件校验 fail loud 拒绝整个
+      // 会话（load / open 是历史会话的加载入口，不能只依赖 handle.read）。
+      repairReadView(log.events);
       // fail-closed：未知事件类型（非 ignorable）拒绝解释。
       validateStoredEvents(log.meta, log.events);
       return this.tracker.adopt(
@@ -584,6 +588,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
       }
       const log = await this.readLog(id, {}, options?.signal);
       if (log === undefined) throw new SessionPersistenceNotFoundError(id);
+      repairReadView(log.events);
       validateStoredEvents(log.meta, log.events);
       // 迁移链会生成/合并事件（end-seed / attempt / chunk 合并），事件坐标与
       // 存储桥接行数不再相等——写打开时把迁移视图整体落库，使读写同坐标；
@@ -692,9 +697,9 @@ export class SessionPersistenceRdb extends SessionPersistence {
   }
 
   /** 原样 append 落库（handle 已校验 contiguity；torn tail 先截断）。
-   *  与上游 JSONL 一致：ignorable 事件原样存储，不做过滤。写路径校验 v2
-   *  形状（fail-closed）：未知类型（非 ignorable）与非法消息形状拒绝入库；
-   *  旧格式（v0/v1）数据只在读取时经 legacy 转换链动态转换，不落新库。 */
+   *  与上游 JSONL 一致：ignorable 事件原样存储，不做过滤。写路径校验当前
+   *  格式形状（fail-closed）：未知类型（非 ignorable）与非法消息形状拒绝入库；
+   *  非当前格式（v0/v1/v2）数据只在读取时经 legacy 转换链动态转换，不落新库。 */
   async appendBatch(
     meta: SessionHeader,
     inheritedEventCount: SessionLogOffset,
@@ -703,8 +708,8 @@ export class SessionPersistenceRdb extends SessionPersistence {
   ): Promise<boolean> {
     await this.ready;
     if (events.length === 0) return false;
-    // 写路径 v2 校验：与读路径同契约（validateStoredEvents），保证新入库
-    // 数据只能是 v2 形状。拷贝避免 adopt 替换污染调用方数组。
+    // 写路径当前格式校验：与读路径同契约（validateStoredEvents），保证新入库
+    // 数据只能是当前格式形状。拷贝避免 adopt 替换污染调用方数组。
     validateStoredEvents(meta, [...events]);
     // fork 派生会话的 seed 复用源会话事件行（不复制）；消费后清除。
     const reuse = this.reuseEventIds.get(meta.id);
@@ -763,7 +768,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
         /** 存储桥接行数（迁移链可能生成/合并事件，与 `events.length` 不同）。 */
         storedCount: number;
 
-        /** 是否经上游迁移链转换（v0/v1 → 当前格式）。 */
+        /** 是否经上游迁移链转换（非当前格式 → 当前格式）。 */
         migrated: boolean;
       }
     | undefined
@@ -779,10 +784,11 @@ export class SessionPersistenceRdb extends SessionPersistence {
         ? await this.backend.getEventRows(id)
         : await this.backend.getEventRows(id, options.fromSeq);
     signal?.throwIfAborted();
-    // 旧格式（v0/v1）历史数据：行重建为物理记录，经上游迁移链转 v2 逻辑事件。
-    // 迁移链自带 seq gap / torn tail 校验（strict recovery），无需 scanRows。
-    // 混合世代 log（旧写入器跨上游版本追加）不是任何单一已发布格式，迁移链
-    // 必然拒绝——回退为当前格式视图（header 版本归一 + 读取视图修复）。
+    // 非当前格式（v0/v1/v2）历史数据：行重建为物理记录，经上游迁移链转
+    // 当前逻辑事件。迁移链自带 seq gap / torn tail 校验（strict recovery），
+    // 无需 scanRows。混合世代 log（旧写入器跨上游版本追加）不是任何单一已
+    // 发布格式，迁移链必然拒绝——回退为当前格式视图（header 版本归一 +
+    // 读取视图修复）。
     if (isLegacyVersion(row.fVersion)) {
       try {
         const converted = convertLegacyRows(row, eventRows);
@@ -826,7 +832,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
   }
 
   /**
-   * 把迁移链读出的 v2 视图整体落库（旧格式会话写打开时的一次性迁移）。
+   * 把迁移链读出的当前格式视图整体落库（非当前格式会话写打开时的一次性迁移）。
    *
    * 迁移链会生成/合并事件（end-seed / attempt / chunk 合并），事件 seq 空间
    * 与存储桥接行数不再相等；写路径以存储 head 为锚点重编号，二者不一致会让
@@ -927,8 +933,8 @@ export class SessionPersistenceRdb extends SessionPersistence {
       );
       const row = await this.backend.getSession(id);
       if (row === undefined) throw new SessionPersistenceNotFoundError(id);
-      // 旧格式（v0/v1）会话：meta 与继承前缀来自转换链（handle.header 已是
-      // 转换后的 v2 header）；v2 会话用存储行。
+      // 非当前格式会话：meta 与继承前缀来自转换链（handle.header 已是转换后的
+      // 当前格式 header）；当前格式会话用存储行。
       if (isLegacyVersion(row.fVersion)) {
         return {
           meta: handle.header,

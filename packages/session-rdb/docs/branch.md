@@ -57,10 +57,10 @@ fork 的持久化闭环。
    继承前缀。
 
 **保留区 replace range 完整性（不变量）**：replace 的 range 引用**更早事件**
-（上游契约：range start/end 必须存在于当前 surface，即已提交节点），故
-`range.end < replace.seq`。rewind 只删尾部（`toBoundary + 1` 起），保留区
+（上游契约：range `startSeq`/`endSeq` 必须存在于当前 surface，即已提交节点），
+故 `range.endSeq < replace.seq`。rewind 只删尾部（`toBoundary + 1` 起），保留区
 replace（`seq ≤ toBoundary`）的 range 内节点全部 `< replace.seq ≤ toBoundary`，
-**全部保留**——映射完整、start/end 存在、重计算 provenance 覆盖成立。
+**全部保留**——映射完整、`startSeq`/`endSeq` 存在、重计算 provenance 覆盖成立。
 「保留区 replace 的 range 引用被删事件」在数学上不可能发生。torn tail 截断
 同理安全。
 

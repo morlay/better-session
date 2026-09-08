@@ -503,9 +503,10 @@ describe("SessionEditor edit", () => {
   it("exports a surface-corrupt session as a loadable artifact (export-time repair)", async () => {
     const { ctx, dispose } = await harness();
     try {
-      // 历史加载失败的数据样式：tool/result replace 指向的当前 surface 节点
-      // 不是 tool/result（上游 assertToolResultRewrite 校验失败）——load 抛
-      // invalid seed。导出（readRaw）把非法 replace 降级为 append。
+      // 历史加载失败的数据样式：assistant/message 的 replace 指向既有 surface
+      // 节点。assistant/message 的来源内嵌在 stream、禁止 sourceEventSeqs，
+      // 其 provenance 永远无法满足上游 fold 校验——导出（readRaw）把非法
+      // replace 降级为 append。
       const compacted: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
         {
@@ -562,8 +563,7 @@ describe("SessionEditor edit", () => {
             },
             stream: [],
           },
-          surfaceOp: { op: "replace", start: 1, end: 3 },
-          sourceEventSeqs: [1, 3],
+          surfaceOp: { op: "replace", startSeq: 1, endSeq: 3 },
         } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(9), time: 10, data: { turn: 2, step: 1 } },
         {

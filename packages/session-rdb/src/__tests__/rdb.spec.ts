@@ -179,6 +179,7 @@ describe("eventDimensions", () => {
           content: [{ type: "text", text: "hi" }],
           source: { kind: "user" },
         }),
+        surfaceOp: "append",
       }).role,
     ).toBe("user");
     expect(
@@ -196,6 +197,7 @@ describe("eventDimensions", () => {
           }),
           stream: [] as const,
         },
+        surfaceOp: "append",
       }).role,
     ).toBe("assistant");
   });
@@ -218,6 +220,7 @@ describe("eventDimensions", () => {
         }),
         stream: [] as const,
       },
+      surfaceOp: "append",
     });
     expect(dims.kind).toBe("thinking");
     expect(dims.role).toBe("assistant");
@@ -248,6 +251,7 @@ describe("eventDimensions", () => {
           source: { kind: "tool", callId },
         }),
       },
+      surfaceOp: "append",
     });
     expect(result).toEqual({ kind: "tool", role: "tool", name: "", actionId: "call-2" });
     expect(
@@ -267,7 +271,7 @@ describe("eventDimensions", () => {
         seq: SessionSeq(0),
         time: 1,
         data: {},
-      } as SessionEvent),
+      } as unknown as SessionEvent),
     ).toEqual({ kind: "", role: "", name: "", actionId: "" });
   });
 });
@@ -543,7 +547,7 @@ describe("findSurfaceRepairs", () => {
       // 非法 tool/result replace：range [1,3] 的当前 surface 节点是
       // user/message @1 + assistant/message @3，不是 tool/result。
       toolResult(6, "pruned", {
-        surfaceOp: { op: "replace", start: SessionSeq(1), end: SessionSeq(3) },
+        surfaceOp: { op: "replace", startSeq: SessionSeq(1), endSeq: SessionSeq(3) },
       }),
     ];
     const repairs = findSurfaceRepairs(events);
@@ -557,7 +561,7 @@ describe("findSurfaceRepairs", () => {
     const replacement = toolResult(
       6,
       "pruned",
-      { surfaceOp: { op: "replace", start: SessionSeq(5), end: SessionSeq(5) } },
+      { surfaceOp: { op: "replace", startSeq: SessionSeq(5), endSeq: SessionSeq(5) } },
       "msg-1",
     );
     const events: SessionEvent[] = [
@@ -622,7 +626,7 @@ describe("findSurfaceRepairs", () => {
           stream: [] as const,
         },
         // range 起点 9 不在当前 surface（只有 0、1）。
-        surfaceOp: { op: "replace", start: 9, end: 1 },
+        surfaceOp: { op: "replace", startSeq: 9, endSeq: 1 },
       } as unknown as SessionEvent,
     ];
     const repairs = findSurfaceRepairs(events);
@@ -677,7 +681,7 @@ describe("findSurfaceRepairs", () => {
           stream: [] as const,
         },
         // 畸形 replace：start 是字符串。
-        surfaceOp: { op: "replace", start: "1", end: 0 },
+        surfaceOp: { op: "replace", startSeq: "1", endSeq: 0 },
       } as unknown as SessionEvent,
     ];
     const repairs = findSurfaceRepairs(events);
@@ -746,7 +750,7 @@ describe("findSurfaceRepairs", () => {
           content: [{ type: "text", text: "compacted" }],
           source: { kind: "plugin", plugin: "compact" },
         }),
-        surfaceOp: { op: "replace", start: 1, end: 999 },
+        surfaceOp: { op: "replace", startSeq: 1, endSeq: 999 },
       } as unknown as SessionEvent,
     ];
     const repairs = findSurfaceRepairs(events);
@@ -778,7 +782,7 @@ describe("findSurfaceRepairs", () => {
           content: [{ type: "text", text: "compacted" }],
           source: { kind: "plugin", plugin: "compact" },
         }),
-        surfaceOp: { op: "replace", start: 40, end: 999 },
+        surfaceOp: { op: "replace", startSeq: 40, endSeq: 999 },
       } as unknown as SessionEvent,
     ];
     const repairs = findSurfaceRepairs(events);
@@ -846,7 +850,7 @@ describe("read-view repair", () => {
           content: [{ type: "text", text: "compacted" }],
           source: { kind: "plugin", plugin: "compact" },
         }),
-        surfaceOp: { op: "replace", start: 1, end: 3 },
+        surfaceOp: { op: "replace", startSeq: 1, endSeq: 3 },
       },
       {
         type: "user/message",
@@ -917,7 +921,7 @@ describe("read-view repair", () => {
           content: [{ type: "text", text: "compacted" }],
           source: { kind: "plugin", plugin: "compact" },
         }),
-        surfaceOp: { op: "replace", start: 1, end: 1 },
+        surfaceOp: { op: "replace", startSeq: 1, endSeq: 1 },
       },
     ] as unknown as SessionEvent[];
     syncMeteringRanges(events);
@@ -947,7 +951,7 @@ describe("recomputeReplaceProvenance", () => {
         seq: SessionSeq(40),
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
-        surfaceOp: { op: "replace", start: 7, end: 9 },
+        surfaceOp: { op: "replace", startSeq: 7, endSeq: 9 },
       } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
@@ -998,7 +1002,7 @@ describe("recomputeReplaceProvenance", () => {
         seq: SessionSeq(20),
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
-        surfaceOp: { op: "replace", start: 10, end: 12 },
+        surfaceOp: { op: "replace", startSeq: 10, endSeq: 12 },
       } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
@@ -1054,7 +1058,7 @@ describe("recomputeReplaceProvenance", () => {
         seq: SessionSeq(4),
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
-        surfaceOp: { op: "replace", start: 1, end: 2 },
+        surfaceOp: { op: "replace", startSeq: 1, endSeq: 2 },
       } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
@@ -1104,7 +1108,7 @@ describe("recomputeReplaceProvenance", () => {
         seq: SessionSeq(4),
         time: 5,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
-        surfaceOp: { op: "replace", start: 1, end: 2 },
+        surfaceOp: { op: "replace", startSeq: 1, endSeq: 2 },
       } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
@@ -1166,7 +1170,7 @@ describe("recomputeReplaceProvenance", () => {
             source: { kind: "tool", callId: ToolCallId("c") },
           }),
         },
-        surfaceOp: { op: "replace", start: SessionSeq(1), end: SessionSeq(2) },
+        surfaceOp: { op: "replace", startSeq: SessionSeq(1), endSeq: SessionSeq(2) },
       } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
@@ -1241,7 +1245,7 @@ describe("recomputeReplaceProvenance", () => {
           content: [{ type: "text", text: "checkpoint" }],
           source: { kind: "plugin", plugin: "compact" },
         },
-        surfaceOp: { op: "replace", start: 0, end: 1 },
+        surfaceOp: { op: "replace", startSeq: 0, endSeq: 1 },
       } as unknown as SessionEvent,
       {
         type: "user/message",
@@ -1270,11 +1274,11 @@ describe("recomputeReplaceProvenance", () => {
           content: [{ type: "text", text: "checkpoint" }],
           source: { kind: "plugin", plugin: "compact" },
         },
-        surfaceOp: { op: "replace", start: 4, end: 5 },
+        surfaceOp: { op: "replace", startSeq: 4, endSeq: 5 },
       } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
-    const checkpoint = events[7] as SessionEvent & { sourceEventSeqs?: number[] };
+    const checkpoint = events[7] as unknown as { sourceEventSeqs?: number[] };
     expect(checkpoint.sourceEventSeqs).toEqual([4, 2, 5]);
     checkpoint.sourceEventSeqs = [4, 5];
     expect(() => foldSurface(events)).toThrow(/missing 2/);
@@ -1818,7 +1822,7 @@ describe("SessionPersistenceSqlite: export-time repair (readRaw)", () => {
         },
         // 非法 replace：range [1,1] 的当前 surface 节点是 user/message @1，
         // 不是 tool/result（上游 assertToolResultRewrite 校验失败）。
-        surfaceOp: { op: "replace", start: 1, end: 1 },
+        surfaceOp: { op: "replace", startSeq: 1, endSeq: 1 },
       },
       {
         type: "turn/end",
@@ -2093,7 +2097,11 @@ describe("surface field round-trip", () => {
     ];
     const { preserved } = scanRows(rows);
     expect(preserved).toHaveLength(2);
-    expect((preserved[0]! as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 0, end: 0 });
+    expect((preserved[0]! as SurfaceEvent).surfaceOp).toEqual({
+      op: "replace",
+      startSeq: 0,
+      endSeq: 0,
+    });
     expect((preserved[0]! as SurfaceEvent).sourceEventSeqs).toBeUndefined();
     expect((preserved[1] as SessionEvent<SurfaceEventType>).surfaceOp).toBeUndefined();
   });

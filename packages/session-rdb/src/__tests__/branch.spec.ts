@@ -672,7 +672,7 @@ describe("rewind", () => {
             content: [{ type: "text", text: "compacted" }],
             source: { kind: "user" },
           },
-          surfaceOp: { op: "replace", start: 1, end: 3 },
+          surfaceOp: { op: "replace", startSeq: 1, endSeq: 3 },
           sourceEventSeqs: [1, 3].map((n) => SessionSeq(n)),
         } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(10), time: 10, data: { turn: 2, step: 1 } },
@@ -728,7 +728,7 @@ describe("rewind", () => {
             content: [{ type: "text", text: "compacted" }],
             source: { kind: "user" },
           },
-          surfaceOp: { op: "replace", start: 1, end: 3 },
+          surfaceOp: { op: "replace", startSeq: 1, endSeq: 3 },
           sourceEventSeqs: [1, 3].map((n) => SessionSeq(n)),
         } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(10), time: 10, data: { turn: 2, step: 1 } },
@@ -750,7 +750,11 @@ describe("rewind", () => {
       expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
       // 保留区 replace 的 range [1..5] 完整（range 引用更早事件 ⇒ 截断尾部不破坏）。
       const replacement = after.events.find((e) => e.type === "user/message" && e.seq === 9)!;
-      expect((replacement as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
+      expect((replacement as SurfaceEvent).surfaceOp).toEqual({
+        op: "replace",
+        startSeq: 1,
+        endSeq: 3,
+      });
       // provenance 读取时重计算（覆盖 range 内全部 surface 节点）。
       expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
       const meter = new TokenMeter(ctx);

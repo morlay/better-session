@@ -1,5 +1,6 @@
 import { Service, type Context } from "@deepseek-ai/cordis";
 import type { AssistantMessage, UserMessage } from "@deepseek-ai/dsh-llm";
+import { SessionSeq } from "@deepseek-ai/dsh-session";
 import type {
   Session,
   SessionEvent,
@@ -123,12 +124,12 @@ function appendSurfaceSeedEvent<T extends SurfaceEventType>(
 ): void {
   events.push({
     type,
-    seq: events.length,
+    seq: SessionSeq(events.length),
     time: Date.now(),
     data,
     surfaceOp: intent.surfaceOp,
     ...(intent.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: intent.sourceEventSeqs }),
-  } as SessionEvent<T>);
+  } as unknown as SessionEvent<T>);
 }
 
 function appendManualTurn(
