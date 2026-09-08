@@ -12,14 +12,15 @@
 
 - `SCHEMA_VERSION` 是**破坏性变更门禁**：表结构变更（列增删、列语义变化）
   必须 bump；`openDatabase` 对非当前版本**拒绝打开**（不迁移）。
-- 表结构级升级由**一次性迁移脚本**处理（`scripts/migrate-v1-to-v2.mts`，
-  重建表 + 数据搬运，可复用 legacy-clean 的解析逻辑）；同版本内的数据
-  格式差异（含 surface 语义损坏）在**导出时修复**（导出即修复，见
+- 表结构级升级由 **drizzle-kit 生成迁移**（`drizzle/` 目录，sqlite/pg 各一
+  份；`pnpm db:generate` 重新生成），运行时经 drizzle `migrate()` 执行；
+  旧版本库首次打开时把 v2 baseline 标记为已应用，只执行 v3 diff。同版本内
+  的数据格式差异（含 surface 语义损坏）在**导出时修复**（导出即修复，见
   [legacy-clean.md](legacy-clean.md)）。
 - 本设计相对 v1 的破坏性变更：`t_events` 删 `f_source_event_seqs` /
   `f_surface_op` 列、`f_kind` 语义从「= type」改为「事件种类」、`t_events`
-  加 `f_type` 列、`t_session_events` 加 `f_original_seq` / `f_surface_op`
-  列——**已 bump 到 v2**。
+  加 `f_type` 列、`t_session_events` 加 `f_surface_op` 列——**已 bump 到 v2**；
+  v3 删 `t_session_events.f_original_seq`（原样存储下恒等于 `f_sequence`）。
 
 ## PostgreSQL schema 配置
 
@@ -59,7 +60,7 @@ session-rdb:
 | `f_role`                 | text        | 对话角色（user / assistant / tool / turn，见下）                                                                                                                                 |
 | `f_name` / `f_action_id` | text        | 事件名称 / 配对 id（见下）                                                                                                                                                       |
 | `f_encoding`             | text        | `json`                                                                                                                                                                           |
-| `f_data`                 | text        | JSON 文本，**完整原始 data**（含 `turn`/`step` 轮次坐标、`shadowedRange` / `shadowedSeqs` 原始坐标）——忠实存储，读取时按需 drop 或重映射                                                          |
+| `f_data`                 | text        | JSON 文本，**完整事件**（type/seq/time/data/ignorable 信封，与 JSONL 每行同构）——忠实存储，读回时整体解析                                                                        |
 | `f_created_at`           | bigint      | 上游 `SessionEvent.time`                                                                                                                                                         |
 
 **不含**：`sourceEventSeqs`（不落库，读取时按需重计算）、`surfaceOp`（会话
@@ -148,14 +149,13 @@ session-rdb:
 
 **`t_session_events`** — 会话↔事件桥接：
 
-| 列               | 类型                                          | 说明                                                                                                                                                                       |
-| ---------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `f_id`           | serial PK                                     | 自增主键（仅存储内部）                                                                                                                                                     |
-| `f_session_id`   | text FK → `t_sessions.f_session_id` (CASCADE) | 会话                                                                                                                                                                       |
-| `f_event_id`     | text FK → `t_events.f_event_id` (CASCADE)     | 事件实体（可被多会话引用）                                                                                                                                                 |
-| `f_sequence`     | integer                                       | **稠密持久化 seq**（连续递增、无空洞）                                                                                                                                     |
-| `f_original_seq` | integer                                       | **上游 seq**（事件产生时的 seq，含瞬时事件计数）——重映射查阅：读取时构建 `f_original_seq → f_sequence` 映射，把 `shadowedRange` / `shadowedSeqs` / replace range 从上游坐标重映射到稠密坐标 |
-| `f_surface_op`   | text                                          | surface 元数据（`append` / `replace`，JSON 文本，**原始坐标**——replace 的 range 是上游 seq，读取时重映射；非 surface 事件为 NULL）                                         |
+| 列             | 类型                                          | 说明                                                                      |
+| -------------- | --------------------------------------------- | ------------------------------------------------------------------------- |
+| `f_id`         | serial PK                                     | 自增主键（仅存储内部）                                                    |
+| `f_session_id` | text FK → `t_sessions.f_session_id` (CASCADE) | 会话                                                                      |
+| `f_event_id`   | text FK → `t_events.f_event_id` (CASCADE)     | 事件实体（可被多会话引用）                                                |
+| `f_sequence`   | integer                                       | **稠密持久化 seq**（连续递增、无空洞；原样存储下即事件 seq）              |
+| `f_surface_op` | text                                          | surface 元数据（`append` / `replace`，JSON 文本；非 surface 事件为 NULL） |
 
 约束：`UNIQUE(f_session_id, f_sequence)`（自动建唯一索引，覆盖全部访问模式：
 按 session 过滤 + 按 seq 范围/排序/取尾）。
@@ -171,8 +171,7 @@ FROM t_session_events)`，经 `t_session_events.f_event_id` 索引）；
 
 **session 专属信息清单**（全部在桥接行，事件实体不关心）：
 
-| 信息           | 列               | 说明                                                  |
-| -------------- | ---------------- | ----------------------------------------------------- |
-| 稠密 seq       | `f_sequence`     | 会话内事件顺序                                        |
-| 上游 seq       | `f_original_seq` | 重映射查阅（上游→稠密映射）                           |
-| surface 元数据 | `f_surface_op`   | 事件进入 surface 的方式（append / replace，原始坐标） |
+| 信息           | 列             | 说明                                        |
+| -------------- | -------------- | ------------------------------------------- |
+| 稠密 seq       | `f_sequence`   | 会话内事件顺序（原样存储下即事件 seq）      |
+| surface 元数据 | `f_surface_op` | 事件进入 surface 的方式（append / replace） |

@@ -1,4 +1,12 @@
 export { toSqliteSchema } from "./to-sqlite.ts";
 export { toPostgresSchema } from "./to-postgres.ts";
-export { createTableSql, createIndexSql, createTablesSql } from "./ddl.ts";
-export type { Dialect } from "./ddl.ts";
+export type {
+  ColumnDef,
+  TableDef,
+  CheckDef,
+  UniqueDef,
+  IndexDef,
+  ColumnTypeName,
+  DeleteAction,
+} from "./types.ts";
+export { toProperty } from "./types.ts";

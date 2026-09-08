@@ -8,7 +8,10 @@ import {
   resolveRetryPolicy,
 } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, Message } from "@deepseek-ai/dsh-llm";
-import type { ResolvedModelProfile, ResolvedProviderProfile } from "@morlay/dsh-llm-openai-compatible";
+import type {
+  ResolvedModelProfile,
+  ResolvedProviderProfile,
+} from "@morlay/dsh-llm-openai-compatible";
 import { resolveReasoningWire, serializeCallOptions } from "@morlay/dsh-llm-openai-compatible/wire";
 
 function userMessage(text: string): Message {

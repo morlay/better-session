@@ -34,38 +34,33 @@ packages/session-rdb/
 
 **核心不变量：写路径零转换（忠实存储原始事件），读取集中转换（有据可查）。**
 
-- `t_session_events.f_sequence` 是**稠密持久化 seq**：瞬时事件
-  （`assistant/chunk` 与 `ignorable` 事件）**不入库**，幸存事件按持久化计数
-  压缩重编号，**连续递增、无空洞**。
-- `t_session_events.f_original_seq` 记录**上游 seq**（事件产生时的 seq，含
-  瞬时事件计数）——读取时构建 `f_original_seq → f_sequence` 映射，把
-  `shadowedRange` / `shadowedSeqs` / replace range 从上游坐标重映射到稠密
-  坐标（映射是存储事实，无启发式）。
-- `t_events` 是**全局事件实体**，`f_data` 存**完整原始 data**（含
-  `turn`/`step`、`shadowedRange` / `shadowedSeqs` 原始坐标）——忠实存储，
-  读取时按需 drop 或重映射。不含任何 session 专属信息——一个事件行可被多个
-  会话的桥接行引用（fork 派生会话复用父会话事件行，不复制）。
-- session 专属信息（稠密 seq、上游 seq、surface 元数据 `surfaceOp`）全部在
+- `t_session_events.f_sequence` 是**稠密持久化 seq**：事件原样落库（与上游
+  JSONL 一致，无过滤无重编号），**连续递增、无空洞**。
+- `t_events` 是**全局事件实体**，`f_data` 存**完整事件**（type/seq/time/data/
+  ignorable 信封，与 JSONL 每行同构）——忠实存储，读回时整体解析。不含任何
+  session 专属信息——一个事件行可被多个会话的桥接行引用（fork 派生会话复用
+  父会话事件行，不复制）。
+- session 专属信息（稠密 seq、surface 元数据 `surfaceOp`）全部在
   `t_session_events` 桥接行上；`sourceEventSeqs` 不落库，读取时按需重计算。
 
 ## 核心不变量（审计确认）
 
-1. **写路径零转换**：事件内容、surfaceOp、shadowedRange / shadowedSeqs 原样
-   落库；坐标转换集中在读取路径（`f_original_seq` 映射是存储事实，无启发式）。
-2. **上游 cursor ↔ 稠密 head**：首次 append 同起点（0）；load / adopt 重建
-   seed 后上游 seq 与稠密 seq **恒等**（新 append 部分）——写读对齐的关键
-   不变量（见 [write-path.md](write-path.md) / [read-path.md](read-path.md)）。
-3. **fork 坐标自洽**：fork 前缀经 `inspect` 读取视图（replace range 已重映射
-   到父稠密坐标），重编号后子会话坐标与父稠密坐标数值相同——无需额外坐标
-   重映射；子会话 `f_original_seq` 是**子会话自己的上游空间**（不复制父值，
-   避免两段空间重叠）（见 [branch.md](branch.md)）。
+1. **写路径零转换**：事件内容、surfaceOp 原样落库；写路径 v2 校验
+   （`validateStoredEvents`）只拒绝未知类型（非 ignorable）与非法消息形状，
+   不做坐标转换。
+2. **上游 seq 与稠密 seq 恒等**：原样存储下事件 seq 即稠密 seq，写读天然
+   对齐——无需坐标映射（见 [write-path.md](write-path.md) /
+   [read-path.md](read-path.md)）。
+3. **fork 坐标自洽**：fork 前缀经 `readLog` 读取视图（replace range 已是稠密
+   坐标），重编号后子会话坐标与父稠密坐标数值相同——无需额外坐标重映射；
+   子会话桥接行 `f_sequence` 是**子会话自己的上游空间**（不复制父值，避免
+   两段空间重叠）（见 [branch.md](branch.md)）。
 4. **rewind 保留区 range 完整性**：replace range 引用更早事件 ⇒ 截断尾部
    不破坏保留区 range（见 [branch.md](branch.md)）。
-5. **合成 closers 内存合成**：崩溃尾部修复不落库，不违反忠实存储（见
-   [read-path.md](read-path.md)）。
-6. **SCHEMA_VERSION 门禁**：破坏性表结构变更必须 bump；表结构级升级走
-   一次性迁移脚本，同版本内数据格式差异（含 surface 语义损坏）在导出时
-   修复（导出即修复，见 [schema.md](schema.md) / [legacy-clean.md](legacy-clean.md)）。
+5. **SCHEMA_VERSION 门禁**：破坏性表结构变更必须 bump；表结构级升级走
+   drizzle-kit 生成的迁移（`drizzle/` 目录，运行时 drizzle `migrate()` 执行），
+   同版本内数据格式差异（含 surface 语义损坏）在导出时修复（导出即修复，
+   见 [schema.md](schema.md) / [legacy-clean.md](legacy-clean.md)）。
 
 ## 文档导航
 

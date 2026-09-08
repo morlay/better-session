@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
-import type { PgAsyncDatabase, PgAsyncTransaction, PgQueryResultHKT } from "drizzle-orm/pg-core";
+import { readdirSync } from "node:fs";
+import { and, eq, gte, sql } from "drizzle-orm";
+import type { PgAsyncDatabase, PgAsyncTransaction } from "drizzle-orm/pg-core";
+import type { NodePgDatabase, NodePgQueryResultHKT } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 import type { SessionId } from "@deepseek-ai/dsh-session";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import {
@@ -10,10 +13,12 @@ import {
   type EventRow,
   type SessionRow,
 } from "./backend.ts";
-import { SCHEMA_VERSION, SESSION_PERSISTENCE_SQLITE_APPLICATION_ID } from "./schema.ts";
-import { createTablesSql, toPostgresSchema } from "./adapters/index.ts";
+import { toPostgresSchema } from "./adapters/index.ts";
 import { postgresTableDefs } from "./entities/index.ts";
 import { sessionConflictRow, sessionInsertRow } from "./log.ts";
+
+/** drizzle-kit 生成的迁移目录（随包根 drizzle/ 发布；src/dist 形态经相对 URL 统一解析）。 */
+const postgresMigrationsDir = new URL("../drizzle/postgres/", import.meta.url).pathname;
 
 export interface PostgresBackendOptions {
   identityBase: string;
@@ -23,60 +28,36 @@ export interface PostgresBackendOptions {
   close: () => Promise<void>;
 }
 
-export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> implements Backend {
+export class PostgresBackend implements Backend {
   readonly kind = "postgres" as const;
   storeIdentity!: string;
 
   private readonly tables: Record<string, any>;
 
   constructor(
-    private readonly db: PgAsyncDatabase<THKT>,
+    private readonly db: NodePgDatabase,
     private readonly options: PostgresBackendOptions,
   ) {
     this.tables = toPostgresSchema(postgresTableDefs, this.options.schema ?? "public");
   }
 
   async open(): Promise<void> {
+    const schema = this.options.schema ?? "public";
+    // drizzle-kit 迁移：v2 baseline 由旧版本建表（首次打开时标记为已应用），
+    // 本版本只执行 v3 diff（删 f_original_seq）。
+    const qualifiedMeta = schema === "public" ? "t_schema_meta" : `"${schema}".t_schema_meta`;
+    const probe = (await this.db.execute(
+      sql`SELECT to_regclass(${qualifiedMeta}) IS NOT NULL AS exists`,
+    )) as unknown as { rows: { exists: boolean }[] };
+    const metaExists = probe.rows[0]?.exists === true;
+    if (metaExists) {
+      const version = await this.readMeta(this.db, "schema_version");
+      if (version === "2") {
+        await this.baselineV2();
+      }
+    }
+    await migrate(this.db, { migrationsFolder: postgresMigrationsDir });
     const storeId = await this.db.transaction(async (tx) => {
-      const schema = this.options.schema ?? "public";
-      // 探测在建表之前：t_schema_meta 存在与否区分全新库与已有库。
-      // `to_regclass` 是数据库元数据查询，drizzle 无对应 API；schema 限定
-      // 显式引用（不依赖 search_path）。
-      const qualifiedMeta = schema === "public" ? "t_schema_meta" : `"${schema}".t_schema_meta`;
-      const probe = (await tx.execute(
-        sql`SELECT to_regclass(${qualifiedMeta}) IS NOT NULL AS exists`,
-      )) as unknown as { rows: { exists: boolean }[] };
-      const metaExists = probe.rows[0]?.exists === true;
-      // DDL 一次一条（PG 的 extended query protocol 拒绝多语句字符串），
-      // 逐条执行保持初始化原子。
-      for (const statement of createTablesSql("postgres", postgresTableDefs, schema)) {
-        await tx.execute(sql.raw(statement));
-      }
-      if (!metaExists) {
-        await tx
-          .insert(this.tables["t_schema_meta"])
-          .values([
-            { fKey: "schema_version", fValue: String(SCHEMA_VERSION) },
-            { fKey: "application_id", fValue: String(SESSION_PERSISTENCE_SQLITE_APPLICATION_ID) },
-          ])
-          .execute();
-      }
-      // 校验：缺版本行 = 有对象但未版本化 → 拒绝，不迁移。
-      const version = await this.readMeta(tx, "schema_version");
-      const applicationId = await this.readMeta(tx, "application_id");
-      if (version === undefined || applicationId === undefined) {
-        throw new Error("session database has an unversioned schema or application identity");
-      }
-      if (Number(version) !== SCHEMA_VERSION) {
-        throw new Error(
-          `session database has schema version ${version}, incompatible with this build (${SCHEMA_VERSION})`,
-        );
-      }
-      if (Number(applicationId) !== SESSION_PERSISTENCE_SQLITE_APPLICATION_ID) {
-        throw new Error(
-          `session database has application id ${applicationId}, expected ${SESSION_PERSISTENCE_SQLITE_APPLICATION_ID}`,
-        );
-      }
       await tx
         .insert(this.tables["t_persistence_state"])
         .values({ fSingleton: 1, fStoreId: randomUUID() })
@@ -87,13 +68,34 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
         .from(this.tables["t_persistence_state"])
         .where(eq(this.tables["t_persistence_state"].fSingleton, 1))
         .execute();
-      const storeId = store[0]?.fStoreId;
-      if (storeId === undefined || storeId.length === 0) {
+      const id = store[0]?.fStoreId;
+      if (id === undefined || id.length === 0) {
         throw new Error("session database has no valid store identity");
       }
-      return storeId;
+      return id;
     });
     this.storeIdentity = `${this.options.identityBase}:store:${storeId}`;
+  }
+
+  /** 标记 v2 baseline 已应用（迁移表 v1 结构：id/hash/created_at/name/applied_at）。 */
+  private async baselineV2(): Promise<void> {
+    const dir = readdirSync(postgresMigrationsDir).find((name) => name.endsWith("_v2_initial"));
+    if (dir === undefined) throw new Error("missing v2 baseline migration in drizzle/postgres");
+    await this.db.execute(sql`
+      CREATE SCHEMA IF NOT EXISTS drizzle
+    `);
+    await this.db.execute(sql`
+      CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+        id SERIAL PRIMARY KEY,
+        hash text NOT NULL,
+        created_at bigint,
+        name text,
+        applied_at timestamp with time zone DEFAULT now()
+      )
+    `);
+    await this.db.execute(
+      sql`INSERT INTO drizzle.__drizzle_migrations (hash, created_at, name) VALUES ('baseline', 0, ${dir})`,
+    );
   }
 
   async close(): Promise<void> {
@@ -108,17 +110,6 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
         .where(eq(this.tables["t_sessions"].fSessionId, id))
         .execute()
     )[0] as SessionRow | undefined;
-  }
-
-  async getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number }>> {
-    return this.db
-      .select({
-        fSequence: this.tables["t_session_events"].fSequence,
-        fOriginalSeq: this.tables["t_session_events"].fOriginalSeq,
-      })
-      .from(this.tables["t_session_events"])
-      .where(eq(this.tables["t_session_events"].fSessionId, id))
-      .execute();
   }
 
   async getEventRows(id: SessionId, fromSequence?: number): Promise<EventRow[]> {
@@ -146,7 +137,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     return this.db.transaction(async (tx) => fn(this.txFor(tx)));
   }
 
-  private txFor(tx: PgAsyncTransaction<THKT>): BackendTx {
+  private txFor(tx: PgAsyncTransaction<NodePgQueryResultHKT>): BackendTx {
     return {
       upsertSession: (storage, incarnation) => this.upsertSession(tx, storage, incarnation),
       getHead: (id) => this.getHead(tx, id),
@@ -159,13 +150,15 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
       bumpRevision: (id) => this.bumpRevision(tx, id),
       deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(tx, id, fromSequence),
       getPrevBridge: (id, sequence) => this.getPrevBridge(tx, id, sequence),
-      getLastBridge: (id) => this.getLastBridge(tx, id),
     };
   }
 
   // --- meta helpers ---
 
-  private async readMeta(exec: PgAsyncDatabase<THKT>, key: string): Promise<string | undefined> {
+  private async readMeta(
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
+    key: string,
+  ): Promise<string | undefined> {
     const rows = await exec
       .select({ fValue: this.tables["t_schema_meta"].fValue })
       .from(this.tables["t_schema_meta"])
@@ -177,7 +170,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   // --- row primitives (transaction-internal) ---
 
   private async upsertSession(
-    exec: PgAsyncDatabase<THKT>,
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     storage: SessionStorageMetadata,
     incarnation: string,
   ): Promise<void> {
@@ -192,7 +185,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   }
 
   private async getHead(
-    exec: PgAsyncDatabase<THKT>,
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     id: SessionId,
   ): Promise<Pick<SessionRow, "fHeadEventId" | "fHeadSequence">> {
     const head = (
@@ -210,7 +203,10 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     return head;
   }
 
-  private async getSeedLength(exec: PgAsyncDatabase<THKT>, id: SessionId): Promise<number | null> {
+  private async getSeedLength(
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
+    id: SessionId,
+  ): Promise<number | null> {
     const row = (
       await exec
         .select({ fSeedLength: this.tables["t_sessions"].fSeedLength })
@@ -224,7 +220,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   }
 
   private async updateSeedLength(
-    exec: PgAsyncDatabase<THKT>,
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     id: SessionId,
     seedLength: number,
   ): Promise<void> {
@@ -237,7 +233,10 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
 
   private static readonly INSERT_BATCH_ROWS = 1000;
 
-  private async insertEvents(exec: PgAsyncDatabase<THKT>, events: EventInsert[]): Promise<void> {
+  private async insertEvents(
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
+    events: EventInsert[],
+  ): Promise<void> {
     if (events.length === 0) return;
     for (let i = 0; i < events.length; i += PostgresBackend.INSERT_BATCH_ROWS) {
       await exec
@@ -250,12 +249,11 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   }
 
   private async insertBridges(
-    exec: PgAsyncDatabase<THKT>,
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     rows: Array<{
       fSessionId: SessionId;
       fEventId: string;
       fSequence: number;
-      fOriginalSeq: number;
       fSurfaceOp: string | null;
     }>,
   ): Promise<void> {
@@ -269,7 +267,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   }
 
   private async updateHead(
-    exec: PgAsyncDatabase<THKT>,
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     id: SessionId,
     headEventId: string,
     headSequence: number,
@@ -281,7 +279,10 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
       .execute();
   }
 
-  private async bumpRevision(exec: PgAsyncDatabase<THKT>, id: SessionId): Promise<void> {
+  private async bumpRevision(
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
+    id: SessionId,
+  ): Promise<void> {
     await exec
       .update(this.tables["t_sessions"])
       .set({ fRevision: sql`${this.tables["t_sessions"].fRevision} + 1` })
@@ -290,7 +291,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   }
 
   private async deleteBridgeTail(
-    exec: PgAsyncDatabase<THKT>,
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     id: SessionId,
     fromSequence: number,
   ): Promise<void> {
@@ -306,7 +307,7 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   }
 
   private async getPrevBridge(
-    exec: PgAsyncDatabase<THKT>,
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     id: SessionId,
     sequence: number,
   ): Promise<{ fEventId: string; fSequence: number } | undefined> {
@@ -327,30 +328,11 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     )[0] as { fEventId: string; fSequence: number } | undefined;
   }
 
-  private async getLastBridge(
-    exec: PgAsyncDatabase<THKT>,
-    id: SessionId,
-  ): Promise<{ fEventId: string; fSequence: number } | undefined> {
-    return (
-      await exec
-        .select({
-          fEventId: this.tables["t_session_events"].fEventId,
-          fSequence: this.tables["t_session_events"].fSequence,
-        })
-        .from(this.tables["t_session_events"])
-        .where(eq(this.tables["t_session_events"].fSessionId, id))
-        .orderBy(desc(this.tables["t_session_events"].fSequence))
-        .limit(1)
-        .execute()
-    )[0] as { fEventId: string; fSequence: number } | undefined;
-  }
-
-  private eventRows(exec: PgAsyncDatabase<THKT>) {
+  private eventRows(exec: PgAsyncDatabase<NodePgQueryResultHKT>) {
     return exec
       .select({
         fEventId: this.tables["t_session_events"].fEventId,
         fSequence: this.tables["t_session_events"].fSequence,
-        fOriginalSeq: this.tables["t_session_events"].fOriginalSeq,
         fType: this.tables["t_events"].fType,
         fKind: this.tables["t_events"].fKind,
         fRole: this.tables["t_events"].fRole,

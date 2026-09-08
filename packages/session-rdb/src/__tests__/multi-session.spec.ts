@@ -9,6 +9,11 @@ import { createMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { EmptySettings } from "@morlay/session-rdb/testing";
 import SessionPersistenceRdb from "@morlay/session-rdb";
 
+/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
+function rdb(ctx: import("@deepseek-ai/cordis").Context): SessionPersistenceRdb {
+  return ctx.sessionPersistence as SessionPersistenceRdb;
+}
+
 const dirs: string[] = [];
 afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true, maxRetries: 3 });
@@ -40,11 +45,6 @@ function appendTurn(s: Session, round: number): void {
     { surfaceOp: "append" },
   );
   s.append("step/start", { turn: 1, step: 1 });
-  s.append("assistant/chunk", {
-    turn: 1,
-    step: 1,
-    chunk: { type: "text-delta", index: 0, text: "x" },
-  });
   s.append(
     "assistant/message",
     {
@@ -55,6 +55,7 @@ function appendTurn(s: Session, round: number): void {
         content: [],
         source: { kind: "model", provider: "mock", model: "mock" },
       }),
+      stream: [],
     },
     { surfaceOp: "append" },
   );
@@ -78,11 +79,10 @@ describe("multi-session repro (cold-path verification)", () => {
 
     const b2 = await mount(path);
     for (let i = 0; i < N; i++) {
-      const loaded = await b2.ctx.sessionPersistence.load(SessionId(`live-${i}`));
+      const loaded = await rdb(b2.ctx).load(SessionId(`live-${i}`));
       const seqs = loaded.events.map((e) => e.seq);
       expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, k) => k));
-      expect(seqs.length).toBe(12); // 每轮 6 个持久化事件 × 2
-      expect(loaded.events.every((e) => e.type !== "assistant/chunk")).toBe(true);
+      expect(seqs.length).toBe(12); // 每轮 6 个事件 × 2
     }
     await b2.dispose();
   });
@@ -100,8 +100,8 @@ describe("multi-session repro (cold-path verification)", () => {
     await Promise.all([b1.dispose(), b2.dispose()]);
 
     const b3 = await mount(path);
-    const l1 = await b3.ctx.sessionPersistence.load(SessionId("inst-1"));
-    const l2 = await b3.ctx.sessionPersistence.load(SessionId("inst-2"));
+    const l1 = await rdb(b3.ctx).load(SessionId("inst-1"));
+    const l2 = await rdb(b3.ctx).load(SessionId("inst-2"));
     expect(l1.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
     expect(l2.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
     await b3.dispose();
@@ -120,7 +120,7 @@ describe("multi-session repro (cold-path verification)", () => {
 
     const b2 = await mount(path);
     for (let i = 0; i < N; i++) {
-      const loaded = await b2.ctx.sessionPersistence.load(SessionId(`p-${i}`));
+      const loaded = await rdb(b2.ctx).load(SessionId(`p-${i}`));
       expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
     }
     await b2.dispose();
@@ -134,12 +134,12 @@ describe("multi-session repro (cold-path verification)", () => {
     for (let k = 0; k < 4; k++) {
       appendTurn(s, k);
       await b.ctx.sessions.flush(s);
-      await b.ctx.sessionPersistence.load(SessionId("race"));
+      await rdb(b.ctx).load(SessionId("race"));
     }
     await b.dispose();
 
     const b2 = await mount(path);
-    const final = await b2.ctx.sessionPersistence.load(SessionId("race"));
+    const final = await rdb(b2.ctx).load(SessionId("race"));
     expect(final.events.map((e) => e.seq)).toEqual(
       Array.from({ length: final.events.length }, (_, k) => k),
     );
@@ -167,13 +167,12 @@ describe("multi-session repro (cold-path verification)", () => {
 
     const b2 = await mount(path);
     for (let i = 0; i < N; i++) {
-      const loaded = await b2.ctx.sessionPersistence.load(SessionId(`child-${i}`));
+      const loaded = await rdb(b2.ctx).load(SessionId(`child-${i}`));
       const seqs = loaded.events.map((e) => e.seq);
-      // child log = parent 前缀（delta 过滤后 6）+ session/end-seed（1）+
-      // 自身 turn（delta 过滤后 6）= 13：稠密连续、无 chunk、无跨 session 拼接。
+      // child log = parent 前缀（6）+ session/end-seed（1）+ 自身 turn（6）= 13：
+      // 稠密连续、无跨 session 拼接。
       expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, k) => k));
       expect(seqs.length).toBe(13);
-      expect(loaded.events.every((e) => e.type !== "assistant/chunk")).toBe(true);
     }
     await b2.dispose();
   });
@@ -202,10 +201,10 @@ describe("multi-session repro (cold-path verification)", () => {
     await b.dispose();
 
     const b2 = await mount(path);
-    const parentLoaded = await b2.ctx.sessionPersistence.load(SessionId("parent-2"));
+    const parentLoaded = await rdb(b2.ctx).load(SessionId("parent-2"));
     expect(parentLoaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     for (let i = 0; i < N; i++) {
-      const loaded = await b2.ctx.sessionPersistence.load(SessionId(`sib-${i}`));
+      const loaded = await rdb(b2.ctx).load(SessionId(`sib-${i}`));
       expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     }
     await b2.dispose();

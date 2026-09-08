@@ -19,6 +19,7 @@
   "files": [
     "dist",
     "src",
+    "drizzle",
     "cordis.patch.yml",
     "!**/__tests__"
   ],
@@ -47,7 +48,8 @@
   },
   "scripts": {
     "build": "pnpm exec tsdown",
-    "prepublishOnly": "pnpm run build"
+    "prepublishOnly": "pnpm run build",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts && drizzle-kit generate --config drizzle.pg.config.ts"
   },
   "dependencies": {
     "@morlay/session-branch": "workspace:^",
@@ -58,7 +60,8 @@
   "devDependencies": {
     "@deepseek-ai/dsh-session-projection": "workspace:^",
     "@deepseek-ai/dsh-token-meter": "workspace:^",
-    "@types/pg": "^8.23.1"
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "1.0.0-rc.5-ab785fc"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
@@ -66,6 +69,8 @@
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-scope": "workspace:^",
     "@deepseek-ai/dsh-session": "workspace:^",
+    "@deepseek-ai/dsh-session-format": "workspace:^",
+    "@deepseek-ai/dsh-session-format-catalog": "workspace:^",
     "@deepseek-ai/dsh-session-persistence": "workspace:^",
     "@deepseek-ai/dsh-settings": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^"

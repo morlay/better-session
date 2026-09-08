@@ -16,6 +16,6 @@
     "verbatimModuleSyntax": false,
     "isolatedModules": false,
     "noUncheckedSideEffectImports": true,
-    "skipLibCheck": true,
-  },
+    "skipLibCheck": true
+  }
 }

@@ -1,8 +1,8 @@
 {
   "name": "devkit",
   "version": "0.1.0",
-  "type": "module",
   "private": true,
+  "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./tsconfig.json": "./tsconfig.json"

@@ -8,7 +8,7 @@ import { chmod, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { SessionStore, SessionId, SessionLogOffset, SessionSeq } from "@deepseek-ai/dsh-session";
+import { SessionStore, SessionId, SessionSeq } from "@deepseek-ai/dsh-session";
 import { foldSurface } from "@deepseek-ai/dsh-session/surface";
 import type {
   Session,
@@ -16,18 +16,11 @@ import type {
   SurfaceEvent,
   SurfaceEventType,
 } from "@deepseek-ai/dsh-session";
-import SessionPersistenceSqlite, {
-  SCHEMA_VERSION,
-  EPHEMERAL_EVENT_TYPES,
-} from "@morlay/session-rdb";
+import SessionPersistenceSqlite, { SCHEMA_VERSION } from "@morlay/session-rdb";
 import { parseJsonlArtifact } from "@morlay/session-rdb/artifact";
 import {
-  buildSeqMap,
   findSurfaceRepairs,
   recomputeReplaceProvenance,
-  remapShadowedRange,
-  remapShadowedSeqs,
-  remapSurfaceOp,
   rowToEvent,
   rowToMeta,
   scanRows,
@@ -35,8 +28,6 @@ import {
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   eventDimensions,
-  isEphemeralType,
-  isPersistedEvent,
   SESSION_PERSISTENCE_SQLITE_APPLICATION_ID,
   type EventRow,
   type SessionRow,
@@ -83,9 +74,14 @@ function insertEventRow(
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(eventId, parentId, kind, "", "", "", "", "json", JSON.stringify(data), seq + 1);
   db.prepare(
-    "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_original_seq, f_surface_op) VALUES (?, ?, ?, ?, ?)",
-  ).run(sessionId, eventId, seq, seq, null);
+    "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_surface_op) VALUES (?, ?, ?, ?)",
+  ).run(sessionId, eventId, seq, null);
   return eventId;
+}
+
+/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
+function rdb(ctx: Context): SessionPersistenceSqlite {
+  return ctx.sessionPersistence as SessionPersistenceSqlite;
 }
 
 async function backend(path = ":memory:"): Promise<{ ctx: Context; dispose: () => Promise<void> }> {
@@ -103,7 +99,7 @@ runPersistenceContract("sqlite", async () => {
   await ctx.plugin(SessionStore);
   const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path: ":memory:" });
   return {
-    persistence: ctx.sessionPersistence,
+    persistence: rdb(ctx),
     dispose: async () => {
       await fiber.dispose();
     },
@@ -150,8 +146,8 @@ runCoordinatorContract("sqlite", async (): Promise<CoordinatorFixture> => {
         99,
       );
       db.prepare(
-        "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_original_seq, f_surface_op) VALUES (?, ?, ?, ?, ?)",
-      ).run(id, eventId, next, next, null);
+        "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_surface_op) VALUES (?, ?, ?, ?)",
+      ).run(id, eventId, next, null);
       db.close();
     },
     cleanup: async () => {
@@ -196,6 +192,7 @@ describe("eventDimensions", () => {
             content: [],
             source: { kind: "model", provider: "mock", model: "mock" },
           }),
+          stream: [] as const,
         },
       }).role,
     ).toBe("assistant");
@@ -217,6 +214,7 @@ describe("eventDimensions", () => {
           ],
           source: { kind: "model", provider: "mock", model: "mock" },
         }),
+        stream: [] as const,
       },
     });
     expect(dims.kind).toBe("thinking");
@@ -272,41 +270,6 @@ describe("eventDimensions", () => {
   });
 });
 
-describe("isEphemeralType / EPHEMERAL_EVENT_TYPES", () => {
-  it("treats assistant/chunk as ephemeral and everything else as persisted", () => {
-    expect(EPHEMERAL_EVENT_TYPES).toEqual(["assistant/chunk"]);
-    expect(isEphemeralType("assistant/chunk")).toBe(true);
-    expect(isEphemeralType("assistant/message")).toBe(false);
-    expect(isEphemeralType("turn/start")).toBe(false);
-  });
-});
-
-describe("isPersistedEvent", () => {
-  // `ignorable` 是下游信封扩展（上游 SessionEvent 无此字段），测试里
-  // 结构化构造：用 `Partial<SessionEvent & { ignorable?: unknown }>` 表达。
-  const ev = (extra: Partial<SessionEvent & { ignorable?: unknown }> = {}): SessionEvent =>
-    ({ type: "plugin/x", seq: SessionSeq(0), time: 1, data: null, ...extra }) as SessionEvent;
-
-  it("drops ephemeral types and ignorable events, keeps everything else", () => {
-    expect(isPersistedEvent(ev({ type: "assistant/chunk" }))).toBe(false);
-    expect(isPersistedEvent(ev({ ignorable: true }))).toBe(false);
-    // An ephemeral type marked ignorable is dropped either way.
-    expect(isPersistedEvent(ev({ type: "assistant/chunk", ignorable: true }))).toBe(false);
-    expect(isPersistedEvent(ev())).toBe(true);
-    // A non-`true` ignorable value is a dirty envelope (only `true` is legal);
-    // treat it as a required event: persist it, and let the read path's
-    // assertEventsSupported refuse the unknown type.
-    const dirty = {
-      type: "plugin/x",
-      seq: SessionSeq(0),
-      time: 1,
-      data: null,
-      ignorable: false,
-    } as unknown as SessionEvent;
-    expect(isPersistedEvent(dirty)).toBe(true);
-  });
-});
-
 describe("scanRows", () => {
   // scanRows works off EventRows (data is a JSON string column); build them from
   // SessionEvents so the unit tests read in terms of the event vocabulary. With
@@ -317,7 +280,6 @@ describe("scanRows", () => {
       return {
         fEventId: `evt-${e.seq}`,
         fSequence: e.seq,
-        fOriginalSeq: e.seq,
         fType: e.type,
         fKind: "",
         fRole: "",
@@ -394,7 +356,6 @@ describe("scanRows", () => {
       {
         fEventId: "evt-0",
         fSequence: 0,
-        fOriginalSeq: 0,
         fType: "turn/start",
         fKind: "",
         fRole: "",
@@ -407,7 +368,6 @@ describe("scanRows", () => {
       {
         fEventId: "evt-1",
         fSequence: 1,
-        fOriginalSeq: 1,
         fType: "turn/end",
         fKind: "",
         fRole: "",
@@ -427,7 +387,6 @@ describe("scanRows", () => {
       {
         fEventId: "evt-6",
         fSequence: 6,
-        fOriginalSeq: 6,
         fType: "turn/start",
         fKind: "",
         fRole: "",
@@ -470,7 +429,6 @@ describe("rowToEvent", () => {
     const row: EventRow = {
       fEventId: "evt-0",
       fSequence: 0,
-      fOriginalSeq: 0,
       fType: "assistant/message",
       fKind: "message",
       fRole: "assistant",
@@ -480,151 +438,17 @@ describe("rowToEvent", () => {
       fData: JSON.stringify({ turn: 1, step: 1, content: [] }),
       fSurfaceOp: JSON.stringify("append"),
     };
-    const event = rowToEvent(row, new Map<number, number>([[0, 0]]));
+    const event = rowToEvent(row);
     expect(event.seq).toBe(0);
     expect((event as SurfaceEvent).surfaceOp).toBe("append");
     // sourceEventSeqs 不落库：append 事件不带 provenance。
     expect((event as SurfaceEvent).sourceEventSeqs).toBeUndefined();
   });
 
-  it("remaps a positional replace surfaceOp through the upstream→persisted seq map", () => {
-    // The dense persisted seq must be used for the replacement range, or the
-    // surface fold rejects the log ("start seq N not found in surface").
-    const row: EventRow = {
-      fEventId: "evt-30",
-      fSequence: 30,
-      fOriginalSeq: 30,
-      fType: "tool/result",
-      fKind: "tool",
-      fRole: "tool",
-      fName: "",
-      fActionId: "c",
-      fCreatedAt: 1,
-      fData: JSON.stringify({
-        turn: 1,
-        step: 1,
-        message: { source: { kind: "tool", callId: "c" }, content: [] },
-      }),
-      fSurfaceOp: JSON.stringify({ op: "replace", start: 2, end: 2 }),
-    };
-    const map = new Map<number, number>([
-      [2, 5],
-      [30, 9],
-    ]);
-    const event = rowToEvent(row, map);
-    expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 5, end: 5 });
-  });
-
-  it("remaps a compaction/summary shadowedRange through the upstream→persisted seq map", () => {
-    // The metering event's shadow-price claim names the replaced range by
-    // UPSTREAM seq; it must follow the replace's surfaceOp into dense space or
-    // the token-meter fold rejects the log ("token surface: replace ... has no
-    // adjacent shadow price").
-    const row: EventRow = {
-      fEventId: "evt-4056",
-      fSequence: 4056,
-      fOriginalSeq: 400_000,
-      fType: "compaction/summary",
-      fKind: "compaction",
-      fRole: "",
-      fName: "",
-      fActionId: "",
-      fCreatedAt: 1,
-      fData: JSON.stringify({
-        turn: 1,
-        summary: "…",
-        shadowedRange: { start: 15, end: 398_881 },
-        shadowedTokenCount: 12_345,
-      }),
-      fSurfaceOp: null,
-    };
-    const map = new Map<number, number>([
-      [15, 15],
-      [398_881, 4048],
-      [400_000, 4056],
-    ]);
-    const event = rowToEvent(row, map);
-    expect(event.data).toMatchObject({
-      shadowedRange: { start: 15, end: 4048 },
-      shadowedTokenCount: 12_345,
-    });
-  });
-
-  it("remaps a compaction/prune shadowedRange and leaves other data untouched", () => {
-    const row: EventRow = {
-      fEventId: "evt-10",
-      fSequence: 10,
-      fOriginalSeq: 10,
-      fType: "compaction/prune",
-      fKind: "compaction",
-      fRole: "",
-      fName: "",
-      fActionId: "",
-      fCreatedAt: 1,
-      fData: JSON.stringify({
-        turn: 2,
-        shadowedRange: { start: 7, end: 9 },
-        shadowedTokenCount: 42,
-      }),
-      fSurfaceOp: null,
-    };
-    const event = rowToEvent(
-      row,
-      new Map<number, number>([
-        [7, 1],
-        [9, 2],
-        [10, 3],
-      ]),
-    );
-    expect(event.data).toMatchObject({
-      turn: 2,
-      shadowedRange: { start: 1, end: 2 },
-      shadowedTokenCount: 42,
-    });
-  });
-
-  it("remaps a compaction/summary shadowedSeqs through the upstream→persisted seq map", () => {
-    // shadowedSeqs 是权威的被遮蔽节点列表（range 只是首尾边界对，压缩竞态下
-    // 可能漏掉并发落地的节点）——replace 的 provenance 重计算依赖它，必须与
-    // range 同空间重映射到稠密坐标。
-    const row: EventRow = {
-      fEventId: "evt-4056",
-      fSequence: 4056,
-      fOriginalSeq: 400_000,
-      fType: "compaction/summary",
-      fKind: "compaction",
-      fRole: "",
-      fName: "",
-      fActionId: "",
-      fCreatedAt: 1,
-      fData: JSON.stringify({
-        turn: 1,
-        summary: "…",
-        shadowedRange: { start: 15, end: 398_881 },
-        shadowedSeqs: [15, 77_318, 398_881],
-        shadowedTokenCount: 12_345,
-      }),
-      fSurfaceOp: null,
-    };
-    const map = new Map<number, number>([
-      [15, 15],
-      [77_318, 659],
-      [398_881, 4048],
-      [400_000, 4056],
-    ]);
-    const event = rowToEvent(row, map);
-    expect(event.data).toMatchObject({
-      shadowedRange: { start: 15, end: 4048 },
-      shadowedSeqs: [15, 659, 4048],
-      shadowedTokenCount: 12_345,
-    });
-  });
-
   it("keeps a compact shadowedRange verbatim with an identity map (no delta filtering)", () => {
     const row: EventRow = {
       fEventId: "evt-3",
       fSequence: 3,
-      fOriginalSeq: 3,
       fType: "compaction/summary",
       fKind: "compaction",
       fRole: "",
@@ -638,70 +462,10 @@ describe("rowToEvent", () => {
       }),
       fSurfaceOp: null,
     };
-    expect(rowToEvent(row, new Map<number, number>([[3, 3]])).data).toMatchObject({
+    expect(rowToEvent(row).data).toMatchObject({
       shadowedRange: { start: 1, end: 2 },
       shadowedTokenCount: 9,
     });
-  });
-
-  it("replays a compact seam so the shadow-price claim matches the replace range", () => {
-    // Regression for the reported history-load failure:
-    //   token surface: replace at seq 4057 over range 15-4048 has no adjacent
-    //   shadow price (armed claim covers 15-398881)
-    // The claim (compaction/summary data.shadowedRange, upstream seqs) must land
-    // on the SAME dense range as the immediately following replace's surfaceOp.
-    const map = new Map<number, number>([
-      [15, 15],
-      [398_881, 4048],
-      [4056, 4056],
-      [4057, 4057],
-    ]);
-    const metering = rowToEvent(
-      {
-        fEventId: "evt-4056",
-        fSequence: 4056,
-        fOriginalSeq: 4056,
-        fType: "compaction/summary",
-        fKind: "compaction",
-        fRole: "",
-        fName: "",
-        fActionId: "",
-        fCreatedAt: 1,
-        fData: JSON.stringify({
-          turn: 1,
-          shadowedRange: { start: 15, end: 398_881 },
-          shadowedTokenCount: 12_345,
-        }),
-        fSurfaceOp: null,
-      },
-      map,
-    );
-    const replacement = rowToEvent(
-      {
-        fEventId: "evt-4057",
-        fSequence: 4057,
-        fOriginalSeq: 4057,
-        fType: "assistant/message",
-        fKind: "message",
-        fRole: "assistant",
-        fName: "",
-        fActionId: "",
-        fCreatedAt: 2,
-        fData: JSON.stringify({ turn: 1, step: 1, message: { role: "assistant", content: [] } }),
-        fSurfaceOp: JSON.stringify({ op: "replace", start: 15, end: 398_881 }),
-      },
-      map,
-    );
-    const claim = (metering.data as unknown as { shadowedRange: { start: number; end: number } })
-      .shadowedRange;
-    // The token-meter fold compares claim.start/end with op.start/end for exact
-    // equality — an un-remapped claim (15-398881) is exactly the reported failure.
-    expect((replacement as SurfaceEvent).surfaceOp).toEqual({
-      op: "replace",
-      start: 15,
-      end: 4048,
-    });
-    expect(claim).toEqual({ start: 15, end: 4048 });
   });
 });
 
@@ -735,7 +499,7 @@ describe("findSurfaceRepairs", () => {
         message: messageId === undefined ? message : { ...message, id: messageId },
       },
       ...extra,
-    } as SessionEvent;
+    } as unknown as SessionEvent;
   }
 
   it("degrades an invalid tool/result replace to append (the reported load failure)", () => {
@@ -749,7 +513,7 @@ describe("findSurfaceRepairs", () => {
         time: 2,
         data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
       {
         type: "assistant/message",
@@ -763,9 +527,10 @@ describe("findSurfaceRepairs", () => {
             content: [{ type: "text", text: "hello" }],
             source: { kind: "model", provider: "mock", model: "mock" },
           }),
+          stream: [] as const,
         },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
       {
         type: "turn/end",
@@ -801,7 +566,7 @@ describe("findSurfaceRepairs", () => {
         time: 2,
         data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
       {
         type: "assistant/message",
@@ -817,9 +582,10 @@ describe("findSurfaceRepairs", () => {
             ],
             source: { kind: "model", provider: "mock", model: "mock" },
           }),
+          stream: [] as const,
         },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
       original,
       replacement,
@@ -838,7 +604,7 @@ describe("findSurfaceRepairs", () => {
         time: 1,
         data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "assistant/message",
         seq: SessionSeq(1),
@@ -851,10 +617,11 @@ describe("findSurfaceRepairs", () => {
             content: [{ type: "text", text: "hello" }],
             source: { kind: "model", provider: "mock", model: "mock" },
           }),
+          stream: [] as const,
         },
         // range 起点 9 不在当前 surface（只有 0、1）。
         surfaceOp: { op: "replace", start: 9, end: 1 },
-      } as SessionEvent,
+      } as unknown as SessionEvent,
     ];
     const repairs = findSurfaceRepairs(events);
     expect([...repairs.degradeToAppend]).toEqual([1]);
@@ -868,7 +635,7 @@ describe("findSurfaceRepairs", () => {
         time: 1,
         data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
         // 缺 surfaceOp（surface-eligible 事件必须携带）。
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "turn/end",
         seq: SessionSeq(1),
@@ -876,7 +643,7 @@ describe("findSurfaceRepairs", () => {
         data: { turn: 1, reason: { kind: "completed" } },
         // 非 surface-eligible 事件携带 surfaceOp。
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
     ];
     const repairs = findSurfaceRepairs(events);
     expect([...repairs.addAppendMarker]).toEqual([0]);
@@ -892,7 +659,7 @@ describe("findSurfaceRepairs", () => {
         time: 1,
         data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "assistant/message",
         seq: SessionSeq(1),
@@ -905,6 +672,7 @@ describe("findSurfaceRepairs", () => {
             content: [{ type: "text", text: "hello" }],
             source: { kind: "model", provider: "mock", model: "mock" },
           }),
+          stream: [] as const,
         },
         // 畸形 replace：start 是字符串。
         surfaceOp: { op: "replace", start: "1", end: 0 },
@@ -925,7 +693,7 @@ describe("recomputeReplaceProvenance", () => {
         time: 2,
         data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "turn/end",
         seq: SessionSeq(9),
@@ -938,7 +706,7 @@ describe("recomputeReplaceProvenance", () => {
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
         surfaceOp: { op: "replace", start: 7, end: 9 },
-      } as SessionEvent,
+      } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
     const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
@@ -959,7 +727,7 @@ describe("recomputeReplaceProvenance", () => {
         time: 1,
         data: { content: [{ type: "text", text: "old" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "assistant/message",
         seq: SessionSeq(11),
@@ -969,13 +737,14 @@ describe("recomputeReplaceProvenance", () => {
           step: 1,
           message: {
             id: "a",
+            stream: [] as const,
             role: "assistant",
             content: [{ type: "text", text: "old" }],
             source: { kind: "model", provider: "m", model: "m" },
           },
         },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "turn/end",
         seq: SessionSeq(12),
@@ -988,7 +757,7 @@ describe("recomputeReplaceProvenance", () => {
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
         surfaceOp: { op: "replace", start: 10, end: 12 },
-      } as SessionEvent,
+      } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
     const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
@@ -1008,7 +777,7 @@ describe("recomputeReplaceProvenance", () => {
         time: 1,
         data: { content: [{ type: "text", text: "a" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "assistant/message",
         seq: SessionSeq(2),
@@ -1018,13 +787,14 @@ describe("recomputeReplaceProvenance", () => {
           step: 1,
           message: {
             id: "a",
+            stream: [] as const,
             role: "assistant",
             content: [{ type: "text", text: "b" }],
             source: { kind: "model", provider: "m", model: "m" },
           },
         },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "compaction/summary",
         seq: SessionSeq(3),
@@ -1036,14 +806,14 @@ describe("recomputeReplaceProvenance", () => {
           shadowedSeqs: [1, 2],
           shadowedTokenCount: 9,
         },
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "user/message",
         seq: SessionSeq(4),
         time: 4,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
         surfaceOp: { op: "replace", start: 1, end: 2 },
-      } as SessionEvent,
+      } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
     const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
@@ -1060,21 +830,21 @@ describe("recomputeReplaceProvenance", () => {
         time: 1,
         data: { content: [{ type: "text", text: "a" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "user/message",
         seq: SessionSeq(659),
         time: 2,
         data: { content: [{ type: "text", text: "late" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "user/message",
         seq: SessionSeq(2),
         time: 3,
         data: { content: [{ type: "text", text: "b" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "compaction/summary",
         seq: SessionSeq(3),
@@ -1086,14 +856,14 @@ describe("recomputeReplaceProvenance", () => {
           shadowedSeqs: [1, 659, 2],
           shadowedTokenCount: 9,
         },
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "user/message",
         seq: SessionSeq(4),
         time: 5,
         data: { content: [{ type: "text", text: "checkpoint" }], source: { kind: "user" } },
         surfaceOp: { op: "replace", start: 1, end: 2 },
-      } as SessionEvent,
+      } as unknown as SessionEvent,
     ];
     recomputeReplaceProvenance(events);
     const checkpoint = events[4] as SessionEvent & { sourceEventSeqs?: number[] };
@@ -1110,7 +880,7 @@ describe("recomputeReplaceProvenance", () => {
         time: 1,
         data: { content: [{ type: "text", text: "a" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "assistant/message",
         seq: SessionSeq(2),
@@ -1120,13 +890,14 @@ describe("recomputeReplaceProvenance", () => {
           step: 1,
           message: {
             id: "a",
+            stream: [] as const,
             role: "assistant",
             content: [{ type: "text", text: "b" }],
             source: { kind: "model", provider: "m", model: "m" },
           },
         },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "turn/end",
         seq: SessionSeq(3),
@@ -1173,7 +944,7 @@ describe("recomputeReplaceProvenance", () => {
         time: 1,
         data: { content: [{ type: "text", text: "old" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "assistant/message",
         seq: SessionSeq(1),
@@ -1183,13 +954,14 @@ describe("recomputeReplaceProvenance", () => {
           step: 1,
           message: {
             id: "a1",
+            stream: [] as const,
             role: "assistant",
             content: [{ type: "text", text: "old" }],
             source: { kind: "model", provider: "m", model: "m" },
           },
         },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "assistant/message",
         seq: SessionSeq(2),
@@ -1199,13 +971,14 @@ describe("recomputeReplaceProvenance", () => {
           step: 2,
           message: {
             id: "a2",
+            stream: [] as const,
             role: "assistant",
             content: [{ type: "text", text: "straggler" }],
             source: { kind: "model", provider: "m", model: "m" },
           },
         },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "compaction/summary",
         seq: SessionSeq(3),
@@ -1234,7 +1007,7 @@ describe("recomputeReplaceProvenance", () => {
         time: 7,
         data: { content: [{ type: "text", text: "next" }], source: { kind: "user" } },
         surfaceOp: "append",
-      } as SessionEvent,
+      } as unknown as SessionEvent,
       {
         type: "compaction/summary",
         seq: SessionSeq(6),
@@ -1270,117 +1043,6 @@ describe("recomputeReplaceProvenance", () => {
   });
 });
 
-describe("remapSurfaceOp", () => {
-  it("leaves append untouched", () => {
-    expect(
-      remapSurfaceOp("append", () => {
-        throw new Error("append must not remap");
-      }),
-    ).toBe("append");
-  });
-
-  it("remaps both ends of a replace range", () => {
-    expect(
-      remapSurfaceOp(
-        { op: "replace", start: SessionSeq(2), end: SessionSeq(4) },
-        (seq) => seq * 10,
-      ),
-    ).toEqual({
-      op: "replace",
-      start: SessionSeq(20),
-      end: SessionSeq(40),
-    });
-  });
-});
-
-describe("remapShadowedRange", () => {
-  it("remaps both ends of the shadowed range", () => {
-    expect(remapShadowedRange({ start: 15, end: 398_881 }, (seq) => seq - 10)).toEqual({
-      start: 5,
-      end: 398_871,
-    });
-  });
-});
-
-describe("remapShadowedSeqs", () => {
-  it("remaps every shadowed seq through the upstream→persisted seq map", () => {
-    const map = new Map<number, number>([
-      [15, 5],
-      [398_881, 398_871],
-      [400_000, 399_990],
-    ]);
-    expect(remapShadowedSeqs([15, 398_881, 400_000], map)).toEqual([5, 398_871, 399_990]);
-  });
-
-  it("drops refs absent from the persisted view instead of identity fallback", () => {
-    // 分支裁剪可能丢弃部分被遮蔽节点；恒等回退会留下陈旧的上游 seq，
-    // 它可大于 replace 事件的稠密 seq（上游校验 "must reference earlier
-    // events" 拒绝加载），或指向无关事件污染 provenance。
-    const map = new Map<number, number>([
-      [15, 5],
-      [398_881, 398_871],
-    ]);
-    expect(remapShadowedSeqs([15, 77_318, 398_881], map)).toEqual([5, 398_871]);
-  });
-});
-
-describe("buildSeqMap", () => {
-  it("maps upstream seqs to dense persisted seqs", () => {
-    const map = buildSeqMap([
-      {
-        fSequence: 0,
-        fOriginalSeq: 0,
-      },
-      {
-        fSequence: 1,
-        fOriginalSeq: 4,
-      },
-      {
-        fSequence: 2,
-        fOriginalSeq: 5,
-      },
-    ]);
-    expect(map.get(0)).toBe(0);
-    expect(map.get(4)).toBe(1);
-    expect(map.get(5)).toBe(2);
-  });
-
-  it("keeps the first mapping when upstream seqs overlap across a resume boundary", () => {
-    // After resume, the new segment's upstream seqs renumber from the seed
-    // boundary and overlap the seed segment's space; a seed-segment provenance
-    // reference must resolve to the seed-space row (the first occurrence).
-    const map = buildSeqMap([
-      {
-        fSequence: 0,
-        fOriginalSeq: 0,
-      },
-      {
-        fSequence: 1,
-        fOriginalSeq: 100,
-      },
-      {
-        fSequence: 2,
-        fOriginalSeq: 101,
-      },
-      {
-        fSequence: 3,
-        fOriginalSeq: 3,
-      },
-      {
-        fSequence: 4,
-        fOriginalSeq: 100,
-      },
-      {
-        fSequence: 5,
-        fOriginalSeq: 102,
-      },
-    ]);
-    expect(map.get(100)).toBe(1);
-    expect(map.get(101)).toBe(2);
-    expect(map.get(102)).toBe(5);
-  });
-});
-
 describe("SessionPersistenceSqlite: durability and crash semantics", () => {
   it("rejects a stored v0 log containing a legacy request/header-delta event", async () => {
     const path = await freshDbPath();
@@ -1406,19 +1068,21 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     db.close();
 
     const mounted = await backend(path);
-    await expect(mounted.ctx.sessionPersistence.load(m.id)).rejects.toThrow(
-      /unsupported legacy request\/header-delta event at seq 1/,
+    // 新版 fail-closed：未知事件类型（非 ignorable）拒绝解释整个 log。
+    await expect(rdb(mounted.ctx).load(m.id)).rejects.toThrow(
+      /contains event type "request\/header-delta" \(seq 1\) unknown to this harness/,
     );
     await mounted.dispose();
   });
 
   it("has no independent per-session log location", async () => {
     const { ctx, dispose } = await backend();
-    expect(ctx.sessionPersistence.locate(meta("sqlite-location"))).toBeUndefined();
+    // 新版模型无 locate：stat 对不存在会话返回 undefined。
+    expect(await rdb(ctx).stat(meta("sqlite-location").id)).toBeUndefined();
     await dispose();
   });
 
-  it("an interrupted turn (rows after the last turn/end) is PRESERVED and closed during load", async () => {
+  it("an interrupted turn (rows after the last turn/end) is PRESERVED as stored", async () => {
     const path = await freshDbPath();
     const m = meta("crash");
     // Run 1: persist a complete turn, then a half-written second turn (no turn/end).
@@ -1426,9 +1090,8 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     await ctx1.plugin(EmptySettings);
     await ctx1.plugin(SessionStore);
     const fiber1 = await ctx1.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
-    await ctx1.sessionPersistence.create(m);
-    await ctx1.sessionPersistence.append(m.id, oneTurnLog());
-    await ctx1.sessionPersistence.append(m.id, [
+    await rdb(ctx1).createAndAppend(m, oneTurnLog());
+    await rdb(ctx1).append(m.id, [
       {
         type: "turn/start",
         seq: SessionSeq(6),
@@ -1439,14 +1102,14 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     ]);
     await fiber1.dispose();
 
-    // Run 2: load PRESERVES the interrupted turn's real events (a turn can be huge
-    // — never truncated) and closes the orphaned turn with synthetic boundary
-    // events: step/end (the step was open) then turn/end {interrupted}.
+    // Run 2: load PRESERVES the interrupted turn's real events verbatim——
+    // 新版模型下持久化层原样返回存储事件，补 closers 由消费方（Session
+    // 恢复 / agent-loop resume）负责。
     const ctx2 = new Context();
     await ctx2.plugin(EmptySettings);
     await ctx2.plugin(SessionStore);
     const fiber2 = await ctx2.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
-    const loaded = await ctx2.sessionPersistence.load(m.id);
+    const loaded = await rdb(ctx2).load(m.id);
     expect(loaded.events.map((e) => e.type)).toEqual([
       "turn/start",
       "user/message",
@@ -1455,32 +1118,21 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
       "step/end",
       "turn/end", // turn 1
       "turn/start",
-      "step/start",
-      "step/end",
-      "turn/end", // turn 2: real events + synthetic closers
+      "step/start", // turn 2: 原样保留，无合成 closers
     ]);
-    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    const last = loaded.events.at(-1)!;
-    expect(last.type === "turn/end" && last.data.reason).toEqual({ kind: "interrupted" });
+    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
 
-    // load durably closed the turn, so the next append continues at the balanced
-    // length (seq 10) and a reload round-trips identically.
-    await ctx2.sessionPersistence.append(m.id, [
-      {
-        type: "turn/start",
-        seq: SessionSeq(10),
-        time: 9,
-        data: { turn: 3 },
-      },
+    // 后续 append 从存储 next-seq 续接（seq 8）。
+    await rdb(ctx2).append(m.id, [
       {
         type: "turn/end",
-        seq: SessionSeq(11),
-        time: 10,
-        data: { turn: 3, reason: { kind: "completed" } },
+        seq: SessionSeq(8),
+        time: 9,
+        data: { turn: 2, reason: { kind: "completed" } },
       },
     ]);
-    const reloaded = await ctx2.sessionPersistence.load(m.id);
-    expect(reloaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    const reloaded = await rdb(ctx2).load(m.id);
+    expect(reloaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
     await fiber2.dispose();
   });
 
@@ -1488,8 +1140,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const path = await freshDbPath();
     const m = meta("load-closes");
     const b1 = await backend(path);
-    await b1.ctx.sessionPersistence.create(m);
-    await b1.ctx.sessionPersistence.append(m.id, oneTurnLog()); // seqs 0..5
+    await rdb(b1.ctx).createAndAppend(m, oneTurnLog()); // seqs 0..5
     await b1.dispose();
     // Hand-write an interrupted turn (turn/start seq 6, no turn/end).
     const db = openDatabase(path, "wal");
@@ -1500,12 +1151,12 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     db.close();
 
     const b2 = await backend(path);
-    const loaded = await b2.ctx.sessionPersistence.load(m.id);
-    // turn 2's real turn/start (seq 6) is preserved + a synthetic turn/end (seq 7).
-    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-    expect(loaded.events.at(-1)!.type).toBe("turn/end");
-    // load() is mutating: the synthetic turn/end MUST be on disk so the stored log
-    // is balanced and the cursor is truthful (contract: load closes, not defers).
+    const loaded = await rdb(b2.ctx).load(m.id);
+    // turn 2's real turn/start (seq 6) is preserved verbatim——新版模型下
+    // 持久化层原样返回存储事件，不补合成 closers。
+    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(loaded.events.at(-1)!.type).toBe("turn/start");
+    // load() 不落库：存储行保持原样（无合成 closers）。
     const probe = openDatabase(path, "wal");
     const stored = probe
       .prepare(`
@@ -1515,8 +1166,8 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     `)
       .all(m.id) as { f_sequence: number; f_type: string }[];
     probe.close();
-    expect(stored.map((r) => r.f_sequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-    expect(stored.at(-1)!.f_type).toBe("turn/end");
+    expect(stored.map((r) => r.f_sequence)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(stored.at(-1)!.f_type).toBe("turn/start");
     await b2.dispose();
   });
 
@@ -1663,8 +1314,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const path = await freshDbPath();
     const m = meta("corrupt-tail");
     const b1 = await backend(path);
-    await b1.ctx.sessionPersistence.create(m);
-    await b1.ctx.sessionPersistence.append(m.id, oneTurnLog()); // committed: seqs 0..5
+    await rdb(b1.ctx).createAndAppend(m, oneTurnLog()); // committed: seqs 0..5
     await b1.dispose();
 
     const db = openDatabase(path, "wal");
@@ -1690,15 +1340,15 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
       7,
     );
     db.prepare(
-      "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_original_seq, f_surface_op) VALUES (?, ?, ?, ?, ?)",
-    ).run(m.id, eventId, 6, 6, null);
+      "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_surface_op) VALUES (?, ?, ?, ?)",
+    ).run(m.id, eventId, 6, null);
     db.close();
 
     const b2 = await backend(path);
-    const loaded = await b2.ctx.sessionPersistence.load(m.id);
+    const loaded = await rdb(b2.ctx).load(m.id);
     expect(loaded.events).toEqual(oneTurnLog()); // torn tail discarded, committed intact (turn 1 already balanced → no closers)
     // load physically deleted the corrupt tail row, so a fresh append continues.
-    await b2.ctx.sessionPersistence.append(m.id, [
+    await rdb(b2.ctx).append(m.id, [
       {
         type: "turn/start",
         seq: SessionSeq(6),
@@ -1712,7 +1362,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
         data: { turn: 2, reason: { kind: "completed" } },
       },
     ]);
-    const reloaded = await b2.ctx.sessionPersistence.load(m.id);
+    const reloaded = await rdb(b2.ctx).load(m.id);
     expect(reloaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     await b2.dispose();
   });
@@ -1723,14 +1373,13 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     await ctx.plugin(SessionStore);
     const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path: ":memory:" });
     const m = meta("rollback");
-    await ctx.sessionPersistence.create(m);
-    await ctx.sessionPersistence.append(m.id, oneTurnLog()); // seqs 0..5
+    await rdb(ctx).createAndAppend(m, oneTurnLog()); // seqs 0..5
 
     // A batch that re-states an already-stored seq must be rejected and leave
     // the stored log unchanged (the UNIQUE (session_id, seq) constraint fires
     // inside the transaction → ROLLBACK).
-    await expect(ctx.sessionPersistence.append(m.id, oneTurnLog())).rejects.toThrow();
-    const loaded = await ctx.sessionPersistence.load(m.id);
+    await expect(rdb(ctx).append(m.id, oneTurnLog())).rejects.toThrow();
+    const loaded = await rdb(ctx).load(m.id);
     expect(loaded.events).toEqual(oneTurnLog()); // unchanged
     await fiber.dispose();
   });
@@ -1742,16 +1391,15 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     await ctx1.plugin(EmptySettings);
     await ctx1.plugin(SessionStore);
     const fiber1 = await ctx1.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
-    await ctx1.sessionPersistence.create(m);
-    await ctx1.sessionPersistence.append(m.id, oneTurnLog());
+    await rdb(ctx1).createAndAppend(m, oneTurnLog());
     await fiber1.dispose();
 
     const ctx2 = new Context();
     await ctx2.plugin(EmptySettings);
     await ctx2.plugin(SessionStore);
     const fiber2 = await ctx2.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
-    expect((await ctx2.sessionPersistence.list()).map((x) => x.id)).toContain(m.id);
-    const loaded = await ctx2.sessionPersistence.load(m.id);
+    expect((await rdb(ctx2).list()).map((x) => x.header.id)).toContain(m.id);
+    const loaded = await rdb(ctx2).load(m.id);
     expect(loaded.meta).toMatchObject({ id: m.id, cwd: "/proj" });
     expect(loaded.events).toEqual(oneTurnLog());
     await fiber2.dispose();
@@ -1762,9 +1410,8 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const pathB = await freshDbPath();
     const m = meta("revision-source");
     const a = await backend(pathA);
-    await a.ctx.sessionPersistence.create(m);
-    await a.ctx.sessionPersistence.append(m.id, oneTurnLog());
-    const revisionA = (await a.ctx.sessionPersistence.listSnapshots())[0]?.revision;
+    await rdb(a.ctx).createAndAppend(m, oneTurnLog());
+    const revisionA = (await rdb(a.ctx).listSnapshots())[0]?.revision;
     await a.dispose();
 
     const probeA = openDatabase(pathA, "wal");
@@ -1778,13 +1425,12 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const aliasA = `${pathA}.alias`;
     await symlink(pathA, aliasA);
     const reopenedA = await backend(aliasA);
-    expect((await reopenedA.ctx.sessionPersistence.listSnapshots())[0]?.revision).toBe(revisionA);
+    expect((await rdb(reopenedA.ctx).listSnapshots())[0]?.revision).toBe(revisionA);
     await reopenedA.dispose();
 
     const b = await backend(pathB);
-    await b.ctx.sessionPersistence.create(m);
-    await b.ctx.sessionPersistence.append(m.id, oneTurnLog());
-    const revisionB = (await b.ctx.sessionPersistence.listSnapshots())[0]?.revision;
+    await rdb(b.ctx).createAndAppend(m, oneTurnLog());
+    const revisionB = (await rdb(b.ctx).listSnapshots())[0]?.revision;
     const probeB = openDatabase(pathB, "wal");
     const storeIdB = (
       probeB.prepare("SELECT f_store_id FROM t_persistence_state WHERE f_singleton = 1").get() as {
@@ -1803,9 +1449,8 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const path = await freshDbPath();
     const m = meta("recreated-revision");
     const first = await backend(path);
-    await first.ctx.sessionPersistence.create(m);
-    await first.ctx.sessionPersistence.append(m.id, oneTurnLog());
-    const before = (await first.ctx.sessionPersistence.listSnapshots())[0]?.revision;
+    await rdb(first.ctx).createAndAppend(m, oneTurnLog());
+    const before = (await rdb(first.ctx).listSnapshots())[0]?.revision;
     await first.dispose();
 
     const cleanup = openDatabase(path, "wal");
@@ -1813,9 +1458,8 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     cleanup.close();
 
     const second = await backend(path);
-    await second.ctx.sessionPersistence.create(m);
-    await second.ctx.sessionPersistence.append(m.id, oneTurnLog());
-    const after = (await second.ctx.sessionPersistence.listSnapshots())[0]?.revision;
+    await rdb(second.ctx).createAndAppend(m, oneTurnLog());
+    const after = (await rdb(second.ctx).listSnapshots())[0]?.revision;
     expect(after).not.toBe(before);
     expect(String(before)).toMatch(/:revision:1$/);
     expect(String(after)).toMatch(/:revision:1$/);
@@ -1825,15 +1469,13 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
   it("keeps the revision stable for an empty repair hook", async () => {
     const b = await backend();
     const m = meta("empty-repair");
-    await b.ctx.sessionPersistence.create(m);
-    await b.ctx.sessionPersistence.append(m.id, oneTurnLog());
-    const before = await b.ctx.sessionPersistence.listSnapshots();
-    await (b.ctx.sessionPersistence as SessionPersistenceSqlite).commitRepair(
-      { meta: m, inheritedEventCount: SessionLogOffset(0) },
-      undefined,
-      [],
-    );
-    expect(await b.ctx.sessionPersistence.listSnapshots()).toEqual(before);
+    await rdb(b.ctx).createAndAppend(m, oneTurnLog());
+    const before = await rdb(b.ctx).listSnapshots();
+    // 新版模型无 commitRepair：空 append 是 no-op，revision 不变。
+    const handle = await rdb(b.ctx).open(m.id, "write");
+    await handle.append([]);
+    await handle.close();
+    expect(await rdb(b.ctx).listSnapshots()).toEqual(before);
     await b.dispose();
   });
 
@@ -1867,971 +1509,12 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
       path,
       busyTimeout: 0,
     });
-    await ctx.sessionPersistence.list();
+    await rdb(ctx).list();
     await fiber.dispose();
   });
 });
 
-function chunkedTurnLog(): SessionEvent[] {
-  return [
-    {
-      type: "turn/start",
-      seq: SessionSeq(0),
-      time: 1,
-      data: { turn: 1 },
-    },
-    {
-      type: "user/message",
-      seq: SessionSeq(1),
-      time: 2,
-      data: createUserMessage({
-        content: [{ type: "text", text: "hi" }],
-        source: { kind: "user" },
-      }),
-      surfaceOp: "append",
-    },
-    { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
-    {
-      type: "assistant/chunk",
-      seq: SessionSeq(3),
-      time: 4,
-      data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
-    },
-    {
-      type: "assistant/chunk",
-      seq: SessionSeq(4),
-      time: 5,
-      data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
-    },
-    {
-      type: "assistant/message",
-      seq: SessionSeq(5),
-      time: 6,
-      data: {
-        turn: 1,
-        step: 1,
-        message: createMessage({
-          role: "assistant",
-          content: [{ type: "text", text: "hello" }],
-          source: { kind: "model", provider: "mock", model: "mock" },
-        }),
-      },
-      surfaceOp: "append",
-      sourceEventSeqs: [1].map((n) => SessionSeq(n)),
-    },
-    { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
-    {
-      type: "turn/end",
-      seq: SessionSeq(7),
-      time: 8,
-      data: { turn: 1, reason: { kind: "completed" } },
-    },
-  ];
-}
-
-function mirrorSurfaceTokensFold(
-  claim: { start: number; end: number; tokens: number } | undefined,
-  event: SessionEvent,
-): {
-  deltaTokens: number;
-  claim: { start: number; end: number; tokens: number } | undefined;
-} {
-  const type = (event as { type: string }).type;
-  if (type === "compaction/summary" || type === "compaction/prune") {
-    const data = event.data as unknown as {
-      shadowedRange: { start: number; end: number };
-      shadowedTokenCount: number;
-    };
-    return {
-      deltaTokens: 0,
-      claim: {
-        start: data.shadowedRange.start,
-        end: data.shadowedRange.end,
-        tokens: data.shadowedTokenCount,
-      },
-    };
-  }
-  const op = (event as unknown as Partial<SurfaceEvent>).surfaceOp;
-  if (op === undefined || op === "append") return { deltaTokens: 1, claim: undefined };
-  if (claim === undefined) return { deltaTokens: 0, claim: undefined };
-  if (claim.start !== op.start || claim.end !== op.end) {
-    throw new Error(
-      `token surface: replace at seq ${event.seq} over range ${op.start}-${op.end} has no adjacent shadow price` +
-        ` (armed claim covers ${claim.start}-${claim.end})`,
-    );
-  }
-  return { deltaTokens: 1 - claim.tokens, claim: undefined };
-}
-
-describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never persisted)", () => {
-  it("drops delta events at write time and re-numbers surviving events densely", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("delta-drop");
-    await b.ctx.sessionPersistence.create(m);
-    await b.ctx.sessionPersistence.append(m.id, chunkedTurnLog());
-
-    // No delta row exists: 6 persisted rows with DENSE persisted seqs and the
-    // upstream seqs recorded in f_original_seq.
-    const probe = openDatabase(path, "wal");
-    const rows = probe
-      .prepare(`
-      SELECT se.f_sequence, se.f_original_seq, e.f_type, e.f_role FROM t_session_events se
-      JOIN t_events e ON se.f_event_id = e.f_event_id
-      WHERE se.f_session_id = ? ORDER BY se.f_sequence
-    `)
-      .all(m.id) as {
-      f_sequence: number;
-      f_original_seq: number;
-      f_type: string;
-      f_role: string;
-    }[];
-    expect(rows).toEqual([
-      { f_sequence: 0, f_original_seq: SessionSeq(0), f_type: "turn/start", f_role: "" },
-      { f_sequence: 1, f_original_seq: SessionSeq(1), f_type: "user/message", f_role: "user" },
-      { f_sequence: 2, f_original_seq: SessionSeq(2), f_type: "step/start", f_role: "" },
-      {
-        f_sequence: 3,
-        f_original_seq: SessionSeq(5),
-        f_type: "assistant/message",
-        f_role: "assistant",
-      },
-      { f_sequence: 4, f_original_seq: SessionSeq(6), f_type: "step/end", f_role: "" },
-      { f_sequence: 5, f_original_seq: SessionSeq(7), f_type: "turn/end", f_role: "" },
-    ]);
-    // The head cursor tracks the dense persisted seq.
-    expect(
-      probe.prepare("SELECT f_head_sequence FROM t_sessions WHERE f_session_id = ?").get(m.id),
-    ).toEqual({ f_head_sequence: 5 });
-    probe.close();
-
-    // load returns the dense log without any delta event.
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    expect(loaded.events.map((e) => e.type)).toEqual([
-      "turn/start",
-      "user/message",
-      "step/start",
-      "assistant/message",
-      "step/end",
-      "turn/end",
-    ]);
-    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-    await b.dispose();
-  });
-
-  it("a batch containing only delta events is a no-op (no materialization, no revision)", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("delta-only");
-    await b.ctx.sessionPersistence.create(m);
-    await b.ctx.sessionPersistence.append(m.id, [
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(0),
-        time: 1,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "x" } },
-      },
-    ]);
-    // Nothing was materialized: the session is absent from list/snapshots.
-    expect(await b.ctx.sessionPersistence.list()).toEqual([]);
-    expect(await b.ctx.sessionPersistence.listSnapshots()).toEqual([]);
-    // The session remains appendable. The dropped delta occupied upstream seq 0,
-    // so the next batch starts at upstream seq 1 and lands at dense seq 0.
-    await b.ctx.sessionPersistence.append(
-      m.id,
-      oneTurnLog().map((e) => ({ ...e, seq: SessionSeq(e.seq + 1) })),
-    );
-    expect(await b.ctx.sessionPersistence.list()).toHaveLength(1);
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-    await b.dispose();
-  });
-
-  it("drops assistant/message sourceEventSeqs (chunk refs never persisted)", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("delta-prune-same");
-    await b.ctx.sessionPersistence.create(m);
-    // The assistant/message references the chunk events (upstream seqs 3,4),
-    // which are dropped at write time — sourceEventSeqs 不落库（读取时对
-    // replace 事件重计算；append 事件不带 provenance）。
-    await b.ctx.sessionPersistence.append(m.id, [
-      {
-        type: "turn/start",
-        seq: SessionSeq(0),
-        time: 1,
-        data: { turn: 1 },
-      },
-      { type: "step/start", seq: SessionSeq(1), time: 2, data: { turn: 1, step: 1 } },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(2),
-        time: 3,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
-      },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(3),
-        time: 4,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
-      },
-      {
-        type: "assistant/message",
-        seq: SessionSeq(4),
-        time: 5,
-        data: {
-          turn: 1,
-          step: 1,
-          message: createMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-            source: { kind: "model", provider: "mock", model: "mock" },
-          }),
-        },
-        surfaceOp: "append",
-        sourceEventSeqs: [2, 3].map((n) => SessionSeq(n)),
-      },
-      { type: "step/end", seq: SessionSeq(5), time: 6, data: { turn: 1, step: 1 } },
-      {
-        type: "turn/end",
-        seq: SessionSeq(6),
-        time: 7,
-        data: { turn: 1, reason: { kind: "completed" } },
-      },
-    ]);
-    // Reload replays cleanly: the dense assistant/message carries no provenance.
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
-    expect(assistant.seq).toBe(2); // dense
-    expect((assistant as SurfaceEvent).sourceEventSeqs).toBeUndefined();
-    await b.dispose();
-  });
-
-  it("drops assistant/message sourceEventSeqs across batches (chunk refs never persisted)", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("delta-prune-cross");
-    await b.ctx.sessionPersistence.create(m);
-    // Batch 1: only deltas (dropped, no materialization).
-    await b.ctx.sessionPersistence.append(m.id, [
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(0),
-        time: 1,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
-      },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(1),
-        time: 2,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
-      },
-    ]);
-    // Batch 2: the message referencing batch 1's dropped seqs.
-    await b.ctx.sessionPersistence.append(m.id, [
-      {
-        type: "assistant/message",
-        seq: SessionSeq(2),
-        time: 3,
-        data: {
-          turn: 1,
-          step: 1,
-          message: createMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-            source: { kind: "model", provider: "mock", model: "mock" },
-          }),
-        },
-        surfaceOp: "append",
-        sourceEventSeqs: [0, 1].map((n) => SessionSeq(n)),
-      },
-      {
-        type: "turn/end",
-        seq: SessionSeq(3),
-        time: 4,
-        data: { turn: 1, reason: { kind: "completed" } },
-      },
-    ]);
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
-    expect(assistant.seq).toBe(0); // dense
-    expect((assistant as SurfaceEvent).sourceEventSeqs).toBeUndefined();
-    await b.dispose();
-  });
-
-  it("drops assistant/message sourceEventSeqs even when referencing persisted events (append semantics)", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("delta-prune-mixed");
-    await b.ctx.sessionPersistence.create(m);
-    // The user/message (upstream seq 1) survives, the chunks (seqs 3,4) do not;
-    // the message references all three — sourceEventSeqs 不落库，append 事件
-    // 读取时也不带 provenance（只有 replace 事件重计算）。
-    await b.ctx.sessionPersistence.append(m.id, [
-      {
-        type: "turn/start",
-        seq: SessionSeq(0),
-        time: 1,
-        data: { turn: 1 },
-      },
-      {
-        type: "user/message",
-        seq: SessionSeq(1),
-        time: 2,
-        data: createUserMessage({
-          content: [{ type: "text", text: "hi" }],
-          source: { kind: "user" },
-        }),
-        surfaceOp: "append",
-      },
-      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(3),
-        time: 4,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
-      },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(4),
-        time: 5,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
-      },
-      {
-        type: "assistant/message",
-        seq: SessionSeq(5),
-        time: 6,
-        data: {
-          turn: 1,
-          step: 1,
-          message: createMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-            source: { kind: "model", provider: "mock", model: "mock" },
-          }),
-        },
-        surfaceOp: "append",
-        sourceEventSeqs: [1, 3, 4].map((n) => SessionSeq(n)),
-      },
-      { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
-      {
-        type: "turn/end",
-        seq: SessionSeq(7),
-        time: 8,
-        data: { turn: 1, reason: { kind: "completed" } },
-      },
-    ]);
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
-    expect((assistant as SurfaceEvent).sourceEventSeqs).toBeUndefined();
-    await b.dispose();
-  });
-
-  it("reload + append continues from the dense persisted seq (re-created seq space)", async () => {
-    const path = await freshDbPath();
-    const m = meta("delta-reload");
-    const b1 = await backend(path);
-    await b1.ctx.sessionPersistence.create(m);
-    await b1.ctx.sessionPersistence.append(m.id, chunkedTurnLog());
-    await b1.dispose();
-
-    const b2 = await backend(path);
-    const loaded = await b2.ctx.sessionPersistence.load(m.id);
-    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-    // Re-create the live session from the loaded (dense) log: the seed is
-    // contiguous, so the store adopts the persisted prefix and the next append
-    // continues at the dense cursor (seq 6).
-    const session = b2.ctx.sessions.create(SessionId(m.id), { seed: loaded.events });
-    session.append("turn/start", {
-      turn: 2,
-    });
-    session.append(
-      "user/message",
-      createUserMessage({
-        content: [{ type: "text", text: "again" }],
-        source: { kind: "user" },
-      }),
-      { surfaceOp: "append" },
-    );
-    session.append("turn/end", { turn: 2, reason: { kind: "completed" } });
-    await b2.ctx.sessions.flush(session);
-
-    const reloaded = await b2.ctx.sessionPersistence.load(m.id);
-    // The re-created session marks its seed with session/end-seed (seq 6), then
-    // the live turn follows — all in the dense seq space.
-    expect(reloaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    expect(reloaded.events.map((e) => e.type).slice(6)).toEqual([
-      "session/end-seed",
-      "turn/start",
-      "user/message",
-      "turn/end",
-    ]);
-    await b2.dispose();
-  });
-
-  it("loads without provenance on append events (chunk refs never persisted)", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("delta-provenance");
-    await b.ctx.sessionPersistence.create(m);
-    // user/message seq 0; the assistant/message after the delta stream carries
-    // sourceEventSeqs [1] (the user message's UPSTREAM seq 1) — 不落库。
-    await b.ctx.sessionPersistence.append(m.id, chunkedTurnLog());
-
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
-    expect(assistant.seq).toBe(3); // dense
-    expect((assistant as SurfaceEvent).sourceEventSeqs).toBeUndefined();
-    await b.dispose();
-  });
-
-  it("readFrom returns the dense suffix with provenance remapped", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("delta-readfrom");
-    await b.ctx.sessionPersistence.create(m);
-    await b.ctx.sessionPersistence.append(m.id, chunkedTurnLog());
-    const suffix = await b.ctx.sessionPersistence.readFrom(m.id, SessionLogOffset(3));
-    expect(suffix.events.map((e) => e.type)).toEqual(["assistant/message", "step/end", "turn/end"]);
-    expect(suffix.events.map((e) => e.seq)).toEqual([3, 4, 5]);
-    await b.dispose();
-  });
-
-  it("an interrupted delta-stream turn is closed with synthetic closers on load", async () => {
-    const path = await freshDbPath();
-    const m = meta("delta-crash");
-    const b1 = await backend(path);
-    await b1.ctx.sessionPersistence.create(m);
-    // Turn 1 committed (0..5 dense), then a crashed turn 2 whose only persisted
-    // events are a turn/start (dense 6); the delta stream is dropped entirely.
-    await b1.ctx.sessionPersistence.append(m.id, oneTurnLog());
-    await b1.ctx.sessionPersistence.append(m.id, [
-      {
-        type: "turn/start",
-        seq: SessionSeq(6),
-        time: 7,
-        data: { turn: 2 },
-      },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(7),
-        time: 8,
-        data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "gone" } },
-      },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(8),
-        time: 9,
-        data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "gone" } },
-      },
-    ]);
-    await b1.dispose();
-
-    const b2 = await backend(path);
-    const loaded = await b2.ctx.sessionPersistence.load(m.id);
-    // turn/start (dense 6) preserved + synthetic turn/end {interrupted} (dense 7).
-    expect(loaded.events.map((e) => e.type)).toEqual([
-      "turn/start",
-      "user/message",
-      "step/start",
-      "assistant/message",
-      "step/end",
-      "turn/end",
-      "turn/start",
-      "turn/end",
-    ]);
-    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-    expect(loaded.events.at(-1)!.type === "turn/end" && loaded.events.at(-1)!.data).toMatchObject({
-      reason: { kind: "interrupted" },
-    });
-    await b2.dispose();
-  });
-
-  it("drops ignorable events at write time and re-numbers surviving events densely", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("ignorable-drop");
-    await b.ctx.sessionPersistence.create(m);
-    await b.ctx.sessionPersistence.append(m.id, [
-      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
-      // Unknown plugin event marked ignorable: dropped, never persisted.
-      {
-        type: "plugin/test",
-        seq: SessionSeq(1),
-        time: 2,
-        data: null,
-        ignorable: true,
-      } as unknown as SessionEvent,
-      {
-        type: "user/message",
-        seq: SessionSeq(2),
-        time: 3,
-        data: createUserMessage({
-          content: [{ type: "text", text: "hi" }],
-          source: { kind: "user" },
-        }),
-        surfaceOp: "append",
-      },
-      {
-        type: "turn/end",
-        seq: SessionSeq(3),
-        time: 4,
-        data: { turn: 1, reason: { kind: "completed" } },
-      },
-    ]);
-    // The ignorable event is absent from storage; survivors are dense.
-    const probe = openDatabase(path, "wal");
-    const rows = probe
-      .prepare(`
-      SELECT se.f_sequence, se.f_original_seq, e.f_type FROM t_session_events se
-      JOIN t_events e ON se.f_event_id = e.f_event_id
-      WHERE se.f_session_id = ? ORDER BY se.f_sequence
-    `)
-      .all(m.id) as { f_sequence: number; f_original_seq: number; f_type: string }[];
-    expect(rows).toEqual([
-      { f_sequence: 0, f_original_seq: SessionSeq(0), f_type: "turn/start" },
-      { f_sequence: 1, f_original_seq: SessionSeq(2), f_type: "user/message" },
-      { f_sequence: 2, f_original_seq: SessionSeq(3), f_type: "turn/end" },
-    ]);
-    probe.close();
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    expect(loaded.events.map((e) => e.type)).toEqual(["turn/start", "user/message", "turn/end"]);
-    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2]);
-    await b.dispose();
-  });
-
-  it("a batch containing only ignorable events is a no-op (no materialization, no revision)", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("ignorable-only");
-    await b.ctx.sessionPersistence.create(m);
-    await b.ctx.sessionPersistence.append(m.id, [
-      {
-        type: "plugin/test",
-        seq: SessionSeq(0),
-        time: 1,
-        data: null,
-        ignorable: true,
-      } as unknown as SessionEvent,
-    ]);
-    // Nothing was materialized: the session is absent from list/snapshots.
-    expect(await b.ctx.sessionPersistence.list()).toEqual([]);
-    expect(await b.ctx.sessionPersistence.listSnapshots()).toEqual([]);
-    // The session remains appendable; the dropped event occupied upstream seq 0,
-    // so the next batch starts at upstream seq 1 and lands at dense seq 0.
-    await b.ctx.sessionPersistence.append(
-      m.id,
-      oneTurnLog().map((e) => ({ ...e, seq: SessionSeq(e.seq + 1) })),
-    );
-    expect(await b.ctx.sessionPersistence.list()).toHaveLength(1);
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-    await b.dispose();
-  });
-
-  it("drops assistant/message sourceEventSeqs referencing ignorable events (append semantics)", async () => {
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("ignorable-prune");
-    await b.ctx.sessionPersistence.create(m);
-    // The assistant/message references the ignorable plugin event (upstream
-    // seq 1), which is dropped at write time — sourceEventSeqs 不落库。
-    await b.ctx.sessionPersistence.append(m.id, [
-      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
-      {
-        type: "plugin/test",
-        seq: SessionSeq(1),
-        time: 2,
-        data: null,
-        ignorable: true,
-      } as unknown as SessionEvent,
-      {
-        type: "assistant/message",
-        seq: SessionSeq(2),
-        time: 3,
-        data: {
-          turn: 1,
-          step: 1,
-          message: createMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-            source: { kind: "model", provider: "mock", model: "mock" },
-          }),
-        },
-        surfaceOp: "append",
-        sourceEventSeqs: [1].map((n) => SessionSeq(n)),
-      },
-      {
-        type: "turn/end",
-        seq: SessionSeq(3),
-        time: 4,
-        data: { turn: 1, reason: { kind: "completed" } },
-      },
-    ]);
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
-    expect(assistant.seq).toBe(1); // dense
-    expect((assistant as SurfaceEvent).sourceEventSeqs).toBeUndefined();
-    await b.dispose();
-  });
-
-  it("replays a compact seam so the shadow-price claim matches the dense replace range", async () => {
-    // Regression for the reported history-load failure:
-    //   token surface: replace at seq 4057 over range 15-4048 has no adjacent
-    //   shadow price (armed claim covers 15-398881)
-    // Turn 1 establishes two surface nodes with chunk deltas dropped at write
-    // time; turn 2 compacts them — compaction/summary meters the shadowed range
-    // (UPSTREAM seqs 1-5) and the adjacent assistant/message replaces it. After
-    // the dense renumbering, both the claim and the replace range must land on
-    // the same DENSE seqs for the token-meter fold to consume the claim.
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("compact-seam");
-    await b.ctx.sessionPersistence.create(m);
-    const log = [
-      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
-      {
-        type: "user/message",
-        seq: SessionSeq(1),
-        time: 2,
-        data: createUserMessage({
-          content: [{ type: "text", text: "hi" }],
-          source: { kind: "user" },
-        }),
-        surfaceOp: "append",
-      },
-      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(3),
-        time: 4,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
-      },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(4),
-        time: 5,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
-      },
-      {
-        type: "assistant/message",
-        seq: SessionSeq(5),
-        time: 6,
-        data: {
-          turn: 1,
-          step: 1,
-          message: createMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-            source: { kind: "model", provider: "mock", model: "mock" },
-          }),
-        },
-        surfaceOp: "append",
-        sourceEventSeqs: [3, 4].map((n) => SessionSeq(n)),
-      },
-      { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
-      {
-        type: "turn/end",
-        seq: SessionSeq(7),
-        time: 8,
-        data: { turn: 1, reason: { kind: "completed" } },
-      },
-      { type: "turn/start", seq: SessionSeq(8), time: 9, data: { turn: 2 } },
-      { type: "step/start", seq: SessionSeq(9), time: 10, data: { turn: 2, step: 1 } },
-      { type: "compaction/start", seq: SessionSeq(10), time: 11, data: { turn: 2 } },
-      {
-        type: "compaction/summary",
-        seq: SessionSeq(11),
-        time: 12,
-        data: {
-          turn: 2,
-          summary: "compacted",
-          shadowedRange: { start: 1, end: 5 },
-          shadowedTokenCount: 100,
-        },
-      },
-      {
-        type: "assistant/message",
-        seq: SessionSeq(12),
-        time: 13,
-        data: {
-          turn: 2,
-          step: 1,
-          message: createMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "compacted" }],
-            source: { kind: "model", provider: "mock", model: "mock" },
-          }),
-        },
-        surfaceOp: { op: "replace", start: 1, end: 5 },
-        sourceEventSeqs: [1, 5].map((n) => SessionSeq(n)),
-      },
-      { type: "step/end", seq: SessionSeq(13), time: 14, data: { turn: 2, step: 1 } },
-      {
-        type: "turn/end",
-        seq: SessionSeq(14),
-        time: 15,
-        data: { turn: 2, reason: { kind: "completed" } },
-      },
-    ] as unknown as SessionEvent[];
-    await b.ctx.sessionPersistence.append(m.id, log);
-
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const metering = loaded.events.find(
-      (e) => (e as { type: string }).type === "compaction/summary",
-    );
-    const replacement = loaded.events.find((e) => e.type === "assistant/message" && e.seq > 5);
-    expect(metering).toBeDefined();
-    expect(replacement).toBeDefined();
-    // Both the claim and the replacement range land on DENSE seqs.
-    const claimRange = (
-      metering!.data as unknown as { shadowedRange: { start: number; end: number } }
-    ).shadowedRange;
-    const op = (replacement as SurfaceEvent).surfaceOp;
-    expect(op).toEqual({ op: "replace", start: 1, end: 3 });
-    expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
-    expect(claimRange).toEqual({ start: 1, end: 3 });
-
-    // The token-meter fold must consume the armed claim instead of throwing
-    // the reported "has no adjacent shadow price" error.
-    let claim: { start: number; end: number; tokens: number } | undefined;
-    let armed = 0;
-    let consumed = 0;
-    expect(() => {
-      for (const event of loaded.events) {
-        if ((event as { type: string }).type === "compaction/summary") armed += 1;
-        const fold = mirrorSurfaceTokensFold(claim, event);
-        if (claim !== undefined && fold.claim === undefined) consumed += 1;
-        claim = fold.claim;
-      }
-    }).not.toThrow();
-    expect(armed).toBe(1);
-    expect(consumed).toBe(1);
-    await b.dispose();
-  });
-
-  it("loads a compact seam whose shadowedSeqs include a node the range interval misses", async () => {
-    // Regression for the reported history-load failure:
-    //   surface replace: sourceEventSeqs must include every shadowed surface
-    //   node; missing 659
-    // shadowedRange 是 surface 位置跨度（首尾节点 seq），不是数值区间：轮 2
-    // 的 replace 把高 seq 节点 6 落在位置 2 上，surface 变为 [1, 6, 3]；轮 3
-    // 压缩该跨度时 shadowedSeqs 显式列出 [1, 6, 3]，但 range [1..3] 的数值
-    // 区间不含 6。provenance 重计算必须采用 shadowedSeqs（权威列表），否则
-    // 上游 assertProvenance 报 missing 6、整个会话无法加载。
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("compact-race");
-    await b.ctx.sessionPersistence.create(m);
-    const log = [
-      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
-      {
-        type: "user/message",
-        seq: SessionSeq(1),
-        time: 2,
-        data: createUserMessage({
-          content: [{ type: "text", text: "a" }],
-          source: { kind: "user" },
-        }),
-        surfaceOp: "append",
-      },
-      {
-        type: "user/message",
-        seq: SessionSeq(2),
-        time: 3,
-        data: createUserMessage({
-          content: [{ type: "text", text: "b" }],
-          source: { kind: "user" },
-        }),
-        surfaceOp: "append",
-      },
-      {
-        type: "user/message",
-        seq: SessionSeq(3),
-        time: 4,
-        data: createUserMessage({
-          content: [{ type: "text", text: "c" }],
-          source: { kind: "user" },
-        }),
-        surfaceOp: "append",
-      },
-      {
-        type: "turn/end",
-        seq: SessionSeq(4),
-        time: 5,
-        data: { turn: 1, reason: { kind: "completed" } },
-      },
-      { type: "turn/start", seq: SessionSeq(5), time: 6, data: { turn: 2 } },
-      {
-        type: "user/message",
-        seq: SessionSeq(6),
-        time: 7,
-        data: createUserMessage({
-          content: [{ type: "text", text: "replacement" }],
-          source: { kind: "user" },
-        }),
-        surfaceOp: { op: "replace", start: 2, end: 2 },
-      },
-      {
-        type: "turn/end",
-        seq: SessionSeq(7),
-        time: 8,
-        data: { turn: 2, reason: { kind: "completed" } },
-      },
-      { type: "turn/start", seq: SessionSeq(8), time: 9, data: { turn: 3 } },
-      {
-        type: "compaction/summary",
-        seq: SessionSeq(9),
-        time: 10,
-        data: {
-          turn: 3,
-          summary: "compacted",
-          shadowedRange: { start: 1, end: 3 },
-          shadowedSeqs: [1, 6, 3],
-          shadowedTokenCount: 100,
-        },
-      },
-      {
-        type: "user/message",
-        seq: SessionSeq(10),
-        time: 11,
-        data: createUserMessage({
-          content: [{ type: "text", text: "checkpoint" }],
-          source: { kind: "user" },
-        }),
-        surfaceOp: { op: "replace", start: 1, end: 3 },
-      },
-      {
-        type: "turn/end",
-        seq: SessionSeq(11),
-        time: 12,
-        data: { turn: 3, reason: { kind: "completed" } },
-      },
-    ] as unknown as SessionEvent[];
-    await b.ctx.sessionPersistence.append(m.id, log);
-
-    // 修复前：range 数值扫描漏掉 6 → load 抛 "missing 6"。
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const replacement = loaded.events.find((e) => e.type === "user/message" && e.seq === 10)!;
-    expect((replacement as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
-    // provenance 采用紧邻 compaction/summary 的 shadowedSeqs（权威列表）。
-    expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 6, 3]);
-    await b.dispose();
-  });
-
-  it("readRaw exports upstream-coordinate provenance remapped into dense space", async () => {
-    // append 时事件 seq 是上游坐标,replace 的 sourceEventSeqs 引用上游 seq
-    // (delta 被过滤后稠密重编号)——存储即「旧数据」样式。导出（readRaw）在
-    // 序列化前重算 provenance 并重映射坐标,产出的 artifact 无需任何修复即可
-    // 导入加载。
-    const path = await freshDbPath();
-    const b = await backend(path);
-    const m = meta("export-provenance");
-    await b.ctx.sessionPersistence.create(m);
-    const log = [
-      { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
-      {
-        type: "user/message",
-        seq: SessionSeq(1),
-        time: 2,
-        data: createUserMessage({
-          content: [{ type: "text", text: "hi" }],
-          source: { kind: "user" },
-        }),
-        surfaceOp: "append",
-      },
-      { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(3),
-        time: 4,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
-      },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(4),
-        time: 5,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
-      },
-      {
-        type: "assistant/message",
-        seq: SessionSeq(5),
-        time: 6,
-        data: {
-          turn: 1,
-          step: 1,
-          message: createMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-            source: { kind: "model", provider: "mock", model: "mock" },
-          }),
-        },
-        surfaceOp: "append",
-      },
-      { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
-      {
-        type: "turn/end",
-        seq: SessionSeq(7),
-        time: 8,
-        data: { turn: 1, reason: { kind: "completed" } },
-      },
-      { type: "turn/start", seq: SessionSeq(8), time: 9, data: { turn: 2 } },
-      { type: "step/start", seq: SessionSeq(9), time: 10, data: { turn: 2, step: 1 } },
-      {
-        type: "assistant/message",
-        seq: SessionSeq(10),
-        time: 11,
-        data: {
-          turn: 2,
-          step: 1,
-          message: createMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "compacted" }],
-            source: { kind: "model", provider: "mock", model: "mock" },
-          }),
-        },
-        surfaceOp: { op: "replace", start: 1, end: 5 },
-        sourceEventSeqs: [1, 5].map((n) => SessionSeq(n)),
-      },
-      { type: "step/end", seq: SessionSeq(11), time: 12, data: { turn: 2, step: 1 } },
-      {
-        type: "turn/end",
-        seq: SessionSeq(12),
-        time: 13,
-        data: { turn: 2, reason: { kind: "completed" } },
-      },
-    ] as unknown as SessionEvent[];
-    await b.ctx.sessionPersistence.append(m.id, log);
-
-    const persistence = b.ctx.sessionPersistence as SessionPersistenceSqlite;
-    const backendApi = persistence.internals().backend;
-    // 存储是上游坐标:replace [1,5] 原样落桥接行 f_surface_op。
-    const rowBefore = (await backendApi.getEventRows(m.id)).find((r) => r.fSequence === 8)!;
-    expect(rowBefore.fSurfaceOp).toBe(JSON.stringify({ op: "replace", start: 1, end: 5 }));
-
-    // 导出即修复：artifact 中 replace 已是稠密坐标,provenance 已重算。
-    const raw = await persistence.readRaw(m.id);
-    expect(raw).toBeDefined();
-    const parsed = parseJsonlArtifact(raw!.content);
-    const replacement = parsed.events.find((e) => e.type === "assistant/message" && e.seq === 8)!;
-    expect((replacement as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
-    expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
-
-    // 导入 artifact 后无需任何修复即可完整加载。
-    const importedId = `session-imported` as SessionId;
-    await persistence.create(
-      { ...parsed.meta, id: importedId },
-      parsed.inheritedEventCount as unknown as number,
-    );
-    await persistence.append(importedId, parsed.events);
-    const reloaded = await b.ctx.sessionPersistence.load(importedId);
-    const replacementAfter = reloaded.events.find(
-      (e) => e.type === "assistant/message" && e.seq === 8,
-    )!;
-    expect((replacementAfter as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
-    await b.dispose();
-  });
-
+describe("SessionPersistenceSqlite: export-time repair (readRaw)", () => {
   it("readRaw repairs invalid tool/result surface replacements so the artifact loads", async () => {
     // 用户报告的损坏样式：tool/result replace 指向的当前 surface 节点不是
     // tool/result（上游 assertToolResultRewrite 校验失败）——load 抛
@@ -2840,7 +1523,6 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     const path = await freshDbPath();
     const b = await backend(path);
     const m = meta("export-tool-result");
-    await b.ctx.sessionPersistence.create(m);
     const callId = ToolCallId("call-1");
     const log = [
       { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
@@ -2867,6 +1549,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
             content: [{ type: "tool-call", id: callId, name: "read", arguments: "{}" }],
             source: { kind: "model", provider: "mock", model: "mock" },
           }),
+          stream: [] as const,
         },
         surfaceOp: "append",
       },
@@ -2902,15 +1585,15 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
         data: { turn: 1, reason: { kind: "completed" } },
       },
     ] as unknown as SessionEvent[];
-    await b.ctx.sessionPersistence.append(m.id, log);
+    await rdb(b.ctx).createAndAppend(m, log);
 
-    // 源会话：seed 校验失败（历史加载失败）。
-    await expect(b.ctx.sessionPersistence.load(m.id)).rejects.toThrow(
-      /invalid seed event at index 5: tool\/result surface replacement must target a current tool\/result/,
-    );
+    // 源会话：新版模型下持久化层原样返回存储事件（surface 语义校验由
+    // 消费方 Session 构造负责，load 不做）。
+    const sourceLoaded = await rdb(b.ctx).load(m.id);
+    expect(sourceLoaded.events.at(-1)?.type).toBe("turn/end");
 
     // 导出即修复：非法 replace 降级为 append,artifact 完备可用。
-    const persistence = b.ctx.sessionPersistence as SessionPersistenceSqlite;
+    const persistence = rdb(b.ctx) as SessionPersistenceSqlite;
     const raw = await persistence.readRaw(m.id);
     expect(raw).toBeDefined();
     const parsed = parseJsonlArtifact(raw!.content);
@@ -2919,12 +1602,12 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
 
     // 导入 artifact 后无需任何修复即可完整加载。
     const importedId = `session-imported` as SessionId;
-    await persistence.create(
+    await persistence.createAndAppend(
       { ...parsed.meta, id: importedId },
-      parsed.inheritedEventCount as unknown as number,
+      parsed.events,
+      parsed.inheritedEventCount,
     );
-    await persistence.append(importedId, parsed.events);
-    const loaded = await b.ctx.sessionPersistence.load(importedId);
+    const loaded = await rdb(b.ctx).load(importedId);
     const importedResult = loaded.events.find((e) => e.type === "tool/result")!;
     expect((importedResult as SurfaceEvent).surfaceOp).toBe("append");
     expect(loaded.events.at(-1)?.type).toBe("turn/end");
@@ -2933,13 +1616,11 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
 
   it("readRaw repairs without mutating storage (export-time repair is view-only)", async () => {
     // 导出即修复只作用于导出视图,不落库——写路径零转换不变量不变：导出前后
-    // 存储行（f_surface_op / f_original_seq）与 revision 完全一致。
+    // 存储行（f_surface_op）与 revision 完全一致。
     const path = await freshDbPath();
     const b = await backend(path);
     const m = meta("export-view-only");
-    await b.ctx.sessionPersistence.create(m);
-    // 带 assistant/chunk 的 log：chunk 落盘被过滤，后续事件稠密重编号
-    // （f_original_seq ≠ f_sequence）——导出会重映射坐标，但不写回存储。
+    // 原样存储的 log（含 ignorable 版本效果事件，与 JSONL 一致原样落库）。
     const log = [
       { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       {
@@ -2954,21 +1635,16 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
       },
       { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
       {
-        type: "assistant/chunk",
+        type: "plugin/test",
         seq: SessionSeq(3),
         time: 4,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
-      },
-      {
-        type: "assistant/chunk",
-        seq: SessionSeq(4),
-        time: 5,
-        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
-      },
+        data: null,
+        ignorable: true,
+      } as unknown as SessionEvent,
       {
         type: "assistant/message",
-        seq: SessionSeq(5),
-        time: 6,
+        seq: SessionSeq(4),
+        time: 5,
         data: {
           turn: 1,
           step: 1,
@@ -2977,20 +1653,21 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
             content: [{ type: "text", text: "hello" }],
             source: { kind: "model", provider: "mock", model: "mock" },
           }),
+          stream: [] as const,
         },
         surfaceOp: "append",
       },
-      { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
+      { type: "step/end", seq: SessionSeq(5), time: 6, data: { turn: 1, step: 1 } },
       {
         type: "turn/end",
-        seq: SessionSeq(7),
-        time: 8,
+        seq: SessionSeq(6),
+        time: 7,
         data: { turn: 1, reason: { kind: "completed" } },
       },
     ] as unknown as SessionEvent[];
-    await b.ctx.sessionPersistence.append(m.id, log);
+    await rdb(b.ctx).createAndAppend(m, log);
 
-    const persistence = b.ctx.sessionPersistence as SessionPersistenceSqlite;
+    const persistence = rdb(b.ctx) as SessionPersistenceSqlite;
     const backendApi = persistence.internals().backend;
     const rowsBefore = await backendApi.getEventRows(m.id);
     const revisionBefore = await persistence.readStoredRevision(m.id);
@@ -3002,8 +1679,8 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     expect(rowsAfter).toEqual(rowsBefore);
     expect(await persistence.readStoredRevision(m.id)).toBe(revisionBefore);
 
-    // 存储视图不变：读取仍经 f_original_seq 映射重映射。
-    const loaded = await b.ctx.sessionPersistence.load(m.id);
+    // 存储视图不变：读取仍原样返回存储事件。
+    const loaded = await rdb(b.ctx).load(m.id);
     expect(loaded.events.at(-1)?.type).toBe("turn/end");
     await b.dispose();
   });
@@ -3017,9 +1694,7 @@ describe("SessionPersistenceSqlite: edge cases", () => {
     db.close();
 
     const b = await backend(path);
-    await expect(b.ctx.sessionPersistence.listSnapshots()).rejects.toThrow(
-      /no valid store identity/,
-    );
+    await expect(rdb(b.ctx).listSnapshots()).rejects.toThrow(/no valid store identity/);
     await expect(b.dispose()).resolves.toBeUndefined();
   });
 
@@ -3030,7 +1705,7 @@ describe("SessionPersistenceSqlite: edge cases", () => {
     await chmod(dir, 0o755);
 
     const b = await backend(path);
-    await b.ctx.sessionPersistence.list();
+    await rdb(b.ctx).list();
 
     expect((await stat(dir)).mode & 0o777).toBe(0o755);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
@@ -3054,8 +1729,7 @@ describe("SessionPersistenceSqlite: edge cases", () => {
     });
     const m = meta("persist-permissions");
 
-    await ctx.sessionPersistence.create(m);
-    await ctx.sessionPersistence.append(m.id, oneTurnLog());
+    await rdb(ctx).createAndAppend(m, oneTurnLog());
 
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     expect((await stat(`${path}-journal`)).mode & 0o777).toBe(0o600);
@@ -3076,7 +1750,7 @@ describe("SessionPersistenceSqlite: edge cases", () => {
       path,
       journalMode: "delete",
     });
-    await ctx.sessionPersistence.list();
+    await rdb(ctx).list();
 
     expect((await stat(path)).mode & 0o777).toBe(0o644);
     await fiber.dispose();
@@ -3085,7 +1759,7 @@ describe("SessionPersistenceSqlite: edge cases", () => {
   it("journalMode config reaches the database (default wal, rollback modes selectable)", async () => {
     const walPath = await freshDbPath();
     const bWal = await backend(walPath);
-    await bWal.ctx.sessionPersistence.create(meta("jm-wal"));
+    await rdb(bWal.ctx).create(meta("jm-wal"));
     const probe = openDatabase(walPath, "wal");
     expect(
       (probe.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
@@ -3102,7 +1776,7 @@ describe("SessionPersistenceSqlite: edge cases", () => {
       path: deletePath,
       journalMode: "delete",
     });
-    await ctx.sessionPersistence.create(meta("jm-delete"));
+    await rdb(ctx).create(meta("jm-delete"));
     const db = openDatabase(deletePath, "delete");
     expect((db.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode).toBe(
       "delete",
@@ -3150,7 +1824,6 @@ describe("surface field round-trip", () => {
       {
         fEventId: "evt-0",
         fSequence: 0,
-        fOriginalSeq: 0,
         fType: "user/message",
         fKind: "message",
         fRole: "user",
@@ -3166,7 +1839,6 @@ describe("surface field round-trip", () => {
       {
         fEventId: "evt-1",
         fSequence: 1,
-        fOriginalSeq: 1,
         fType: "turn/end",
         fKind: "turn",
         fRole: "",
@@ -3216,20 +1888,22 @@ describe("surface field round-trip", () => {
             model: "mock",
           },
         }),
+        stream: [] as const,
       },
-      { surfaceOp: "append", sourceEventSeqs: [2].map((n) => SessionSeq(n)) },
+      { surfaceOp: "append" },
     );
     session.append("step/end", { turn: 1, step: 1 });
     session.append("turn/end", { turn: 1, reason: { kind: "completed" } });
     await ctx.sessions.flush(session);
-    const loaded = await ctx.sessionPersistence.load(SessionId("roundtrip-surface"));
+    const loaded = await rdb(ctx).load(SessionId("roundtrip-surface"));
     expect(loaded.events).toHaveLength(6);
     const um = loaded.events[2]!;
     expect((um as SurfaceEvent).surfaceOp).toBe("append");
     expect((um as SurfaceEvent).sourceEventSeqs).toBeUndefined();
     const am = loaded.events[3]!;
     expect((am as SurfaceEvent).surfaceOp).toBe("append");
-    expect((am as SurfaceEvent).sourceEventSeqs).toEqual([2]);
+    // v2 语义：assistant/message 嵌入 stream，禁止携带 sourceEventSeqs。
+    expect((am as SurfaceEvent).sourceEventSeqs).toBeUndefined();
     await fiber.dispose();
   });
 });

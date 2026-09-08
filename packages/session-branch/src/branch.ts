@@ -28,8 +28,4 @@ export abstract class SessionBranch extends Service {
   ): Promise<SessionPersistenceSnapshot>;
 
   abstract timeline(sessionId: SessionId, signal?: AbortSignal): Promise<BranchTimeline>;
-
-  syncLiveCursor(_sessionId: SessionId): void {
-    // 默认无操作。
-  }
 }

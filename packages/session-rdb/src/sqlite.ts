@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
+import { migrate } from "drizzle-orm/node-sqlite/migrator";
 import type { SessionId } from "@deepseek-ai/dsh-session";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import {
@@ -14,10 +15,7 @@ import {
   type EventRow,
   type SessionRow,
 } from "./backend.ts";
-import { createTablesSql } from "./adapters/index.ts";
-import { sqliteTableDefs } from "./entities/index.ts";
 import { sessionConflictRow, sessionInsertRow } from "./log.ts";
-import { migrateSqliteV1ToV2 } from "./migrate.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   SCHEMA_VERSION,
@@ -30,6 +28,9 @@ import {
 } from "./schema.ts";
 
 type SqliteDb = NodeSQLiteDatabase & { $client: DatabaseSync };
+
+/** drizzle-kit 生成的迁移目录（随包根 drizzle/ 发布；src/dist 形态经相对 URL 统一解析）。 */
+const sqliteMigrationsDir = new URL("../drizzle/sqlite/", import.meta.url).pathname;
 
 const sqliteTxQueues = new Map<string, Promise<void>>();
 
@@ -64,11 +65,59 @@ export function openDatabase(
   const db = new DatabaseSync(path);
   try {
     configureDatabase(db, path, journalMode, busyTimeout);
+    const dbx = drizzle({ client: db });
+    const { user_version: onDisk } = db.prepare("PRAGMA user_version").get() as {
+      user_version: number;
+    };
+    // v2 库（旧版本建表）首次打开：建迁移表并标记 v2 baseline 已应用，
+    // 使 migrate 只执行 v3 diff（删 f_original_seq、建 t_schema_meta）。
+    if (onDisk === 2 && !hasMigrationsTable(db)) {
+      baselineV2(db);
+    }
+    migrate(dbx, { migrationsFolder: sqliteMigrationsDir });
+    // store 身份单例：新库由 migrate 建表后插入；v2/v3 库已有行（no-op）。
+    dbx
+      .insert(tPersistenceState)
+      .values({ fSingleton: 1, fStoreId: randomUUID() })
+      .onConflictDoNothing()
+      .run();
+    if (onDisk === 0 || onDisk === 2) {
+      db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    }
+    // journal_mode 不可绑定，经校验后的联合可直接插值；在归属校验、迁移
+    // 与身份写入全部成功之后应用（失败时保持磁盘原状）。
+    db.exec(`PRAGMA journal_mode = ${journalMode.toUpperCase()}`);
     return db;
   } catch (error: unknown) {
     db.close();
     throw error;
   }
+}
+
+function hasMigrationsTable(db: DatabaseSync): boolean {
+  return (
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__drizzle_migrations'")
+      .get() !== undefined
+  );
+}
+
+/** 标记 v2 baseline 已应用（迁移表 v1 结构：id/hash/created_at/name/applied_at）。 */
+function baselineV2(db: DatabaseSync): void {
+  const dir = readdirSync(sqliteMigrationsDir).find((name) => name.endsWith("_v2_initial"));
+  if (dir === undefined) throw new Error("missing v2 baseline migration in drizzle/sqlite");
+  db.exec(`
+    CREATE TABLE __drizzle_migrations (
+      id INTEGER PRIMARY KEY,
+      hash text NOT NULL,
+      created_at numeric,
+      name text,
+      applied_at TEXT
+    )
+  `);
+  db.prepare(
+    "INSERT INTO __drizzle_migrations (hash, created_at, name, applied_at) VALUES (?, ?, ?, ?)",
+  ).run("baseline", 0, dir, new Date().toISOString());
 }
 
 function configureDatabase(
@@ -99,29 +148,16 @@ function configureDatabase(
           `session database at "${path}" has an unversioned schema or application identity`,
         );
       }
-      if (onDisk === 1) {
-        // 启动时自动迁移 v1 → v2（同一写锁事务内，失败整体回滚）。
-        migrateSqliteV1ToV2(db);
-      } else if (onDisk !== 0 && onDisk !== SCHEMA_VERSION) {
+      if (onDisk !== 0 && onDisk !== 2 && onDisk !== SCHEMA_VERSION) {
         throw new Error(
           `session database at "${path}" has schema version ${onDisk}, incompatible with this build (${SCHEMA_VERSION})`,
         );
       }
-      if (
-        (onDisk === SCHEMA_VERSION || onDisk === 1) &&
-        applicationId !== SESSION_PERSISTENCE_SQLITE_APPLICATION_ID
-      ) {
+      if (onDisk >= 1 && applicationId !== SESSION_PERSISTENCE_SQLITE_APPLICATION_ID) {
         throw new Error(
           `session database at "${path}" has application id ${applicationId}, expected ${SESSION_PERSISTENCE_SQLITE_APPLICATION_ID}`,
         );
       }
-      for (const statement of createTablesSql("sqlite", sqliteTableDefs)) {
-        tx.run(sql.raw(statement));
-      }
-      tx.insert(tPersistenceState)
-        .values({ fSingleton: 1, fStoreId: randomUUID() })
-        .onConflictDoNothing()
-        .run();
       if (onDisk === 0) {
         tx.run(sql.raw(`PRAGMA application_id = ${SESSION_PERSISTENCE_SQLITE_APPLICATION_ID}`));
         tx.run(sql.raw(`PRAGMA user_version = ${SCHEMA_VERSION}`));
@@ -129,9 +165,6 @@ function configureDatabase(
     },
     { behavior: "immediate" },
   );
-  // journal_mode 不可绑定，经校验后的联合可直接插值；在归属校验与初始化
-  // 提交之后应用。
-  db.exec(`PRAGMA journal_mode = ${journalMode.toUpperCase()}`);
 }
 
 export interface SqliteBackendOptions {
@@ -164,6 +197,9 @@ export class SqliteBackend implements Backend {
       this.db = drizzle({
         client: openDatabase(actual, this.options.journalMode, this.options.busyTimeout),
       });
+      // drizzle-kit 迁移：v2 baseline 由旧版本建表（首次打开时标记为已应用），
+      // 本版本只执行 v3 diff（删 f_original_seq、建 t_schema_meta）。
+      migrate(this.db, { migrationsFolder: sqliteMigrationsDir });
     });
     try {
       const row = this.db
@@ -201,14 +237,6 @@ export class SqliteBackend implements Backend {
     return this.db.select().from(tSessions).where(eq(tSessions.fSessionId, id)).get() as
       | SessionRow
       | undefined;
-  }
-
-  async getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number }>> {
-    return this.db
-      .select({ fSequence: tSessionEvents.fSequence, fOriginalSeq: tSessionEvents.fOriginalSeq })
-      .from(tSessionEvents)
-      .where(eq(tSessionEvents.fSessionId, id))
-      .all();
   }
 
   async getEventRows(id: SessionId, fromSequence?: number): Promise<EventRow[]> {
@@ -263,7 +291,6 @@ export class SqliteBackend implements Backend {
     bumpRevision: (id) => this.bumpRevision(id),
     deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(id, fromSequence),
     getPrevBridge: (id, sequence) => this.getPrevBridge(id, sequence),
-    getLastBridge: (id) => this.getLastBridge(id),
   };
 
   // --- row primitives (transaction-internal or standalone) ---
@@ -328,7 +355,6 @@ export class SqliteBackend implements Backend {
       fSessionId: SessionId;
       fEventId: string;
       fSequence: number;
-      fOriginalSeq: number;
       fSurfaceOp: string | null;
     }>,
   ): Promise<void> {
@@ -379,24 +405,11 @@ export class SqliteBackend implements Backend {
       .get() as { fEventId: string; fSequence: number } | undefined;
   }
 
-  private async getLastBridge(
-    id: SessionId,
-  ): Promise<{ fEventId: string; fSequence: number } | undefined> {
-    return this.db
-      .select({ fEventId: tSessionEvents.fEventId, fSequence: tSessionEvents.fSequence })
-      .from(tSessionEvents)
-      .where(eq(tSessionEvents.fSessionId, id))
-      .orderBy(desc(tSessionEvents.fSequence))
-      .limit(1)
-      .get() as { fEventId: string; fSequence: number } | undefined;
-  }
-
   private eventRows() {
     return this.db
       .select({
         fEventId: tSessionEvents.fEventId,
         fSequence: tSessionEvents.fSequence,
-        fOriginalSeq: tSessionEvents.fOriginalSeq,
         fType: tEvents.fType,
         fKind: tEvents.fKind,
         fRole: tEvents.fRole,

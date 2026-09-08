@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
-import { SessionLogOffset, decodeSeqRanges, decodeStorageRecord } from "@deepseek-ai/dsh-session";
-import type { Session, SessionEvent, SessionId } from "@deepseek-ai/dsh-session";
+import { SESSION_FORMAT_VERSION, SessionLogOffset } from "@deepseek-ai/dsh-session";
+import type { Session, SessionEvent, SessionId, SessionHeader } from "@deepseek-ai/dsh-session";
+import { sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import { unzipSync } from "fflate";
 import { replaceLiveSessionLog } from "./branch.ts";
@@ -13,21 +14,6 @@ export const SESSION_IMPORT_PATH = "/api/session.import";
 
 const MAX_IMPORT_ZIP_BYTES = 64 * 1024 * 1024;
 
-export function expandProvenanceFromStorage(parsed: unknown): unknown {
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new TypeError("imported session records must be objects");
-  }
-  const record = parsed as { seq?: unknown; sourceEventSeqs?: unknown };
-  if (record.sourceEventSeqs === undefined) return parsed;
-  if (!Number.isSafeInteger(record.seq) || (record.seq as number) < 0) {
-    throw new TypeError("imported session event seq must be a non-negative safe integer");
-  }
-  return {
-    ...record,
-    sourceEventSeqs: decodeSeqRanges(record.sourceEventSeqs, (record.seq as number) + 1),
-  };
-}
-
 export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
   events: SessionEvent[];
 } {
@@ -35,31 +21,24 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
   if (lines.length === 0 || lines[0] === "") {
     throw new Error("imported session log is empty");
   }
-  let header: Record<string, unknown> | undefined;
+  let header: unknown;
   try {
-    header = JSON.parse(lines[0] as string) as Record<string, unknown>;
+    header = JSON.parse(lines[0] as string) as unknown;
   } catch {
     throw new Error("imported session log has an unparsable header line");
   }
-  if (
-    typeof header !== "object" ||
-    header === null ||
-    header["type"] !== "session" ||
-    typeof header["id"] !== "string" ||
-    typeof header["version"] !== "number" ||
-    !Number.isSafeInteger(header["createdAt"] as number) ||
-    (header["createdAt"] as number) < 0
-  ) {
-    throw new Error("imported session log has an invalid header line");
+  // 经 format catalog 恢复：v2 直接解码，历史版本走迁移链。
+  let restore: ReturnType<typeof sessionFormatCatalog.createRestore>;
+  try {
+    restore = sessionFormatCatalog.createRestore(header, {
+      recovery: "strict",
+      validation: "transformed",
+    });
+  } catch (error: unknown) {
+    throw new Error(
+      `imported session log has an invalid header line: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  const seedLength = header["seedLength"];
-  if (
-    seedLength !== undefined &&
-    (!Number.isSafeInteger(seedLength) || (seedLength as number) < 0)
-  ) {
-    throw new Error("imported session log has an invalid seedLength");
-  }
-  const events: SessionEvent[] = [];
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
     if (line === undefined || line === "") continue;
@@ -69,10 +48,28 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
     } catch {
       throw new Error(`imported session log has an unparsable event line at ${i}`);
     }
-    for (const event of decodeStorageRecord(expandProvenanceFromStorage(parsed))) {
-      events.push(event);
+    try {
+      restore.decodeRow(parsed);
+    } catch (error: unknown) {
+      throw new Error(
+        `imported session log has an invalid event line at ${i}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
+  let artifact: { header: unknown; inheritedEventCount: number; events: readonly unknown[] };
+  try {
+    artifact = restore.finish() as unknown as {
+      header: unknown;
+      inheritedEventCount: number;
+      events: readonly unknown[];
+    };
+  } catch (error: unknown) {
+    throw new Error(
+      `imported session log is incomplete: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const meta = artifact.header as SessionHeader;
+  const events = artifact.events as SessionEvent[];
   // 连续性校验：导入的 log 必须是从 0 开始的稠密 seq（落库前的最后一道闸）。
   for (let i = 0; i < events.length; i++) {
     if (events[i]!.seq !== i) {
@@ -81,26 +78,20 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
       );
     }
   }
-  const origin = header["origin"];
-  const delegationDepth = header["delegationDepth"];
   // 继承前缀长度不得超过事件总数（上游 load 判损坏）；导出已收缩，此处
   // 防御性收缩非自洽的 artifact。
-  const inheritedEventCount = Math.min((seedLength as number | undefined) ?? 0, events.length);
+  const inheritedEventCount = Math.min(artifact.inheritedEventCount, events.length);
   return {
     meta: {
-      version: header["version"] as number,
-      id: header["id"] as SessionId,
-      createdAt: header["createdAt"] as number,
-      ...(typeof header["cwd"] === "string" ? { cwd: header["cwd"] } : {}),
-      ...(typeof header["parentSession"] === "string"
-        ? { parentSession: header["parentSession"] as SessionId }
-        : {}),
-      isSeeded: seedLength !== undefined,
-      ...(origin === "subagent" ? { origin: origin as "subagent" } : {}),
-      ...(Number.isSafeInteger(delegationDepth as number) && (delegationDepth as number) > 0
-        ? { delegationDepth: delegationDepth as number }
-        : {}),
-      ...(typeof header["agentPreset"] === "string" ? { agentPreset: header["agentPreset"] } : {}),
+      version: SESSION_FORMAT_VERSION,
+      id: meta.id,
+      createdAt: meta.createdAt,
+      ...(meta.cwd === undefined ? {} : { cwd: meta.cwd }),
+      ...(meta.parentSession === undefined ? {} : { parentSession: meta.parentSession }),
+      isSeeded: meta.isSeeded,
+      ...(meta.origin === undefined ? {} : { origin: meta.origin }),
+      ...(meta.delegationDepth === undefined ? {} : { delegationDepth: meta.delegationDepth }),
+      ...(meta.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset }),
     },
     inheritedEventCount: SessionLogOffset(inheritedEventCount),
     events,
@@ -136,10 +127,27 @@ export async function persistImport(
       throw new Error("sessionBranch service is unavailable");
     }
     await branch.rewind(targetId, -1);
+    // rewind 截断后追加导入事件（覆盖语义）。live 会话的 write handle 由
+    // live 路由持有——复用而非 open（open 会撞 SessionAlreadyOwnedError）。
+    const liveHandle = persistence.tracker.writerOf(targetId);
+    if (liveHandle !== undefined) {
+      if (imported.events.length > 0) await liveHandle.append(imported.events);
+    } else {
+      const handle = await persistence.open(targetId, "write");
+      try {
+        if (imported.events.length > 0) await handle.append(imported.events);
+      } finally {
+        await handle.close();
+      }
+    }
   } else {
-    await persistence.create({ ...imported.meta, id }, imported.inheritedEventCount);
+    const handle = await persistence.create(
+      { ...imported.meta, id },
+      { inheritedEventCount: imported.inheritedEventCount },
+    );
+    if (imported.events.length > 0) await handle.append(imported.events);
+    await handle.close();
   }
-  if (imported.events.length > 0) await persistence.append(id, imported.events);
   // 覆盖语义的 live 同步：rewind 截断的 live log 由同一批导入事件补回
   // （不发布、不落库），使 observeSession 的 live 快照与 DB 一致。
   if (targetId !== undefined) {

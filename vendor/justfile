@@ -1,21 +1,10 @@
-# vendor 同步与构建：脚本由 dsh-side-workspace-plugin-develop skill 提供，tsx 执行
-# （tsx 由 mise 托管：npm:tsx，见 mise.toml——勿用 pnpm exec，会触发隐式
-# install 下载已裁剪依赖）。
-# 约定 env（mise.toml）：DEEPSEEK_HARNESS_DIR / DEEPSEEK_HARNESS_VERSION /
-# DEEPSEEK_HARNESS_EXCLUDE。
-# 用法：just vendor sync && just vendor patch && just vendor build
-# （prepare 聚合三步）。
-
 sync:
-    @tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/sync.ts') }}
+    tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/sync.ts') }}
 
 patch:
-    @tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/patch.ts') }}
+    tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/patch.ts') }}
 
 build:
-    @tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/build.ts') }}
+    tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/build.ts') }}
 
-prepare:
-    @just sync
-    @just patch
-    @just build
+prepare: sync patch build

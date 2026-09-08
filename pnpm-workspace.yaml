@@ -17,8 +17,8 @@ allowBuilds:
   "@deepseek-ai/dsh-subprocess-local@file:vendor/deepseek-harness/packages/subprocess/subprocess-local": true
   "@google/genai": true
   esbuild: true
+  fs-ext: true
   koffi: true
-  lefthook: true
   node-pty: true
   protobufjs: true
 

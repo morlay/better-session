@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import type { InjectFace } from "@deepseek-ai/dsh-client-ui-slots";
 import { Button, Modal } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { UserMessageNode } from "@deepseek-ai/dsh-client-ui-chat/client";
-import { JsonBlock, MessageText } from "@deepseek-ai/dsh-client-ui-primitives";
+import { JsonBlock } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { ChatNodeViewProps, ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-chat/client";
 import type { RenderMessageImages } from "@deepseek-ai/dsh-client-ui-conversation/client";
 import { MessageIconActions } from "./MessageIconActions.tsx";
@@ -45,8 +45,7 @@ function projectUserText(text: string): ReactNode {
   while ((m = re.exec(text)) !== null) {
     const tokenStart = m.index + (m[1]?.length ?? 0);
     const label = m[2] ?? "";
-    if (tokenStart > cursor)
-      parts.push(<MessageText key={cursor} text={text.slice(cursor, tokenStart)} />);
+    if (tokenStart > cursor) parts.push(<span key={cursor}>{text.slice(cursor, tokenStart)}</span>);
     parts.push(
       <span
         key={tokenStart}
@@ -58,8 +57,8 @@ function projectUserText(text: string): ReactNode {
     );
     cursor = tokenStart + label.length;
   }
-  if (parts.length === 0) return <MessageText text={text} />;
-  if (cursor < text.length) parts.push(<MessageText key={cursor} text={text.slice(cursor)} />);
+  if (parts.length === 0) return <span>{text}</span>;
+  if (cursor < text.length) parts.push(<span key={cursor}>{text.slice(cursor)}</span>);
   return <>{parts}</>;
 }
 

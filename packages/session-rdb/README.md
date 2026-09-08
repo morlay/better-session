@@ -1,9 +1,9 @@
 # @morlay/session-rdb
 
-RDB（SQLite / PostgreSQL）持久会话后端（`ctx.sessionPersistence`）：通过 drizzle
-实现 `PersistenceBackend<number>`，复用上游 `PersistenceCoordinator` 与契约测试套件，
-支持配置选择 SQLite 或 PostgreSQL 后端。设计细节（表结构、delta 过滤、并发写、
-方言差异、仓库结构）见 [docs/design.md](docs/design.md)。
+RDB（SQLite / PostgreSQL）持久会话后端（`ctx.sessionPersistence`）：实现上游
+`SessionHandle` 模型（`create`/`open`/`flush`/`stat`/`list`），支持配置选择
+SQLite 或 PostgreSQL 后端。设计细节（表结构、原样存储、并发写、方言差异、
+仓库结构）见 [docs/design.md](docs/design.md)。
 
 ## 配置
 
@@ -59,18 +59,16 @@ type Config =
 provider 抽象并**随插件自动注册 `ctx.sessionBranch`**（`SessionBranchRdb`），
 在不修改上游代码的前提下提供 `rewind / retry / fork` 的持久化闭环：
 
-- **`forkFrom`**：走标准 coordinator 路径（`create` + `append`）从闭合边界
+- **`forkFrom`**：走标准 handle 路径（`create` + `append`）从闭合边界
   派生新会话（纯 append，`parentSession` / `seedLength` lineage）；
 - **`rewind`**：直接操作后端事务截断到闭合边界（DELETE 尾部 + head 回退 +
-  revision bump），随后重新 `load` 同步 coordinator 状态，并更新并发写
-  检测 head；**支持 live 会话**（`ctx.sessions` 有 owner 时同样就地工作：
-  先 flush write-behind 缓冲 → 截断 RDB → 截断 live 内存 log 并复位
-  surface/header/context/derived 派生缓存 → 重置 agent 请求头标记 →
-  同步 coordinator cursor；不调用 `load`——live 时 load 会先 flush 撤销
-  截断）；
+  revision bump），并更新并发写检测 head；**支持 live 会话**（`ctx.sessions`
+  有 owner 时同样就地工作：先 flush write-behind 缓冲 → 截断 RDB → 截断
+  live 内存 log 并复位 surface/header/context/derived 派生缓存 → 重置 agent
+  请求头标记 → 对齐 handle cursor；不调用 `load`——live 时 load 会先 flush
+  撤销截断）；
 - **`timeline`**：`parentSession` + `seedLength` 版本树投影（live 会话含
-  版本效果；cold 会话因版本事件携带 `ignorable` 不进 canonical log 而只有
-  lineage 骨架）。
+  版本效果；cold 会话版本事件原样落库，效果详情可恢复）。
 
 上层编排（edit / reroll / retry / rewind / fork 完整功能）由
 `@morlay/ui-conversation-message-actions` 提供，或直接在 `ctx.sessionBranch` /

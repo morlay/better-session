@@ -1,3 +1,4 @@
+import SessionPersistenceSqlite from "@morlay/session-rdb";
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import {
@@ -11,6 +12,11 @@ import {
   type SessionEvent,
 } from "@morlay/ui-conversation-message-actions/testing";
 
+/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
+function rdb(ctx: import("@deepseek-ai/cordis").Context): SessionPersistenceSqlite {
+  return ctx.sessionPersistence as SessionPersistenceSqlite;
+}
+
 const dirs: string[] = [];
 afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
@@ -22,7 +28,7 @@ describe("SessionEditor rewind / fork / timeline", () => {
     try {
       await createPersisted(ctx, "src", twoTurnLog());
       await editor.rewind(SessionIdBrand("src"), 5);
-      const after = await ctx.sessionPersistence.load(SessionIdBrand("src"));
+      const after = await rdb(ctx).load(SessionIdBrand("src"));
       expect(after.events).toHaveLength(6);
       expect(after.events.at(-1)?.type).toBe("turn/end");
       // 续写（coordinator 状态已同步）。
@@ -35,8 +41,8 @@ describe("SessionEditor rewind / fork / timeline", () => {
             data: { ...event.data, turn: 2 },
           }) as SessionEvent,
       );
-      await ctx.sessionPersistence.append(SessionIdBrand("src"), continuation);
-      expect(await ctx.sessionPersistence.load(SessionIdBrand("src"))).toMatchObject({});
+      await rdb(ctx).append(SessionIdBrand("src"), continuation);
+      expect(await rdb(ctx).load(SessionIdBrand("src"))).toMatchObject({});
     } finally {
       await dispose();
     }
@@ -137,7 +143,7 @@ describe("SessionEditor rewind / fork / timeline", () => {
       await createPersisted(ctx, "src", twoTurnLog());
       const childId = await editor.fork(SessionIdBrand("src"), 6, SessionIdBrand("child"));
       expect(childId).toBe(SessionIdBrand("child"));
-      const child = await ctx.sessionPersistence.load(childId);
+      const child = await rdb(ctx).load(childId);
       expect(child.meta.parentSession).toBe(SessionIdBrand("src"));
       expect(child.events).toHaveLength(12); // after 模式：包含轮 2
     } finally {

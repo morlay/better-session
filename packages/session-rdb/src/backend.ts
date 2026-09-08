@@ -37,8 +37,6 @@ export interface EventRow {
 
   fSequence: number;
 
-  fOriginalSeq: number;
-
   fType: string;
 
   fKind: string;
@@ -72,7 +70,6 @@ export interface BackendTx {
       fSessionId: SessionId;
       fEventId: string;
       fSequence: number;
-      fOriginalSeq: number;
       fSurfaceOp: string | null;
     }>,
   ): Promise<void>;
@@ -87,8 +84,6 @@ export interface BackendTx {
     id: SessionId,
     sequence: number,
   ): Promise<{ fEventId: string; fSequence: number } | undefined>;
-
-  getLastBridge(id: SessionId): Promise<{ fEventId: string; fSequence: number } | undefined>;
 }
 
 export interface Backend {
@@ -99,8 +94,6 @@ export interface Backend {
   open(): Promise<void>;
 
   getSession(id: SessionId): Promise<SessionRow | undefined>;
-
-  getSeqMapRows(id: SessionId): Promise<Array<{ fSequence: number; fOriginalSeq: number }>>;
 
   getEventRows(id: SessionId, fromSequence?: number): Promise<EventRow[]>;
 

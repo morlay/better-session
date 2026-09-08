@@ -1,5 +1,6 @@
 import {
   SESSION_FORMAT_VERSION,
+  SessionLogOffset,
   type Session,
   type SessionEvent,
   type SessionHeader,
@@ -19,7 +20,6 @@ import {
 import { randomUUID } from "node:crypto";
 import type { SessionPersistenceRdb } from "./index.ts";
 import { rowToMeta } from "./log.ts";
-import { isPersistedEvent } from "./schema.ts";
 
 export function locateTurnEnd(
   events: readonly SessionEvent[],
@@ -66,12 +66,6 @@ export interface LiveSessionHooks {
   getAgent(id: SessionId): LiveAgentLike | undefined;
 
   flush(session: Session): Promise<boolean>;
-
-  setCoordinatorCursor(id: SessionId, cursor: number): void;
-
-  setCoordinatorState(id: SessionId, cursor: number, meta: SessionHeader): void;
-
-  setCoordinatorSeedLength(id: SessionId, seedLength: number): void;
 }
 
 export interface LiveAgentLike {
@@ -155,9 +149,6 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       getSession: () => undefined,
       getAgent: () => undefined,
       flush: async () => true,
-      setCoordinatorCursor: () => {},
-      setCoordinatorState: () => {},
-      setCoordinatorSeedLength: () => {},
     },
   ) {}
 
@@ -176,7 +167,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     id: SessionId,
     signal?: AbortSignal,
   ): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }> {
-    const stored = await this.persistence.loadStored(id, signal);
+    const stored = await this.persistence.readLog(id, {}, signal);
     if (stored === undefined)
       throw new SessionBranchError(`session "${id}" not found`, "SESSION_NOT_FOUND");
     return { meta: stored.meta, events: stored.events };
@@ -189,7 +180,9 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
   ): Promise<SessionId> {
     signal?.throwIfAborted();
     const { atSeq, anchorMode = "after", seedSuffix = [], childSessionId, meta = {} } = options;
-    const source = await this.persistence.inspect(sourceId, signal);
+    const source = await this.persistence.readLog(sourceId, {}, signal);
+    if (source === undefined)
+      throw new SessionBranchError(`session "${sourceId}" not found`, "SESSION_NOT_FOUND");
     const boundary = locateTurnEnd(source.events, atSeq, anchorMode);
     const prefix = source.events.slice(0, boundary + 1);
     const childId = childSessionId ?? mintSessionId();
@@ -213,20 +206,26 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
     };
     const seed = [...renumber(prefix, 0), ...renumber(seedSuffix, prefix.length)];
-    // 事件行复用：前缀事件（上游 seq → 源会话已存在事件行 id）注册到写路径，
+    // 事件行复用：前缀事件（稠密 seq → 源会话已存在事件行 id）注册到写路径，
     // appendBatch 消费时复用事件行、不复制。seedSuffix 的 manualTurn 事件是
     // 新事件（无源行），不注册。
     const internals = this.persistence.internals();
     const sourceRows = await internals.backend.getEventRows(sourceId);
-    const sourceEventIds = new Map(sourceRows.map((row) => [row.fOriginalSeq, row.fEventId]));
+    const sourceEventIds = new Map(sourceRows.map((row) => [row.fSequence, row.fEventId]));
     const reuse = new Map<number, string>();
     for (const event of prefix) {
       const eventId = sourceEventIds.get(event.seq);
       if (eventId !== undefined) reuse.set(event.seq, eventId);
     }
     internals.registerReuseEventIds(childId, reuse);
-    await this.persistence.create(childMeta, prefix.length);
-    if (seed.length > 0) await this.persistence.append(childId, seed);
+    const handle = await this.persistence.create(childMeta, {
+      inheritedEventCount: SessionLogOffset(prefix.length),
+    });
+    try {
+      if (seed.length > 0) await handle.append(seed);
+    } finally {
+      await handle.close();
+    }
     return childId;
   }
 
@@ -245,11 +244,12 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     const live = this.live.getSession(id);
     // live 会话先落盘 write-behind 缓冲，保证后续读取与后端事务同视图。
     if (live !== undefined) await this.live.flush(live);
-    // 边界校验用原始事件（loadStored，不补 closers）——inspect 会给未闭合
+    // 边界校验用原始事件（readLog，不补 closers）——inspect 会给未闭合
     // log 补合成 closers，把 user/message 边界掩盖成 turn/end，丢失 exclusive
     // 语义。
     const raw = live === undefined ? await this.readRawEvents(id, signal) : undefined;
-    const inspection = live === undefined ? undefined : await this.persistence.inspect(id, signal);
+    const inspection =
+      live === undefined ? undefined : await this.persistence.internals().inspect(id, signal);
     const events = live === undefined ? raw!.events : inspection!.events;
     const meta = live === undefined ? raw!.meta : inspection!.meta;
     const boundaryEvent = events[toBoundary];
@@ -273,12 +273,9 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     const keepLength = balanceRewindPrefix(events.slice(0, rawKeepLength)).length;
 
     const internals = this.persistence.internals();
-    // live 视图是上游 seq（含被过滤的 delta），RDB head 是稠密 seq——live
-    // 边界须换算为前缀中 persisted 事件数 - 1；cold 视图本身已是稠密 seq。
-    const denseBoundary =
-      live === undefined
-        ? keepLength - 1
-        : events.slice(0, keepLength).filter(isPersistedEvent).length - 1;
+    // 原样存储（无过滤）：live 视图与 RDB head 同空间（上游 seq），
+    // 边界即保留前缀长度 - 1。
+    const denseBoundary = keepLength - 1;
     const newSeedLength = await internals.backend.transaction(async (tx) => {
       signal?.throwIfAborted();
       const head = await tx.getHead(id);
@@ -308,17 +305,12 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       await tx.bumpRevision(id);
       return shrunk;
     });
-    // 同步 coordinator 的 storage.inheritedEventCount——DB 已收缩而内存不
-    // 收缩的话，下一次 append 的 upsert 会把旧值覆盖回去。
-    if (newSeedLength !== null) {
-      this.live.setCoordinatorSeedLength(id, newSeedLength);
-    }
 
     // 更新确认 head（下一次 append 的并发校验基准），与 appendBatch 同语义。
     internals.writeGuard.confirmHead(id, denseBoundary);
 
     if (live !== undefined) {
-      // live 分支：截断内存 log 并重置派生缓存；同步 coordinator cursor 与
+      // live 分支：截断内存 log 并重置派生缓存；同步 handle cursor 与
       // agent 轮次游标。不调用 load——live 时 load 会先 flush 把旧内存写回，
       // 撤销本次截断。
       truncateLiveSession(live, keepLength);
@@ -331,14 +323,12 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
         const phase = (agent as unknown as { phase?: { lastTurn?: number } }).phase;
         if (phase !== undefined) phase.lastTurn = lastTurn;
       }
-      this.live.setCoordinatorCursor(id, keepLength);
-    } else {
-      // cold 分支：user/message 边界直接同步 ownerless states 条目（load 会
-      // 补 closers 撤销截断语义）；turn/end 边界经 load 重新 adopt。
-      if (boundaryEvent?.type === "user/message") {
-        this.live.setCoordinatorState(id, keepLength, meta);
-      } else {
-        await this.persistence.load(id);
+      // DB 已截断：同步 live write handle 的 cursor 与继承前缀，使下一次
+      // append 从截断后的位置续接。handle cursor 是**上游空间**（live 内存
+      // log 截断后的长度，与 drainBuffered 的过滤/contiguity 校验同空间）。
+      const handle = this.persistence.tracker.writerOf(id);
+      if (handle !== undefined) {
+        handle.resetAfterRewind(keepLength, newSeedLength === null ? undefined : newSeedLength);
       }
     }
 
@@ -385,57 +375,6 @@ export class SessionBranchRdb extends SessionBranch {
         return agents?.get(id);
       },
       flush: (session) => this.ctx.sessions.flush(session),
-      setCoordinatorCursor: (id, cursor) => {
-        // states 是私有 Map；保留条目（owner 不能丢），仅对齐 cursor 到新尾部。
-        const persistence = this.ctx.sessionPersistence as unknown as {
-          coordinator?: {
-            states?: Map<SessionId, { cursor: number } | undefined>;
-          };
-        };
-        const state = persistence.coordinator?.states?.get(id);
-        if (state !== undefined) state.cursor = cursor;
-      },
-      setCoordinatorState: (id, cursor, meta) => {
-        // states 条目可能不存在（会话从未被 adopt）；存在则仅对齐 cursor，
-        // 不存在则创建 ownerless 条目，使下一次 append 走标准路径而非 adopt
-        // （adopt 会经 prepareCore 补 closers 撤销截断）。
-        const persistence = this.ctx.sessionPersistence as unknown as {
-          coordinator?: {
-            states?: Map<
-              SessionId,
-              { cursor: number; meta: SessionHeader; materialized: boolean } | undefined
-            >;
-          };
-        };
-        const states = persistence.coordinator?.states;
-        if (states === undefined) return;
-        const state = states.get(id);
-        if (state !== undefined) {
-          state.cursor = cursor;
-        } else {
-          states.set(id, { meta, cursor, materialized: true });
-        }
-      },
-      setCoordinatorSeedLength: (id, seedLength) => {
-        // 收缩 storage.inheritedEventCount，与 DB 事务内的收缩保持一致——
-        // 不同步的话下一次 append 的 upsert 会把旧值覆盖回去。storage 对象
-        // 可能被冻结，整体替换 state.storage 而非改字段。
-        const persistence = this.ctx.sessionPersistence as unknown as {
-          coordinator?: {
-            states?: Map<
-              SessionId,
-              | {
-                  storage?: { meta: SessionHeader; inheritedEventCount: number };
-                }
-              | undefined
-            >;
-          };
-        };
-        const state = persistence.coordinator?.states?.get(id);
-        if (state?.storage !== undefined && state.storage.inheritedEventCount > seedLength) {
-          state.storage = { ...state.storage, inheritedEventCount: seedLength };
-        }
-      },
     },
   );
 
@@ -471,26 +410,6 @@ export class SessionBranchRdb extends SessionBranch {
     return this.provider.rewind(id, toBoundary, signal);
   }
 
-  syncLiveCursor(sessionId: SessionId): void {
-    const live = this.ctx.sessions.get(sessionId);
-    if (live === undefined) return;
-    const persistence = this.ctx.sessionPersistence as unknown as {
-      coordinator?: {
-        states?: Map<SessionId, { cursor: number } | undefined>;
-      };
-    };
-    const state = persistence.coordinator?.states?.get(sessionId);
-    if (state === undefined) return;
-    let cursor = state.cursor;
-    // ignorable 是下游信封扩展（上游 SessionEvent 无此字段），结构化读取。
-    while (
-      (live.snapshotEvents()[cursor] as (SessionEvent & { ignorable?: unknown }) | undefined)
-        ?.ignorable === true
-    )
-      cursor += 1;
-    state.cursor = cursor;
-  }
-
   async timeline(sessionId: SessionId, signal?: AbortSignal) {
     const persistence = this.ctx.sessionPersistence as SessionPersistenceRdb;
     const snapshots = await persistence.listSnapshots(signal);
@@ -499,7 +418,7 @@ export class SessionBranchRdb extends SessionBranch {
     const readOwnEvents = async (id: SessionId, fromSeq: number, s?: AbortSignal) => {
       const live = this.ctx.sessions.get(id);
       if (live !== undefined) return live.snapshotEvents().slice(fromSeq);
-      return (await persistence.readFrom(id, fromSeq, s)).events;
+      return (await persistence.internals().readFrom(id, fromSeq, s)).events;
     };
     return buildTimeline(snapshots, readOwnEvents, sessionId, signal);
   }

@@ -37,9 +37,9 @@ export function defineCordisPluginConfig(options?: {
   };
 
   const client: CordisClientOptions | undefined =
-    options?.client === false || !hasClientSource && options?.client === undefined
+    options?.client === false || (!hasClientSource && options?.client === undefined)
       ? undefined
-      : options?.client ?? { name: packageName(), entry: "src/client/index.ts" };
+      : (options?.client ?? { name: packageName(), entry: "src/client/index.ts" });
 
   return client === undefined ? host : [host, defineCordisClientConfig(client)];
 }

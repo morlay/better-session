@@ -298,7 +298,10 @@ export function retryPlan(operation: RetryOperation, turns: readonly ClosedTurn[
   };
 }
 
-export function rerollPlan(operation: RerollOperation, turns: readonly ClosedTurn[]): OperationPlan {
+export function rerollPlan(
+  operation: RerollOperation,
+  turns: readonly ClosedTurn[],
+): OperationPlan {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
     // 未闭合轮次无已落定的助手回复可重生成。

@@ -30,8 +30,7 @@ if (!version && !revision) {
 
 const dir = resolve(root, dirValue);
 const repo =
-  process.env.DEEPSEEK_HARNESS_REPO ??
-  "https://github.com/deepseek-ai/deepseek-harness.git";
+  process.env.DEEPSEEK_HARNESS_REPO ?? "https://github.com/deepseek-ai/deepseek-harness.git";
 const tag = version ? `dsh-v${version}` : undefined;
 const branch = version ? `dsh-v${version}` : undefined;
 const branchName = `sync/${revision ?? tag ?? "unknown"}`;

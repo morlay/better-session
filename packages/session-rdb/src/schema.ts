@@ -2,11 +2,9 @@ import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { toSqliteSchema } from "./adapters/index.ts";
 import { sqliteTableDefs } from "./entities/index.ts";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SESSION_PERSISTENCE_SQLITE_APPLICATION_ID = 0x44534850;
-
-export const EPHEMERAL_EVENT_TYPES = ["assistant/chunk"] as const;
 
 export const EVENT_ENCODING = "json";
 
@@ -14,6 +12,8 @@ export const EVENT_ENCODING = "json";
 const sqliteTables: Record<string, any> = toSqliteSchema(sqliteTableDefs);
 
 export const tPersistenceState = sqliteTables["t_persistence_state"]!;
+
+export const tSchemaMeta = sqliteTables["t_schema_meta"]!;
 
 export const tSessions = sqliteTables["t_sessions"]!;
 
@@ -28,17 +28,6 @@ export type { EventRow } from "./backend.ts";
 export type JournalMode = "wal" | "delete" | "truncate" | "persist";
 
 export const DEFAULT_BUSY_TIMEOUT_MS = 5000;
-
-export function isEphemeralType(type: string): boolean {
-  return (EPHEMERAL_EVENT_TYPES as readonly string[]).includes(type);
-}
-
-export function isPersistedEvent(event: SessionEvent): boolean {
-  return (
-    !isEphemeralType(event.type) &&
-    (event as SessionEvent & { ignorable?: unknown }).ignorable !== true
-  );
-}
 
 export type EventKind =
   | "message"

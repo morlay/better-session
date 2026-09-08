@@ -25,8 +25,7 @@ const patchesRoot = process.env.DEEPSEEK_HARNESS_PATCHES
   : join(root, "patches");
 const stepsPath = process.env.DEEPSEEK_HARNESS_STEPS ?? join(patchesRoot, "steps.json");
 const exclude =
-  process.env.DEEPSEEK_HARNESS_EXCLUDE
-    ?.split(",")
+  process.env.DEEPSEEK_HARNESS_EXCLUDE?.split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0) ?? [];
 
@@ -64,10 +63,7 @@ for (const target of exclude) {
   }
   // 从全部 tsconfig*.json 移除引用该目录的 path 行（形如 { "path": "./packages/..." }）
   const esc = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const ref = new RegExp(
-    `^\\s*\\{?\\s*"path":\\s*"[^"]*${esc}"\\s*,?\\s*\\}?\\s*,?$`,
-    "m",
-  );
+  const ref = new RegExp(`^\\s*\\{?\\s*"path":\\s*"[^"]*${esc}"\\s*,?\\s*\\}?\\s*,?$`, "m");
   for (const file of tsconfigFiles()) {
     const content = readFileSync(file, "utf8");
     const next = content.replace(ref, "");

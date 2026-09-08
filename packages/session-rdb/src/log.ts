@@ -1,5 +1,6 @@
 import type { SessionEvent, SessionHeader, SessionId, SurfaceOp } from "@deepseek-ai/dsh-session";
-import { SessionSeq, encodeSeqRanges, packChunkRuns } from "@deepseek-ai/dsh-session";
+import type { SessionFormatEvent, SessionFormatHeader } from "@deepseek-ai/dsh-session-format";
+import { sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import type { EventRow, SessionRow } from "./backend.ts";
 
@@ -8,7 +9,7 @@ export function rowToMeta(row: SessionRow): SessionHeader {
     throw new Error("stored session createdAt must be a non-negative safe integer");
   }
   return {
-    version: row.fVersion,
+    version: row.fVersion as SessionHeader["version"],
     id: row.fSessionId as SessionId,
     createdAt: row.fCreatedAt,
     ...(row.fCwd !== null ? { cwd: row.fCwd } : {}),
@@ -74,75 +75,36 @@ export function sessionConflictRow(storage: SessionStorageMetadata): {
   };
 }
 
-export function remapSurfaceOp(op: SurfaceOp, remap: (seq: number) => number): SurfaceOp {
-  if (op === "append") return op;
-  return {
-    op: "replace",
-    start: SessionSeq(remap(op.start)),
-    end: SessionSeq(remap(op.end)),
-  };
-}
-
-export function remapShadowedRange(
-  range: { start: number; end: number },
-  remap: (seq: number) => number,
-): { start: number; end: number } {
-  return { start: remap(range.start), end: remap(range.end) };
-}
-
-export function remapShadowedSeqs(
-  seqs: readonly number[],
-  seqMap: ReadonlyMap<number, number>,
-): number[] {
-  // 未持久化的引用（分支裁剪等）直接丢弃：恒等回退会留下陈旧的上游 seq，
-  // 稠密坐标通常被压缩，它可能大于 replace 事件的稠密 seq，上游
-  // assertProvenance 会以 "must reference earlier events" 拒绝整个会话。
-  return seqs.flatMap((seq) => {
-    const dense = seqMap.get(seq);
-    return dense === undefined ? [] : [dense];
-  });
-}
-
-export function rowToEvent(row: EventRow, seqMap: ReadonlyMap<number, number>): SessionEvent {
-  const remap = (seq: number): number => seqMap.get(seq) ?? seq;
-  const surfaceOp =
-    row.fSurfaceOp !== null
-      ? remapSurfaceOp(JSON.parse(row.fSurfaceOp) as SurfaceOp, remap)
-      : undefined;
-  const data = JSON.parse(row.fData) as SessionEvent["data"];
-  // compaction 事件的 shadowedRange / shadowedSeqs 是插件合并字段，经结构化
-  // 视图重映射到稠密坐标。shadowedSeqs 是权威的被遮蔽节点列表（range 只是
-  // 首尾边界对，压缩竞态下可能漏掉并发落地的节点），replace 的 provenance
-  // 重计算依赖它，必须与 range 同空间。
-  if (row.fType === "compaction/summary" || row.fType === "compaction/prune") {
-    const metering = data as unknown as {
-      shadowedRange?: { start: number; end: number };
-      shadowedSeqs?: number[];
-    };
-    if (metering.shadowedRange !== undefined) {
-      metering.shadowedRange = remapShadowedRange(metering.shadowedRange, remap);
-    }
-    if (metering.shadowedSeqs !== undefined) {
-      metering.shadowedSeqs = remapShadowedSeqs(metering.shadowedSeqs, seqMap);
-    }
+export function rowToEvent(row: EventRow): SessionEvent {
+  const surfaceOp = row.fSurfaceOp !== null ? (JSON.parse(row.fSurfaceOp) as SurfaceOp) : undefined;
+  const record = JSON.parse(row.fData) as unknown;
+  // fData 形状判别：新写入的完整事件（含 ignorable 信封，与 JSONL 每行
+  // 同构）vs 旧 v2 库的纯 data 部分。完整事件必有 type/seq/time/data 四键。
+  const full =
+    typeof record === "object" &&
+    record !== null &&
+    !Array.isArray(record) &&
+    typeof (record as Record<string, unknown>)["type"] === "string" &&
+    typeof (record as Record<string, unknown>)["seq"] === "number" &&
+    typeof (record as Record<string, unknown>)["time"] === "number" &&
+    "data" in (record as Record<string, unknown>);
+  if (full) {
+    // seq/time 以桥接行/事件列为权威（rewind 截断后仍稠密连续）；
+    // surfaceOp 走桥接行列，sourceEventSeqs 不落库（读取时重计算）。
+    return {
+      ...(record as SessionEvent),
+      seq: row.fSequence,
+      time: row.fCreatedAt,
+      ...(surfaceOp === undefined ? {} : { surfaceOp }),
+    } as SessionEvent;
   }
   return {
     type: row.fType as SessionEvent["type"],
     seq: row.fSequence,
     time: row.fCreatedAt,
-    data,
+    data: record as SessionEvent["data"],
     ...(surfaceOp === undefined ? {} : { surfaceOp }),
   } as SessionEvent;
-}
-
-export function buildSeqMap(
-  rows: readonly Pick<EventRow, "fSequence" | "fOriginalSeq">[],
-): Map<number, number> {
-  const map = new Map<number, number>();
-  for (const row of rows) {
-    if (!map.has(row.fOriginalSeq)) map.set(row.fOriginalSeq, row.fSequence);
-  }
-  return map;
 }
 
 const SURFACE_EVENT_TYPES = new Set(["user/message", "assistant/message", "tool/result"]);
@@ -418,7 +380,6 @@ export function repairOrphanInboxSplices(events: SessionEvent[]): void {
 export function scanRows(
   rows: readonly EventRow[],
   base = 0,
-  seqMap: ReadonlyMap<number, number> = new Map(),
 ): { preserved: SessionEvent[]; tornFrom?: number } {
   // Pass 1：解析每行 data；JSON 非法的行是洞（seq/type 列即使在 data 损坏
   // 时也存在）。
@@ -428,7 +389,7 @@ export function scanRows(
   }
   const parsed: Parsed[] = rows.map((row) => {
     try {
-      return { ok: true, event: rowToEvent(row, seqMap) };
+      return { ok: true, event: rowToEvent(row) };
     } catch {
       return { ok: false };
     }
@@ -471,32 +432,25 @@ export function scanRows(
     : { preserved };
 }
 
-function toStorageRecord(record: import("@deepseek-ai/dsh-session").StorageRecord): unknown {
-  const withSeqs = record as import("@deepseek-ai/dsh-session").StorageRecord & {
-    sourceEventSeqs?: unknown;
-  };
-  if (withSeqs.sourceEventSeqs === undefined) return record;
-  return { ...record, sourceEventSeqs: encodeSeqRanges(withSeqs.sourceEventSeqs as never) };
-}
-
 export function toJsonlArtifact(
   meta: SessionHeader,
   inheritedEventCount: number,
   events: readonly SessionEvent[],
 ): string {
-  const header = {
-    type: "session",
-    version: meta.version,
-    id: meta.id,
-    createdAt: meta.createdAt,
-    ...(meta.cwd === undefined ? {} : { cwd: meta.cwd }),
-    ...(meta.parentSession === undefined ? {} : { parentSession: meta.parentSession }),
-    ...(meta.isSeeded ? { seedLength: inheritedEventCount } : {}),
-    ...(meta.origin === undefined ? {} : { origin: meta.origin }),
-    delegationDepth: meta.delegationDepth ?? 0,
-    ...(meta.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset }),
-  };
+  const header = sessionFormatCatalog.encodeCurrentHeader(
+    {
+      ...meta,
+      delegationDepth: meta.delegationDepth ?? 0,
+    } as unknown as SessionFormatHeader,
+    inheritedEventCount,
+  );
   const lines = [JSON.stringify(header)];
-  for (const record of packChunkRuns(events)) lines.push(JSON.stringify(toStorageRecord(record)));
+  for (const event of events) {
+    lines.push(
+      JSON.stringify(
+        sessionFormatCatalog.encodeCurrentEvent(event as unknown as SessionFormatEvent),
+      ),
+    );
+  }
   return lines.join("\n");
 }

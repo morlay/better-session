@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SESSION_FORMAT_VERSION } from "@deepseek-ai/dsh-session";
 import type { SessionEvent, SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { SessionPersistenceRevision } from "@deepseek-ai/dsh-session-persistence";
 import {
@@ -10,7 +11,7 @@ import {
 
 function header(id: string, overrides: Partial<SessionHeader> = {}): SessionHeader {
   return {
-    version: 0,
+    version: SESSION_FORMAT_VERSION,
     id: id as SessionId,
     createdAt: 0,
     isSeeded: false,

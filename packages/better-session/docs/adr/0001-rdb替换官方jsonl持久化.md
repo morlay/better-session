@@ -21,8 +21,8 @@ rewind 需要**原子截断**（截断尾部 + 重写，失败整体回滚），
 ## 后果
 
 - 官方 jsonl 的 zstd 压缩、packChunks、torn tail 修复不复用——rdb 自建
-  崩溃修复（torn tail 物理删除 + 合成 closers）与稠密 seq 重编号（瞬时
-  事件与 ignorable 事件不入库）。
-- 需要维护 `SCHEMA_VERSION` 门禁与一次性迁移脚本。
+  崩溃修复（torn tail 物理删除）与原样存储（事件原样落库，无过滤无重编号）。
+- 需要维护 `SCHEMA_VERSION` 门禁与 drizzle-kit 生成的迁移（`drizzle/`
+  目录，运行时 drizzle `migrate()` 执行）。
 - 多实例共享数据库成为受支持场景（不同 session 各写各的，同 id 并发写
   fail loud）。

@@ -13,27 +13,29 @@ import {
   type AnyPgColumnBuilder,
   type AnyPgTable,
 } from "drizzle-orm/pg-core";
-import { toProperty, type ColumnDef, type TableDef } from "../entities/types.ts";
+import { toProperty, type ColumnDef, type TableDef } from "./types.ts";
 
 type TableRegistry = Record<string, AnyPgTable>;
 
-function buildColumn(c: ColumnDef, tables: TableRegistry): AnyPgColumnBuilder {
+function buildColumn(name: string, c: ColumnDef, tables: TableRegistry): AnyPgColumnBuilder {
   // 具体 builder 类型与 AnyPgColumnBuilder 在方法层面不兼容，构建阶段用宽松类型。
   let col: any;
   switch (c.type) {
-    case "text":
-      col = text(c.name);
+    case "text": {
+      const built = text(name);
+      col = c.primaryKey ? built.primaryKey() : built;
       break;
+    }
     case "serial":
-      col = serial(c.name).primaryKey();
+      col = serial(name).primaryKey();
       break;
     case "integer": {
-      const built = integer(c.name);
+      const built = integer(name);
       col = c.primaryKey ? built.primaryKey() : built;
       break;
     }
     case "bigint": {
-      const built = bigint(c.name, { mode: "number" });
+      const built = bigint(name, { mode: "number" });
       col = c.primaryKey ? built.primaryKey() : built;
       break;
     }
@@ -61,20 +63,22 @@ export function toPostgresSchema(
   const table = schemaName === "public" ? pgTable : pgSchema(schemaName).table;
   for (const def of defs) {
     const columns: Record<string, AnyPgColumnBuilder> = {};
-    for (const c of def.columns) columns[toProperty(c.name)] = buildColumn(c, tables);
+    for (const [name, c] of Object.entries(def.columns)) {
+      columns[toProperty(name)] = buildColumn(name, c, tables);
+    }
     const extra = (self: Record<string, unknown>) => [
-      ...(def.checks ?? []).map((c) => pgCheck(c.name, sql.raw(c.expression))),
-      ...(def.uniques ?? []).map((u) =>
-        unique(u.name).on(
-          ...(u.columns.map((name) => self[toProperty(name)] as AnyPgColumn) as [
+      ...Object.entries(def.checks ?? {}).map(([name, c]) => pgCheck(name, sql.raw(c.expression))),
+      ...Object.entries(def.uniques ?? {}).map(([name, u]) =>
+        unique(name).on(
+          ...(u.columns.map((n) => self[toProperty(n)] as AnyPgColumn) as [
             AnyPgColumn,
             ...AnyPgColumn[],
           ]),
         ),
       ),
-      ...(def.indexes ?? []).map((i) =>
-        index(i.name).on(
-          ...(i.columns.map((name) => self[toProperty(name)] as AnyPgColumn) as [
+      ...Object.entries(def.indexes ?? {}).map(([name, i]) =>
+        index(name).on(
+          ...(i.columns.map((n) => self[toProperty(n)] as AnyPgColumn) as [
             AnyPgColumn,
             ...AnyPgColumn[],
           ]),

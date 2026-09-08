@@ -65,17 +65,16 @@ export async function createPersisted(
   events: readonly SessionEvent[],
   header: SessionHeader = meta(id),
 ): Promise<void> {
-  await ctx.sessionPersistence.create(header);
-  await ctx.sessionPersistence.append(SessionIdBrand(id), [...events]);
+  const handle = await ctx.sessionPersistence.create(header);
+  try {
+    await handle.append([...events]);
+  } finally {
+    await handle.close();
+  }
 }
 
 /** 构造一条 user/message 事件。 */
-export function userMessage(
-  seq: number,
-  id: string,
-  text: string,
-  time = seq,
-): SessionEvent {
+export function userMessage(seq: number, id: string, text: string, time = seq): SessionEvent {
   return {
     type: "user/message",
     seq: SessionSeq(seq),
@@ -112,9 +111,10 @@ export function assistantMessage(
         content: [{ type: "text", text }],
         source: { kind: "model", provider: "mock", model: "mock" },
       },
+      stream: [] as const,
     },
     surfaceOp: "append",
-  } as SessionEvent;
+  } as unknown as SessionEvent;
 }
 
 /** 真实 agent-loop 形状的一轮：轮首输入 + 可选 followup，可闭合。 */

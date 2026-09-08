@@ -5,14 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Context } from "@deepseek-ai/cordis";
 import { MessageId, freezeMessage } from "@deepseek-ai/dsh-llm";
-import {
-  SessionId,
-  SessionLogOffset,
-  SessionSeq,
-  SessionStore,
-  encodeSeqRanges,
-  packChunkRuns,
-} from "@deepseek-ai/dsh-session";
+import { SessionId, SessionLogOffset, SessionSeq, SessionStore } from "@deepseek-ai/dsh-session";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { strToU8, zipSync } from "fflate";
 import SessionPersistenceSqlite from "@morlay/session-rdb";
@@ -21,7 +14,6 @@ import { EmptySettings } from "@morlay/session-rdb/testing";
 import { meta, oneTurnLog } from "@morlay/session-rdb/testing";
 import {
   SESSION_LOG_ARTIFACT_FILENAME,
-  expandProvenanceFromStorage,
   parseImportZip,
   parseJsonlArtifact,
   persistImport,
@@ -55,21 +47,9 @@ function richLog(): SessionEvent[] {
     },
     { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
     {
-      type: "assistant/chunk",
+      type: "assistant/message",
       seq: SessionSeq(3),
       time: 4,
-      data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
-    },
-    {
-      type: "assistant/chunk",
-      seq: SessionSeq(4),
-      time: 5,
-      data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
-    },
-    {
-      type: "assistant/message",
-      seq: SessionSeq(5),
-      time: 6,
       data: {
         turn: 1,
         step: 1,
@@ -79,54 +59,19 @@ function richLog(): SessionEvent[] {
           content: [{ type: "text", text: "hello" }],
           source: { kind: "model", provider: "mock", model: "mock" },
         }),
+        stream: [],
       },
       surfaceOp: "append",
-      sourceEventSeqs: [SessionSeq(3), SessionSeq(4)],
-    },
-    { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
+    } as unknown as SessionEvent,
+    { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
     {
       type: "turn/end",
-      seq: SessionSeq(7),
-      time: 8,
+      seq: SessionSeq(5),
+      time: 6,
       data: { turn: 1, reason: { kind: "completed" } },
     },
   ];
 }
-
-describe("expandProvenanceFromStorage", () => {
-  it("expands [start, end] ranges back to SessionSeq[]", () => {
-    const expanded = expandProvenanceFromStorage({
-      type: "assistant/message",
-      seq: 5,
-      sourceEventSeqs: [3, 4],
-    }) as { sourceEventSeqs: number[] };
-    expect(expanded.sourceEventSeqs).toEqual([3, 4]);
-  });
-
-  it("expands range pairs of at least three consecutive seqs", () => {
-    const expanded = expandProvenanceFromStorage({
-      type: "assistant/message",
-      seq: 5,
-      sourceEventSeqs: [[2, 4]],
-    }) as { sourceEventSeqs: number[] };
-    expect(expanded.sourceEventSeqs).toEqual([2, 3, 4]);
-  });
-
-  it("passes records without sourceEventSeqs through unchanged", () => {
-    const record = { type: "turn/start", seq: 0 };
-    expect(expandProvenanceFromStorage(record)).toBe(record);
-  });
-
-  it("rejects non-object records and invalid seqs", () => {
-    expect(() => expandProvenanceFromStorage(42)).toThrow(/must be objects/);
-    expect(() => expandProvenanceFromStorage({ type: "x", seq: -1, sourceEventSeqs: [] })).toThrow(
-      /non-negative safe integer/,
-    );
-    expect(() =>
-      expandProvenanceFromStorage({ type: "x", seq: 0, sourceEventSeqs: [[1, 2]] }),
-    ).toThrow(/exceeds|ranges/);
-  });
-});
 
 describe("parseJsonlArtifact", () => {
   it("parses a header line and plain event lines", () => {
@@ -154,6 +99,65 @@ describe("parseJsonlArtifact", () => {
     expect(parsed.events.map((e) => e.seq)).toEqual([0, 1]);
   });
 
+  it("converts a v0 artifact with legacy message shapes through the migration chain", () => {
+    // 历史 v0 artifact：消息无 id、assistant/message 用 content/provenance
+    // 顶层字段。导入时经上游迁移链转 v2 逻辑事件（补 id、嵌入 stream）。
+    const parsed = parseJsonlArtifact(
+      [
+        JSON.stringify({
+          type: "session",
+          version: 0,
+          id: "v0-import",
+          createdAt: 1000,
+          cwd: "/work",
+          delegationDepth: 0,
+        }),
+        JSON.stringify({ type: "turn/start", seq: 0, time: 1, data: { turn: 1 } }),
+        JSON.stringify({
+          type: "user/message",
+          seq: 1,
+          time: 2,
+          data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
+          surfaceOp: "append",
+        }),
+        JSON.stringify({ type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } }),
+        JSON.stringify({
+          type: "assistant/message",
+          seq: 3,
+          time: 4,
+          data: {
+            turn: 1,
+            step: 1,
+            content: [{ type: "text", text: "hello" }],
+            provenance: { provider: "mock", model: "mock" },
+          },
+          surfaceOp: "append",
+        }),
+        JSON.stringify({ type: "step/end", seq: 4, time: 5, data: { turn: 1, step: 1 } }),
+        JSON.stringify({
+          type: "turn/end",
+          seq: 5,
+          time: 6,
+          data: { turn: 1, reason: { kind: "completed" } },
+        }),
+      ].join("\n"),
+    );
+    expect(parsed.meta).toMatchObject({ id: "v0-import", version: 2, isSeeded: false });
+    expect(parsed.events).toHaveLength(6);
+    const user = parsed.events[1]!;
+    expect(user.type).toBe("user/message");
+    expect(
+      user.type === "user/message" && typeof user.data.id === "string" && user.data.id.length > 0,
+    ).toBe(true);
+    const assistant = parsed.events[3]!;
+    expect(assistant.type).toBe("assistant/message");
+    expect(
+      assistant.type === "assistant/message" &&
+        Array.isArray(assistant.data.stream) &&
+        assistant.data.message.source.kind === "model",
+    ).toBe(true);
+  });
+
   it("carries seedLength as isSeeded + inheritedEventCount", () => {
     const parsed = parseJsonlArtifact(
       [
@@ -177,32 +181,6 @@ describe("parseJsonlArtifact", () => {
       delegationDepth: 1,
     });
     expect(parsed.inheritedEventCount).toBe(SessionLogOffset(2));
-  });
-
-  it("expands packed chunk rows back to assistant/chunk events", () => {
-    const events = richLog();
-    // 构造 chunk 打包行（与导出 eventLines 的 packChunkRuns 输出一致）。
-    const records = packChunkRuns(events);
-    const lines = [
-      JSON.stringify({
-        type: "session",
-        version: 0,
-        id: "chunked",
-        createdAt: 1000,
-        delegationDepth: 0,
-      }),
-      ...records.map((record) => {
-        const withSeqs = record as SessionEvent & { sourceEventSeqs?: number[] };
-        return JSON.stringify(
-          withSeqs.sourceEventSeqs === undefined
-            ? record
-            : { ...record, sourceEventSeqs: encodeSeqRanges(withSeqs.sourceEventSeqs as never) },
-        );
-      }),
-    ];
-    const parsed = parseJsonlArtifact(lines.join("\n"));
-    expect(parsed.events.map((e) => e.type)).toEqual(events.map((e) => e.type));
-    expect(parsed.events).toEqual(events);
   });
 
   it("rejects an empty log, a bad header, and a bad event line", () => {
@@ -253,28 +231,6 @@ describe("parseJsonlArtifact", () => {
       ),
     ).toThrow(/seq gap/);
   });
-
-  it("shrinks a seedLength that exceeds the event count (self-consistent import)", () => {
-    // 历史损坏样式：fork 派生会话的 seedLength 残留但事件全被删光（rewind
-    // 未收缩）。导入必须收缩到事件数——否则落库后上游 load 把
-    // 「继承前缀超过存储事件数」当损坏拒绝。
-    const parsed = parseJsonlArtifact(
-      [
-        JSON.stringify({
-          type: "session",
-          version: 0,
-          id: "bad",
-          createdAt: 1000,
-          parentSession: "parent",
-          seedLength: 46847,
-          delegationDepth: 1,
-        }),
-      ].join("\n"),
-    );
-    expect(parsed.meta.isSeeded).toBe(true);
-    expect(Number(parsed.inheritedEventCount)).toBe(0);
-    expect(parsed.events).toHaveLength(0);
-  });
 });
 
 describe("parseImportZip", () => {
@@ -306,7 +262,6 @@ describe("import round-trip through the backend", () => {
     try {
       const p = ctx.sessionPersistence as SessionPersistenceSqlite;
       const m = meta("big-src", "/work");
-      await p.create(m);
       const big = oneTurnLog();
       for (let turn = 1; turn < 2000; turn++) {
         big.push(
@@ -321,7 +276,7 @@ describe("import round-trip through the backend", () => {
           ),
         );
       }
-      await p.append(m.id, big);
+      await p.createAndAppend(m, big);
 
       const raw = await p.readRaw(m.id);
       expect(raw).toBeDefined();
@@ -348,8 +303,7 @@ describe("import round-trip through the backend", () => {
     try {
       const p = ctx.sessionPersistence as SessionPersistenceSqlite;
       const m = meta("export-src", "/work");
-      await p.create(m);
-      await p.append(m.id, richLog());
+      await p.createAndAppend(m, richLog());
 
       const raw = await p.readRaw(m.id);
       expect(raw).toBeDefined();
@@ -357,17 +311,15 @@ describe("import round-trip through the backend", () => {
       const parsed = parseImportZip(zip);
       // 导入以新 id 落库：源会话保持不变。
       const importedId = `session-imported` as SessionId;
-      await p.create(
+      await p.createAndAppend(
         { ...parsed.meta, id: importedId },
-        parsed.inheritedEventCount as unknown as number,
+        parsed.events,
+        parsed.inheritedEventCount,
       );
-      await p.append(importedId, parsed.events);
 
       const loaded = await p.load(importedId);
       expect(loaded.meta).toMatchObject({ cwd: "/work", isSeeded: false });
-      // RDB 写路径不持久化 delta（assistant/chunk 过滤 + 稠密重编号），
-      // 因此导出→导入 round-trip 还原的是**稠密持久化视图**：
-      // 6 个幸存事件（无 chunk、无 sourceEventSeqs），seq 0..5。
+      // 原样存储：导出→导入 round-trip 还原完整事件（6 事件，seq 0..5）。
       expect(loaded.events.map((e) => e.type)).toEqual([
         "turn/start",
         "user/message",
@@ -401,8 +353,20 @@ describe("import round-trip through the backend", () => {
         parentSession: SessionId("the-parent"),
         isSeeded: true,
       };
-      await p.create(childMeta, 3);
-      await p.append(childMeta.id, [...seed, ...richLog().slice(3)]);
+      // v2 seeded 会话：继承前缀末尾必须带 session/end-seed {inherited} marker。
+      const events = [
+        ...seed,
+        {
+          type: "session/end-seed",
+          seq: SessionSeq(3),
+          time: 4,
+          data: { inherited: true },
+        } as unknown as SessionEvent,
+        ...richLog()
+          .slice(3)
+          .map((e) => ({ ...e, seq: SessionSeq(e.seq + 1) })),
+      ];
+      await p.createAndAppend(childMeta, events, 3);
 
       const raw = await p.readRaw(childMeta.id);
       const parsed = parseImportZip(
@@ -425,13 +389,11 @@ describe("import round-trip through the backend", () => {
       const p = ctx.sessionPersistence as SessionPersistenceSqlite;
       // 源会话 A：将被导出。
       const src = meta("export-src", "/work");
-      await p.create(src);
-      await p.append(src.id, richLog());
+      await p.createAndAppend(src, richLog());
       // 目标会话 B：已有旧内容（导出前会被 rewind 清空），且保持 live
       // （observeSession 优先读 live 内存快照——覆盖后必须同步回导入事件）。
       const target = meta("target", "/other");
-      await p.create(target);
-      await p.append(target.id, oneTurnLog());
+      await p.createAndAppend(target, oneTurnLog());
       const live = ctx.sessions.create(target.id, { meta: target, seed: [...oneTurnLog()] });
       await ctx.sessions.flush(live);
       // seed 构造会自动补 session/end-seed：6 事件 + 1 标记 = 7。
@@ -483,8 +445,7 @@ describe("import round-trip through the backend", () => {
     try {
       const p = ctx.sessionPersistence as SessionPersistenceSqlite;
       const src = meta("new-src", "/work");
-      await p.create(src);
-      await p.append(src.id, oneTurnLog());
+      await p.createAndAppend(src, oneTurnLog());
       const raw = await p.readRaw(src.id);
       const parsed = parseImportZip(
         zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),

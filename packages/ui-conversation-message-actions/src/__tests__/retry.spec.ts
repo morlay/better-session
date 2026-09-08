@@ -1,3 +1,4 @@
+import SessionPersistenceSqlite from "@morlay/session-rdb";
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import {
@@ -11,6 +12,11 @@ import {
   type BranchTimeline,
   type SessionEvent,
 } from "@morlay/ui-conversation-message-actions/testing";
+
+/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
+function rdb(ctx: import("@deepseek-ai/cordis").Context): SessionPersistenceSqlite {
+  return ctx.sessionPersistence as SessionPersistenceSqlite;
+}
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -31,15 +37,16 @@ describe("SessionEditor retry", () => {
       expect(result.sessionId).toBe(SessionIdBrand("src")); // 不改变 session id
       expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
 
-      const after = await ctx.sessionPersistence.load(SessionIdBrand("src"));
-      // 截断到轮 1（turn/end @ 5），轮 2 及之后被抛弃；版本效果 ignorable 不落库。
-      expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      const after = await rdb(ctx).load(SessionIdBrand("src"));
+      // 截断到轮 1（turn/end @ 5），轮 2 及之后被抛弃；版本效果原样落库（seq 6）。
+      expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect(after.events[6]?.type).toBe("session-branch/version");
     } finally {
       await dispose();
     }
   });
 
-  it("retry on a live session keeps the version effect in memory but not in storage", async () => {
+  it("retry on a live session persists the version effect (same session id)", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
       ctx.sessions.create(SessionIdBrand("live"), { meta: meta("live"), seed: [...twoTurnLog()] });
@@ -57,7 +64,7 @@ describe("SessionEditor retry", () => {
       // live 内存 log：截断前缀 + ignorable 版本效果（seq 6）。
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
       expect(live.snapshotEvents()[6]?.type).toBe("session-branch/version");
-      // RDB canonical log：只有截断前缀（版本效果 ignorable 不落库）。
+      // RDB canonical log：截断前缀 + 版本效果原样落库（与 JSONL 一致）。
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -66,7 +73,7 @@ describe("SessionEditor retry", () => {
         }
       ).internals().backend;
       const head = await backend.getHead(SessionIdBrand("live"));
-      expect(head.fHeadSequence).toBe(5);
+      expect(head.fHeadSequence).toBe(6);
     } finally {
       await dispose();
     }

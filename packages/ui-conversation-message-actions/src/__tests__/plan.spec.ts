@@ -121,7 +121,14 @@ describe("editPlan", () => {
   it("edits the first user of a closed turn → whole-turn rewind (no rewindBoundary)", () => {
     const log = turnLog(0, 1);
     const plan = editPlan(
-      { action: "edit", sessionId, eventSeq: 2, blockIndex: 0, text: "edited q", cascade: "truncate" },
+      {
+        action: "edit",
+        sessionId,
+        eventSeq: 2,
+        blockIndex: 0,
+        text: "edited q",
+        cascade: "truncate",
+      },
       closedTurns(log),
     );
     expect(plan.anchorSeq).toBe(0);
@@ -141,9 +148,18 @@ describe("editPlan", () => {
     });
     // followup user seq：base 0 + turn/start(0) + step/start(1) + u1(2) + a1(3)
     // + step/end(4) + step/start(5) + u2(6)
-    const followupSeq = log.find((e) => e.type === "user/message" && (e.data as { id: string }).id === "u2")!.seq;
+    const followupSeq = log.find(
+      (e) => e.type === "user/message" && (e.data as { id: string }).id === "u2",
+    )!.seq;
     const plan = editPlan(
-      { action: "edit", sessionId, eventSeq: followupSeq, blockIndex: 0, text: "edited f", cascade: "truncate" },
+      {
+        action: "edit",
+        sessionId,
+        eventSeq: followupSeq,
+        blockIndex: 0,
+        text: "edited f",
+        cascade: "truncate",
+      },
       closedTurns(log),
     );
     expect(plan.rewindBoundary).toBe(followupSeq); // 消息级 rewind
@@ -156,7 +172,14 @@ describe("editPlan", () => {
   it("edits the first user of an open turn → message-level rewind", () => {
     const log = turnLog(0, 1, { closed: false });
     const plan = editPlan(
-      { action: "edit", sessionId, eventSeq: 2, blockIndex: 0, text: "edited q", cascade: "truncate" },
+      {
+        action: "edit",
+        sessionId,
+        eventSeq: 2,
+        blockIndex: 0,
+        text: "edited q",
+        cascade: "truncate",
+      },
       closedTurns(log),
     );
     expect(plan.rewindBoundary).toBe(2);
@@ -165,7 +188,14 @@ describe("editPlan", () => {
   it("preserve cascade queues downstream turn inputs after the edited one", () => {
     const log = [...twoTurnLog(), ...turnLog(12, 3)];
     const plan = editPlan(
-      { action: "edit", sessionId, eventSeq: 1, blockIndex: 0, text: "q1 edited", cascade: "preserve" },
+      {
+        action: "edit",
+        sessionId,
+        eventSeq: 1,
+        blockIndex: 0,
+        text: "q1 edited",
+        cascade: "preserve",
+      },
       closedTurns(log),
     );
     // 轮 1 整轮截断重放：q1 + 轮 2 q2 + 轮 3 q3
@@ -175,7 +205,14 @@ describe("editPlan", () => {
   it("edits a closed-turn assistant response → manualTurn with replacement", () => {
     const log = turnLog(0, 1);
     const plan = editPlan(
-      { action: "edit", sessionId, eventSeq: 3, blockIndex: 0, text: "answer edited", cascade: "truncate" },
+      {
+        action: "edit",
+        sessionId,
+        eventSeq: 3,
+        blockIndex: 0,
+        text: "answer edited",
+        cascade: "truncate",
+      },
       closedTurns(log),
     );
     expect(plan.manualTurn).toBeDefined();
@@ -222,7 +259,14 @@ describe("editPlan", () => {
     const assistantSeq = log.find((e) => e.type === "assistant/message")!.seq;
     expect(() =>
       editPlan(
-        { action: "edit", sessionId, eventSeq: assistantSeq, blockIndex: 0, text: "x", cascade: "truncate" },
+        {
+          action: "edit",
+          sessionId,
+          eventSeq: assistantSeq,
+          blockIndex: 0,
+          text: "x",
+          cascade: "truncate",
+        },
         closedTurns(log),
       ),
     ).toThrow(/未闭合轮次的助手消息不可编辑/);
@@ -252,7 +296,12 @@ describe("retryPlan", () => {
     // 只有 turn/start + turn/end 的轮
     const emptyTurn: SessionEvent[] = [
       { type: "turn/start", seq: 0 as never, time: 1, data: { turn: 1 } },
-      { type: "turn/end", seq: 1 as never, time: 2, data: { turn: 1, reason: { kind: "completed" } } },
+      {
+        type: "turn/end",
+        seq: 1 as never,
+        time: 2,
+        data: { turn: 1, reason: { kind: "completed" } },
+      },
     ];
     expect(() =>
       retryPlan(
@@ -281,4 +330,3 @@ describe("rerollPlan", () => {
     );
   });
 });
-

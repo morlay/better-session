@@ -142,10 +142,9 @@ function appendManualTurn(
   appendSurfaceSeedEvent(
     events,
     "assistant/message",
-    { turn, step: 1, message: assistant },
+    { turn, step: 1, message: assistant, stream: [] },
     {
       surfaceOp: "append",
-      sourceEventSeqs: [],
     },
   );
   appendLogSeedEvent(events, "step/end", { turn, step: 1 });
@@ -155,7 +154,11 @@ function appendManualTurn(
   });
 }
 
-function appendSeedSuffixLive(session: Session, seedSuffix: readonly SessionEvent[]): void {
+async function appendSeedSuffixLive(
+  session: Session,
+  seedSuffix: readonly SessionEvent[],
+  appendDirect: (events: readonly SessionEvent[]) => Promise<void>,
+): Promise<void> {
   for (const event of seedSuffix) {
     // 版本效果事件携带 ignorable 标记（上游类型无此字段，duck-type 读取）。
     const ignorable = (event as { ignorable?: boolean }).ignorable === true;
@@ -164,10 +167,13 @@ function appendSeedSuffixLive(session: Session, seedSuffix: readonly SessionEven
         log: SessionEvent[];
         eventsSnapshot?: unknown;
       };
-      // ignorable 语义：live log 保留、不落 canonical log。session.append 不
-      // 保留 ignorable 标记，因此直接 push 内存 log（不发布）；seq 按 log
-      // 续接重编号（seedSuffix 内部编号从 0 起）。
-      s.log.push({ ...event, seq: s.log.length } as SessionEvent);
+      // 原样存储语义：版本效果事件经 RDB write handle 直接落库（带
+      // ignorable 信封，与 JSONL 一致）。session.append 不保留 ignorable
+      // 标记且类型系统禁止 append 未知类型，因此不发布、直接 push 内存
+      // log（seq 按 log 续接重编号，与 handle cursor 同空间）。
+      const seq = s.log.length;
+      await appendDirect([{ ...event, seq } as SessionEvent]);
+      s.log.push({ ...event, seq } as SessionEvent);
       s.eventsSnapshot = undefined;
       continue;
     }
@@ -308,10 +314,25 @@ export class SessionEditor extends Service {
     await this.ctx.sessionBranch.rewind(operation.sessionId, boundary, signal);
     if (seedSuffix.length > 0) {
       if (live !== undefined) {
-        // live：版本效果 push 内存 log（ignorable 保留）、manualTurn 走 append，
-        // 同步 cursor 后显式 flush（push 不发布、不进缓冲，cursor 会落后）。
-        appendSeedSuffixLive(live, seedSuffix);
-        this.ctx.sessionBranch.syncLiveCursor(operation.sessionId);
+        // live：版本效果经 RDB write handle 直接落库（带 ignorable 信封，
+        // 与 JSONL 一致）、manualTurn 走 append；同步 cursor 后显式 flush
+        // （直接落库不发布、不进缓冲，cursor 会落后）。
+        const persistence = this.ctx.sessionPersistence as unknown as {
+          tracker: {
+            writerOf(id: SessionId):
+              | {
+                  append(events: readonly SessionEvent[]): Promise<void>;
+                }
+              | undefined;
+          };
+        };
+        const handle = persistence.tracker.writerOf(operation.sessionId);
+        if (handle === undefined) {
+          throw new Error(
+            `session "${operation.sessionId}" has no live write handle for the version effect`,
+          );
+        }
+        await appendSeedSuffixLive(live, seedSuffix, (events) => handle.append(events));
         await this.ctx.sessions.flush(live);
       } else {
         // cold：续写 seq 从平衡后的保留前缀接续（exclusive 截断可能残留
@@ -325,7 +346,12 @@ export class SessionEditor extends Service {
               seq: keepLength + index,
             }) as SessionEvent,
         );
-        await this.ctx.sessionPersistence.append(operation.sessionId, renumbered);
+        const handle = await this.ctx.sessionPersistence.open(operation.sessionId, "write");
+        try {
+          await handle.append(renumbered);
+        } finally {
+          await handle.close();
+        }
       }
     }
 
@@ -401,10 +427,7 @@ export class SessionEditor extends Service {
       const fallbackProvider = config?.provider ?? "";
       const fallbackModel = config?.model ?? "";
       if (fallbackProvider.length === 0 || fallbackModel.length === 0) {
-        throw new SessionBranchError(
-          "无法重放：会话没有可解析的模型配置。",
-          "INVALID_BOUNDARY",
-        );
+        throw new SessionBranchError("无法重放：会话没有可解析的模型配置。", "INVALID_BOUNDARY");
       }
       const handle = await agents.resume({
         resumeSessionId: sessionId,

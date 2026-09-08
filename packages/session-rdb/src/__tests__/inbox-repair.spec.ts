@@ -1,20 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import { Context } from "@deepseek-ai/cordis";
-import {
-  SessionId,
-  SessionSeq,
-  SessionStore,
-  type SessionEvent,
-} from "@deepseek-ai/dsh-session";
+import { SessionId, SessionSeq, SessionStore, type SessionEvent } from "@deepseek-ai/dsh-session";
 import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
 import SessionPersistenceSqlite from "@morlay/session-rdb";
 import { EmptySettings } from "@morlay/session-rdb/testing";
 import { meta } from "@morlay/session-rdb/testing";
-import {
-  orphanInboxSpliceSeqs,
-  repairOrphanInboxSplices,
-} from "@morlay/session-rdb/artifact";
+import { orphanInboxSpliceSeqs, repairOrphanInboxSplices } from "@morlay/session-rdb/artifact";
 
 function splice(
   seq: number,
@@ -38,10 +30,7 @@ function splice(
 
 describe("orphanInboxSpliceSeqs", () => {
   it("accepts a self-consistent splice stream", () => {
-    const events = [
-      splice(0, "next-turn", 0, 0, [{ id: "a" }]),
-      splice(1, "next-turn", 0, 1, []),
-    ];
+    const events = [splice(0, "next-turn", 0, 0, [{ id: "a" }]), splice(1, "next-turn", 0, 1, [])];
     expect(orphanInboxSpliceSeqs(events).size).toBe(0);
   });
 
@@ -150,27 +139,43 @@ describe("loadStored repairs orphan inbox splices", () => {
           surfaceOp: "append",
         } as SessionEvent,
         { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
-        { type: "turn/end", seq: SessionSeq(5), time: 6, data: { turn: 1, reason: { kind: "completed" } } },
+        {
+          type: "turn/end",
+          seq: SessionSeq(5),
+          time: 6,
+          data: { turn: 1, reason: { kind: "completed" } },
+        },
         // 损坏区：空 next-turn 上的 start:1 插入（原排队消息已被 rewind 删）
         splice(6, "next-turn", 1, 0, [{ id: "queued-after" }]),
         splice(7, "next-turn", 0, 1, []),
         // 后续正常轮
         { type: "turn/start", seq: SessionSeq(8), time: 8, data: { turn: 2 } },
         splice(9, "next-turn", 0, 0, [{ id: "turn2-input" }]),
-        { type: "user/message", seq: SessionSeq(10), time: 10, data: { id: "u2", role: "user", content: [{ type: "text", text: "go on" }], source: { kind: "user" } }, surfaceOp: "append" } as SessionEvent,
+        {
+          type: "user/message",
+          seq: SessionSeq(10),
+          time: 10,
+          data: {
+            id: "u2",
+            role: "user",
+            content: [{ type: "text", text: "go on" }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as SessionEvent,
         { type: "step/start", seq: SessionSeq(11), time: 11, data: { turn: 2, step: 1 } },
       ];
       const m = meta("bad");
-      await persistence.create(m);
-      await persistence.append(SessionId("bad"), turn);
+      await persistence.createAndAppend(m, turn);
 
-      // loadStored（resume/prepare 的读取路径）应内存修复孤儿 splice。
-      const stored = await persistence.loadStored(SessionId("bad"));
-      expect(stored).toBeDefined();
-      expect(stored!.events).toHaveLength(turn.length);
+      // handle.read（resume/prepare 的读取路径）应内存修复孤儿 splice。
+      const handle = await persistence.open(SessionId("bad"), "read");
+      const { events } = await handle.read();
+      await handle.close();
+      expect(events).toHaveLength(turn.length);
       // 孤儿 splice 被改写为 no-op：修复后按上游 Inbox 相同的增量规则
       // （start/removedCount 越界 + 跨列表重复 id）扫描无孤儿——等价可重放。
-      expect(orphanInboxSpliceSeqs(stored!.events).size).toBe(0);
+      expect(orphanInboxSpliceSeqs(events).size).toBe(0);
       // 未修复的原始流（绕过 loadStored）仍含孤儿——修复确实发生。
       const raw = await persistence.internals().backend.getEventRows(SessionId("bad"));
       const rawEvents = raw.map((row) => ({

@@ -13,7 +13,10 @@ import {
 import { TokenMeter } from "@deepseek-ai/dsh-token-meter";
 import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
 import { SessionBranchError } from "@morlay/session-branch";
-import SessionPersistenceSqlite, { SessionBranchRdbProvider, locateTurnEnd } from "@morlay/session-rdb";
+import SessionPersistenceSqlite, {
+  SessionBranchRdbProvider,
+  locateTurnEnd,
+} from "@morlay/session-rdb";
 import { EmptySettings } from "@morlay/session-rdb/testing";
 import { meta, oneTurnLog } from "@morlay/session-rdb/testing";
 
@@ -38,51 +41,6 @@ async function harness(): Promise<{
     getSession: (id) => ctx.sessions.get(id),
     getAgent: () => undefined,
     flush: (session) => ctx.sessions.flush(session),
-    setCoordinatorCursor: (id, cursor) => {
-      const withCoordinator = persistence as unknown as {
-        coordinator?: {
-          states?: Map<SessionId, { cursor: number } | undefined>;
-        };
-      };
-      const state = withCoordinator.coordinator?.states?.get(id);
-      if (state !== undefined) state.cursor = cursor;
-    },
-    setCoordinatorState: (id, cursor, meta) => {
-      const withCoordinator = persistence as unknown as {
-        coordinator?: {
-          states?: Map<
-            SessionId,
-            { cursor: number; meta: SessionHeader; materialized: boolean } | undefined
-          >;
-        };
-      };
-      const states = withCoordinator.coordinator?.states;
-      if (states === undefined) return;
-      const state = states.get(id);
-      if (state !== undefined) {
-        state.cursor = cursor;
-      } else {
-        states.set(id, { meta, cursor, materialized: true });
-      }
-    },
-    setCoordinatorSeedLength: (id, seedLength) => {
-      const withCoordinator = persistence as unknown as {
-        coordinator?: {
-          states?: Map<
-            SessionId,
-            | {
-                storage?: { inheritedEventCount: number };
-              }
-            | undefined
-          >;
-        };
-      };
-      const state = withCoordinator.coordinator?.states?.get(id);
-      if (state?.storage !== undefined && state.storage.inheritedEventCount > seedLength) {
-        // storage 对象可能被冻结（coordinator 发布路径）；整体替换而非改字段。
-        state.storage = { ...state.storage, inheritedEventCount: seedLength };
-      }
-    },
   });
   return { ctx, persistence, provider, dispose: () => fiber.dispose() };
 }
@@ -107,8 +65,12 @@ async function createPersisted(
   events: readonly SessionEvent[],
   header: SessionHeader = meta(id),
 ): Promise<void> {
-  await ctx.sessionPersistence.create(header);
-  await ctx.sessionPersistence.append(SessionId(id), [...events]);
+  const handle = await ctx.sessionPersistence.create(header);
+  try {
+    await handle.append([...events]);
+  } finally {
+    await handle.close();
+  }
 }
 
 describe("locateTurnEnd", () => {
@@ -234,9 +196,9 @@ describe("forkFrom", () => {
         seedSuffix: [version],
       });
       const child = await persistence.load(SessionId("child"));
-      // ignorable 事件不进 canonical log：只有边界前缀（6 事件）。
-      expect(child.events).toHaveLength(6);
-      expect(child.events.some((e) => (e.type as string) === "session-branch/version")).toBe(false);
+      // ignorable 版本效果事件原样落库（与 JSONL 一致）：7 事件（6 前缀 + 版本）。
+      expect(child.events).toHaveLength(7);
+      expect(child.events.some((e) => (e.type as string) === "session-branch/version")).toBe(true);
       expect(child.meta.isSeeded).toBe(true);
       expect(child.inheritedEventCount).toBe(6);
     } finally {
@@ -250,7 +212,6 @@ describe("forkFrom", () => {
       await createPersisted(ctx, "src", twoTurnLog());
       const backend = persistence.internals().backend as unknown as {
         getEventRows(id: SessionId): Promise<Array<{ fEventId: string; fSequence: number }>>;
-        getSeqMapRows(id: SessionId): Promise<Array<{ fOriginalSeq: number }>>;
       };
       const parentRows = await backend.getEventRows(SessionId("src"));
       expect(parentRows).toHaveLength(12);
@@ -268,9 +229,9 @@ describe("forkFrom", () => {
       expect(childRows.map((r) => r.fEventId)).toEqual(
         parentRows.slice(0, 6).map((r) => r.fEventId),
       );
-      // 子会话桥接行的 f_original_seq 是子会话自己的上游空间（0..5）。
-      const childBridges = await backend.getSeqMapRows(SessionId("child"));
-      expect(childBridges.map((r) => r.fOriginalSeq)).toEqual([0, 1, 2, 3, 4, 5]);
+      // 子会话桥接行的 f_sequence 是子会话自己的上游空间（0..5）。
+      const childBridges = await backend.getEventRows(SessionId("child"));
+      expect(childBridges.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5]);
     } finally {
       await dispose();
     }
@@ -386,82 +347,6 @@ describe("rewind", () => {
     }
   });
 
-  it("rewinds a live session whose log contains dropped delta events (upstream vs dense seq)", async () => {
-    const { ctx, persistence, provider, dispose } = await harness();
-    try {
-      // live 会话：seed 含 assistant/chunk（delta——落盘时被 RDB 过滤，稠密
-      // 重编号后 RDB head 落后于 live 上游 head）。上游 seq 0..15（两轮各
-      // 6 个 persisted + 2 个 delta）+ 构造时自动补记的 session/end-seed（seq 16）。
-      const turn2: SessionEvent[] = oneTurnLog().map(
-        (event) =>
-          ({
-            ...event,
-            seq: event.seq + 8,
-            time: event.time + 100,
-            data: { ...event.data, turn: 2 },
-          }) as SessionEvent,
-      );
-      const seed: SessionEvent[] = [
-        ...oneTurnLog(),
-        {
-          type: "assistant/chunk",
-          seq: SessionSeq(6),
-          time: 7,
-          data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "x" } },
-        },
-        {
-          type: "assistant/chunk",
-          seq: SessionSeq(7),
-          time: 8,
-          data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "y" } },
-        },
-        ...turn2,
-        {
-          type: "assistant/chunk",
-          seq: SessionSeq(14),
-          time: 15,
-          data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "z" } },
-        },
-        {
-          type: "assistant/chunk",
-          seq: SessionSeq(15),
-          time: 16,
-          data: { turn: 2, step: 1, chunk: { type: "text-delta", index: 0, text: "w" } },
-        },
-      ];
-      ctx.sessions.create(SessionId("live-delta"), { meta: meta("live-delta"), seed: [...seed] });
-      const live = ctx.sessions.get(SessionId("live-delta"))!;
-      await ctx.sessions.flush(live);
-
-      const backend = persistence.internals().backend as unknown as {
-        getHead(id: SessionId): Promise<{ fHeadSequence: number }>;
-      };
-      // live 上游 head = 16；RDB 稠密 head = 12（persisted：轮 1 seq 0..5、
-      // 轮 2 seq 8..13、end-seed seq 16；4 个 delta 被过滤）。
-      expect(live.snapshotEvents().at(-1)?.seq).toBe(16);
-      expect((await backend.getHead(SessionId("live-delta"))).fHeadSequence).toBe(12);
-
-      // 编辑轮 2 → boundary = 轮 1 的 turn/end（上游 seq 5）。修复前此处
-      // 误报 "rewind boundary 5 is beyond the stored head 12"。
-      const snapshot = await provider.rewind(SessionId("live-delta"), 5);
-      expect(snapshot.header.id).toBe("live-delta");
-
-      // live 内存 log 截断到上游边界。
-      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-      // RDB head 截断到稠密目标（轮 1 无 delta 插入中间 → 上游 5 == 稠密 5）。
-      expect((await backend.getHead(SessionId("live-delta"))).fHeadSequence).toBe(5);
-
-      // 截断后继续 append 成功（coordinator cursor 已对齐新尾部）。
-      const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
-      liveAppend.append("turn/start", { turn: 2 });
-      await ctx.sessions.flush(live);
-      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
-      expect((await backend.getHead(SessionId("live-delta"))).fHeadSequence).toBe(6);
-    } finally {
-      await dispose();
-    }
-  });
-
   it("rewinds to the empty prefix when boundary is -1", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
@@ -495,9 +380,9 @@ describe("rewind", () => {
       // 截断到轮 1 的 user/message（seq 1，exclusive）：保留 turn/start @0。
       const snapshot = await provider.rewind(SessionId("child"), 1);
       expect(snapshot.header.id).toBe("child");
-      // 原始存储事件（loadStored 不补合成 closers）：仅 turn/start @0；
+      // 原始存储事件（readLog 不补合成 closers）：仅 turn/start @0；
       // 收缩后的继承前缀长度 = 保留事件数（存储自洽）。
-      const stored = await persistence.loadStored(SessionId("child"));
+      const stored = await persistence.readLog(SessionId("child"));
       expect(stored).toBeDefined();
       expect(stored!.events).toHaveLength(1);
       expect(stored!.events[0]?.type).toBe("turn/start");
@@ -539,7 +424,7 @@ describe("rewind", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/start", seq: SessionSeq(14), time: 14, data: { turn: 3, step: 1 } },
         {
           type: "assistant/message",
@@ -556,7 +441,7 @@ describe("rewind", () => {
             },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
       ];
       await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
 
@@ -611,14 +496,8 @@ describe("rewind", () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
       // 真实 agent-loop 的 append 顺序：turn/start → step/start → user/message
-      // → assistant/chunk（delta，落盘被过滤）→ assistant/message → step/end
+      // → assistant/message（stream 内嵌 delta，原样落库）→ step/end
       // （无 turn/end）。轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 未闭合。
-      const chunk = (seq: number, text: string): SessionEvent => ({
-        type: "assistant/chunk",
-        seq: SessionSeq(seq),
-        time: seq,
-        data: { turn: 3, step: 1, chunk: { type: "text-delta", index: 0, text } },
-      });
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
@@ -631,15 +510,13 @@ describe("rewind", () => {
             role: "user",
             content: [{ type: "text", text: "go on" }],
             source: { kind: "user" },
-          },
+          } as unknown as SessionEvent,
           surfaceOp: "append",
-        } as SessionEvent,
-        chunk(15, "a"),
-        chunk(16, "b"),
+        } as unknown as SessionEvent,
         {
           type: "assistant/message",
-          seq: SessionSeq(17),
-          time: 17,
+          seq: SessionSeq(15),
+          time: 15,
           data: {
             turn: 3,
             step: 1,
@@ -649,10 +526,24 @@ describe("rewind", () => {
               content: [{ type: "text", text: "partial" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [
+              {
+                type: "chunk",
+                time: 15,
+                chunk: { type: "block-start", index: 0, blockType: "text" },
+              },
+              { type: "text-chunks", time0: 15, index: 0, dt: [], texts: ["partial"] },
+              {
+                type: "chunk",
+                time: 15,
+                chunk: { type: "block-end", index: 0, block: { type: "text", text: "partial" } },
+              },
+              { type: "chunk", time: 15, chunk: { type: "finish", reason: { kind: "stop" } } },
+            ],
           },
           surfaceOp: "append",
-        } as SessionEvent,
-        { type: "step/end", seq: SessionSeq(18), time: 18, data: { turn: 3, step: 1 } },
+        } as unknown as SessionEvent,
+        { type: "step/end", seq: SessionSeq(16), time: 16, data: { turn: 3, step: 1 } },
       ];
       await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
 
@@ -716,7 +607,7 @@ describe("rewind", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         {
           type: "assistant/message",
           seq: SessionSeq(15),
@@ -732,7 +623,7 @@ describe("rewind", () => {
             },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(16), time: 16, data: { turn: 3, step: 1 } },
       ];
       await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
@@ -772,21 +663,18 @@ describe("rewind", () => {
           },
         },
         {
-          type: "assistant/message",
+          type: "user/message",
           seq: SessionSeq(9),
           time: 9,
           data: {
-            turn: 2,
-            step: 1,
-            message: {
-              id: "compacted",
-              role: "assistant",
-              content: [{ type: "text", text: "compacted" }],
-              source: { kind: "model", provider: "mock", model: "mock" },
-            },
+            id: "compacted",
+            role: "user",
+            content: [{ type: "text", text: "compacted" }],
+            source: { kind: "user" },
           },
           surfaceOp: { op: "replace", start: 1, end: 3 },
-        },
+          sourceEventSeqs: [1, 3].map((n) => SessionSeq(n)),
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(10), time: 10, data: { turn: 2, step: 1 } },
         {
           type: "turn/end",
@@ -831,21 +719,18 @@ describe("rewind", () => {
           },
         },
         {
-          type: "assistant/message",
+          type: "user/message",
           seq: SessionSeq(9),
           time: 9,
           data: {
-            turn: 2,
-            step: 1,
-            message: {
-              id: "compacted",
-              role: "assistant",
-              content: [{ type: "text", text: "compacted" }],
-              source: { kind: "model", provider: "mock", model: "mock" },
-            },
+            id: "compacted",
+            role: "user",
+            content: [{ type: "text", text: "compacted" }],
+            source: { kind: "user" },
           },
           surfaceOp: { op: "replace", start: 1, end: 3 },
-        },
+          sourceEventSeqs: [1, 3].map((n) => SessionSeq(n)),
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(10), time: 10, data: { turn: 2, step: 1 } },
         {
           type: "turn/end",
@@ -864,7 +749,7 @@ describe("rewind", () => {
       const after = await persistence.load(SessionId("s1"));
       expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
       // 保留区 replace 的 range [1..5] 完整（range 引用更早事件 ⇒ 截断尾部不破坏）。
-      const replacement = after.events.find((e) => e.type === "assistant/message" && e.seq === 9)!;
+      const replacement = after.events.find((e) => e.type === "user/message" && e.seq === 9)!;
       expect((replacement as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 1, end: 3 });
       // provenance 读取时重计算（覆盖 range 内全部 surface 节点）。
       expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
@@ -896,7 +781,7 @@ describe("rewind", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         {
           type: "assistant/message",
           seq: SessionSeq(9),
@@ -910,9 +795,10 @@ describe("rewind", () => {
               content: [{ type: "text", text: "a1" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [],
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(10), time: 11, data: { turn: 2, step: 1 } },
         { type: "step/start", seq: SessionSeq(11), time: 12, data: { turn: 2, step: 2 } },
         {
@@ -926,7 +812,7 @@ describe("rewind", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(13), time: 14, data: { turn: 2, step: 2 } },
         {
           type: "turn/end",
@@ -944,9 +830,7 @@ describe("rewind", () => {
         persistence as unknown as {
           internals(): {
             backend: {
-              getEventRows(
-                id: SessionId,
-              ): Promise<Array<{ fSequence: number; fType: string }>>;
+              getEventRows(id: SessionId): Promise<Array<{ fSequence: number; fType: string }>>;
             };
           };
         }
@@ -970,7 +854,7 @@ describe("rewind", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         {
           type: "assistant/message",
           seq: SessionSeq(13),
@@ -984,9 +868,10 @@ describe("rewind", () => {
               content: [{ type: "text", text: "a2" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [],
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(14), time: 19, data: { turn: 2, step: 3 } },
         {
           type: "turn/end",
@@ -1008,4 +893,3 @@ describe("rewind", () => {
     }
   });
 });
-

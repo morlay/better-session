@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
+import SessionPersistenceSqlite from "@morlay/session-rdb";
 import {
   createPersisted,
   harness,
@@ -14,24 +15,23 @@ import {
   type SessionEvent,
 } from "@morlay/ui-conversation-message-actions/testing";
 
+/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
+function rdb(ctx: import("@deepseek-ai/cordis").Context): SessionPersistenceSqlite {
+  return ctx.sessionPersistence as SessionPersistenceSqlite;
+}
+
 const dirs: string[] = [];
 afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
 describe("SessionEditor edit", () => {
-  it("edits after an interrupted run (open turn with delta events) without misreading the stored head", async () => {
+  it("edits after an interrupted run (open turn with streamed output) without misreading the stored head", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
       // 轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 流式输出中途停止：
-      // turn/start + user/message + step/start + 大量 assistant/chunk（delta，
-      // 落盘时被 RDB 过滤）+ assistant/message + step/end，没有 turn/end。
-      const chunk = (seq: number, text: string): SessionEvent => ({
-        type: "assistant/chunk",
-        seq: SessionSeq(seq),
-        time: seq,
-        data: { turn: 3, step: 1, chunk: { type: "text-delta", index: 0, text } },
-      });
+      // turn/start + user/message + step/start + assistant/message（stream
+      // 内嵌 delta，原样落库）+ step/end，没有 turn/end。
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         {
@@ -45,15 +45,12 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/start", seq: SessionSeq(14), time: 14, data: { turn: 3, step: 1 } },
-        chunk(15, "a"),
-        chunk(16, "b"),
-        chunk(17, "c"),
         {
           type: "assistant/message",
-          seq: SessionSeq(18),
-          time: 18,
+          seq: SessionSeq(15),
+          time: 15,
           data: {
             turn: 3,
             step: 1,
@@ -63,10 +60,24 @@ describe("SessionEditor edit", () => {
               content: [{ type: "text", text: "partial" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [
+              {
+                type: "chunk",
+                time: 15,
+                chunk: { type: "block-start", index: 0, blockType: "text" },
+              },
+              { type: "text-chunks", time0: 15, index: 0, dt: [], texts: ["partial"] },
+              {
+                type: "chunk",
+                time: 15,
+                chunk: { type: "block-end", index: 0, block: { type: "text", text: "partial" } },
+              },
+              { type: "chunk", time: 15, chunk: { type: "finish", reason: { kind: "stop" } } },
+            ],
           },
           surfaceOp: "append",
-        } as SessionEvent,
-        { type: "step/end", seq: SessionSeq(19), time: 19, data: { turn: 3, step: 1 } },
+        } as unknown as SessionEvent,
+        { type: "step/end", seq: SessionSeq(16), time: 16, data: { turn: 3, step: 1 } },
       ];
       ctx.sessions.create(SessionIdBrand("live"), {
         meta: meta("live"),
@@ -75,8 +86,8 @@ describe("SessionEditor edit", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
 
-      // live 上游 head = 20（含构造时自动补记的 session/end-seed）；
-      // RDB 稠密 head = 17（3 个 delta 被过滤，end-seed 落盘）。
+      // live 上游 head = 17（含构造时自动补记的 session/end-seed）；
+      // RDB 稠密 head = 17（原样落库，与 JSONL 一致）。
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -84,7 +95,7 @@ describe("SessionEditor edit", () => {
           };
         }
       ).internals().backend;
-      expect(live.snapshotEvents().at(-1)?.seq).toBe(20);
+      expect(live.snapshotEvents().at(-1)?.seq).toBe(17);
       expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(17);
 
       // 编辑轮 2 的助手文本 → boundary = 轮 1 的 turn/end（上游 seq 5）。
@@ -107,8 +118,8 @@ describe("SessionEditor edit", () => {
       ]);
       expect(live.snapshotEvents()[6]?.type).toBe("session-branch/version");
       expect(live.snapshotEvents().at(-1)?.type).toBe("turn/end");
-      // RDB canonical log：截断前缀 + 手工轮（版本效果 ignorable 不落库）→ head = 11。
-      expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(11);
+      // RDB canonical log：截断前缀 + 版本效果 + 手工轮 → head = 12。
+      expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(12);
 
       // 截断后继续 append 成功（coordinator cursor 已对齐，无残留 writer 校验误报）。
       const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
@@ -117,7 +128,7 @@ describe("SessionEditor edit", () => {
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
       ]);
-      expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(12);
+      expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(13);
     } finally {
       await dispose();
     }
@@ -131,7 +142,7 @@ describe("SessionEditor edit", () => {
         seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
-      } as SessionEvent;
+      } as unknown as SessionEvent;
       const first = oneTurnLog().map(
         (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
       );
@@ -190,7 +201,7 @@ describe("SessionEditor edit", () => {
         seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
-      } as SessionEvent;
+      } as unknown as SessionEvent;
       const first = oneTurnLog().map(
         (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
       );
@@ -279,7 +290,7 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/start", seq: SessionSeq(14), time: 14, data: { turn: 3, step: 1 } },
         {
           type: "assistant/message",
@@ -294,9 +305,10 @@ describe("SessionEditor edit", () => {
               content: [{ type: "text", text: "partial" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [],
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
 
@@ -313,9 +325,9 @@ describe("SessionEditor edit", () => {
       expect(result.sessionId).toBe(SessionIdBrand("src"));
       expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
 
-      // 真实落盘行：截断前缀（0..12，含 turn/start 12）；版本效果 ignorable
-      // 不落库；无 agents 服务 → 重放输入不落盘（退化为已 durable 的就地
-      // 版本，可随时继续输入）。
+      // 真实落盘行：截断前缀（0..12，含 turn/start 12）+ 版本效果原样落库
+      // （seq 13，ignorable 信封与 JSONL 一致）；无 agents 服务 → 重放输入
+      // 不落盘（退化为已 durable 的就地版本，可随时继续输入）。
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -328,16 +340,16 @@ describe("SessionEditor edit", () => {
         }
       ).internals().backend;
       const rows = await backend.getEventRows(SessionIdBrand("src"));
-      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
       expect(rows[12]?.fType).toBe("turn/start");
+      expect(rows[13]?.fType).toBe("session-branch/version");
       // 被 drop 的旧 user/message（seq 13）与轮 3 partial assistant（seq 15）
       // 不在 log 中（轮 1/2 的 assistant/message 保留）。
       expect(rows.some((r) => r.fType === "user/message" && r.fSequence === 13)).toBe(false);
       expect(rows.some((r) => r.fType === "assistant/message" && r.fSequence === 15)).toBe(false);
       expect(rows.some((r) => r.fType === "assistant/message" && r.fSequence === 3)).toBe(true);
 
-      // 截断后继续 append 成功：版本效果（ignorable）占 seq 13 推进 cursor，
-      // 后续输入从 seq 14 续接（落盘时 ignorable 被过滤、稠密重编号连续）。
+      // 截断后继续 append 成功：版本效果占位 seq 13，后续输入从 seq 14 续接。
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
@@ -347,10 +359,10 @@ describe("SessionEditor edit", () => {
             data: { ...event.data, turn: 3 },
           }) as SessionEvent,
       );
-      await ctx.sessionPersistence.append(SessionIdBrand("src"), continuation);
-      const continued = await ctx.sessionPersistence.load(SessionIdBrand("src"));
+      await rdb(ctx).append(SessionIdBrand("src"), continuation);
+      const continued = await rdb(ctx).load(SessionIdBrand("src"));
       expect(continued.events.at(-1)?.type).toBe("turn/end");
-      expect(continued.events).toHaveLength(19);
+      expect(continued.events).toHaveLength(20);
     } finally {
       await dispose();
     }
@@ -372,7 +384,7 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/start", seq: SessionSeq(14), time: 14, data: { turn: 3, step: 1 } },
         {
           type: "assistant/message",
@@ -387,9 +399,10 @@ describe("SessionEditor edit", () => {
               content: [{ type: "text", text: "partial" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [],
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
 
@@ -427,7 +440,7 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         {
           type: "assistant/message",
           seq: SessionSeq(15),
@@ -441,9 +454,10 @@ describe("SessionEditor edit", () => {
               content: [{ type: "text", text: "partial" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [],
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(16), time: 16, data: { turn: 3, step: 1 } },
       ];
       ctx.sessions.create(SessionIdBrand("live"), {
@@ -489,10 +503,9 @@ describe("SessionEditor edit", () => {
   it("exports a surface-corrupt session as a loadable artifact (export-time repair)", async () => {
     const { ctx, dispose } = await harness();
     try {
-      // 历史加载失败的数据样式：append 时事件 seq 是上游坐标（delta 被过滤
-      // 后稠密重编号），replace 的 sourceEventSeqs/surfaceOp 原样落库为上游
-      // 坐标；且 tool/result replace 指向的当前 surface 节点不是 tool/result
-      // （上游 assertToolResultRewrite 校验失败）——load 抛 invalid seed。
+      // 历史加载失败的数据样式：tool/result replace 指向的当前 surface 节点
+      // 不是 tool/result（上游 assertToolResultRewrite 校验失败）——load 抛
+      // invalid seed。导出（readRaw）把非法 replace 降级为 append。
       const compacted: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
         {
@@ -506,24 +519,12 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/start", seq: SessionSeq(2), time: 3, data: { turn: 1, step: 1 } },
         {
-          type: "assistant/chunk",
+          type: "assistant/message",
           seq: SessionSeq(3),
           time: 4,
-          data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
-        },
-        {
-          type: "assistant/chunk",
-          seq: SessionSeq(4),
-          time: 5,
-          data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
-        },
-        {
-          type: "assistant/message",
-          seq: SessionSeq(5),
-          time: 6,
           data: {
             turn: 1,
             step: 1,
@@ -533,22 +534,23 @@ describe("SessionEditor edit", () => {
               content: [{ type: "text", text: "hello" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [],
           },
           surfaceOp: "append",
-        } as SessionEvent,
-        { type: "step/end", seq: SessionSeq(6), time: 7, data: { turn: 1, step: 1 } },
+        } as unknown as SessionEvent,
+        { type: "step/end", seq: SessionSeq(4), time: 5, data: { turn: 1, step: 1 } },
         {
           type: "turn/end",
-          seq: SessionSeq(7),
-          time: 8,
+          seq: SessionSeq(5),
+          time: 6,
           data: { turn: 1, reason: { kind: "completed" } },
         },
-        { type: "turn/start", seq: SessionSeq(8), time: 9, data: { turn: 2 } },
-        { type: "step/start", seq: SessionSeq(9), time: 10, data: { turn: 2, step: 1 } },
+        { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
+        { type: "step/start", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
         {
           type: "assistant/message",
-          seq: SessionSeq(10),
-          time: 11,
+          seq: SessionSeq(8),
+          time: 9,
           data: {
             turn: 2,
             step: 1,
@@ -558,15 +560,16 @@ describe("SessionEditor edit", () => {
               content: [{ type: "text", text: "compacted" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [],
           },
-          surfaceOp: { op: "replace", start: 1, end: 5 },
-          sourceEventSeqs: [1, 5],
-        } as SessionEvent,
-        { type: "step/end", seq: SessionSeq(11), time: 12, data: { turn: 2, step: 1 } },
+          surfaceOp: { op: "replace", start: 1, end: 3 },
+          sourceEventSeqs: [1, 3],
+        } as unknown as SessionEvent,
+        { type: "step/end", seq: SessionSeq(9), time: 10, data: { turn: 2, step: 1 } },
         {
           type: "turn/end",
-          seq: SessionSeq(12),
-          time: 13,
+          seq: SessionSeq(10),
+          time: 11,
           data: { turn: 2, reason: { kind: "completed" } },
         },
       ];
@@ -574,17 +577,21 @@ describe("SessionEditor edit", () => {
 
       // 导出即修复：readRaw 序列化前修复 surface 语义并重算 provenance，
       // 产出的 artifact 无需任何修复即可导入。
-      const raw = await ctx.sessionPersistence.readRaw(SessionIdBrand("export-me"));
+      const raw = await rdb(ctx).readRaw(SessionIdBrand("export-me"));
       expect(raw).toBeDefined();
       const parsed = parseJsonlArtifact(raw!.content);
       // 导入以新 id 落库后会话可完整加载。
       const importedId = SessionIdBrand("export-imported");
-      await ctx.sessionPersistence.create(
+      const handle = await rdb(ctx).create(
         { ...parsed.meta, id: importedId },
-        parsed.inheritedEventCount,
+        { inheritedEventCount: parsed.inheritedEventCount },
       );
-      await ctx.sessionPersistence.append(importedId, parsed.events);
-      const after = await ctx.sessionPersistence.load(importedId);
+      try {
+        await handle.append(parsed.events);
+      } finally {
+        await handle.close();
+      }
+      const after = await rdb(ctx).load(importedId);
       expect(after.events.at(-1)?.type).toBe("turn/end");
       expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     } finally {
@@ -596,14 +603,8 @@ describe("SessionEditor edit", () => {
     const { ctx, editor, dispose } = await harness();
     try {
       // 真实 agent-loop 的 append 顺序：turn/start → step/start → user/message
-      // → assistant/chunk（delta，落盘被过滤）→ assistant/message → step/end
+      // → assistant/message（stream 内嵌 delta，原样落库）→ step/end
       // （无 turn/end）。轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 未闭合。
-      const chunk = (seq: number, text: string): SessionEvent => ({
-        type: "assistant/chunk",
-        seq: SessionSeq(seq),
-        time: seq,
-        data: { turn: 3, step: 1, chunk: { type: "text-delta", index: 0, text } },
-      });
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
@@ -618,13 +619,11 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
-        chunk(15, "a"),
-        chunk(16, "b"),
+        } as unknown as SessionEvent,
         {
           type: "assistant/message",
-          seq: SessionSeq(17),
-          time: 17,
+          seq: SessionSeq(15),
+          time: 15,
           data: {
             turn: 3,
             step: 1,
@@ -634,10 +633,24 @@ describe("SessionEditor edit", () => {
               content: [{ type: "text", text: "partial" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [
+              {
+                type: "chunk",
+                time: 15,
+                chunk: { type: "block-start", index: 0, blockType: "text" },
+              },
+              { type: "text-chunks", time0: 15, index: 0, dt: [], texts: ["partial"] },
+              {
+                type: "chunk",
+                time: 15,
+                chunk: { type: "block-end", index: 0, block: { type: "text", text: "partial" } },
+              },
+              { type: "chunk", time: 15, chunk: { type: "finish", reason: { kind: "stop" } } },
+            ],
           },
           surfaceOp: "append",
-        } as SessionEvent,
-        { type: "step/end", seq: SessionSeq(18), time: 18, data: { turn: 3, step: 1 } },
+        } as unknown as SessionEvent,
+        { type: "step/end", seq: SessionSeq(16), time: 16, data: { turn: 3, step: 1 } },
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
 
@@ -657,7 +670,7 @@ describe("SessionEditor edit", () => {
       expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
 
       // 真实落盘行：截断前缀（0..12，含 turn/start 12，孤儿 step/start 13
-      // 被剔除）；版本效果 ignorable 不落库。
+      // 被剔除）+ 版本效果原样落库（seq 13）。
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -670,12 +683,12 @@ describe("SessionEditor edit", () => {
         }
       ).internals().backend;
       const rows = await backend.getEventRows(SessionIdBrand("src"));
-      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
       expect(rows[12]?.fType).toBe("turn/start");
+      expect(rows[13]?.fType).toBe("session-branch/version");
       expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 13)).toBe(false);
 
-      // 截断后继续 append 成功：版本效果（ignorable）占 seq 13 推进 cursor，
-      // 后续输入从 seq 14 续接（落盘时 ignorable 被过滤、稠密重编号连续）。
+      // 截断后继续 append 成功：版本效果占位 seq 13，后续输入从 seq 14 续接。
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
@@ -685,8 +698,8 @@ describe("SessionEditor edit", () => {
             data: { ...event.data, turn: 3 },
           }) as SessionEvent,
       );
-      await ctx.sessionPersistence.append(SessionIdBrand("src"), continuation);
-      const continued = await ctx.sessionPersistence.load(SessionIdBrand("src"));
+      await rdb(ctx).append(SessionIdBrand("src"), continuation);
+      const continued = await rdb(ctx).load(SessionIdBrand("src"));
       expect(continued.events.at(-1)?.type).toBe("turn/end");
       // 完整 log 对 token meter 重放合法（无孤儿 step/start）。
       const meter = new TokenMeter(ctx);
@@ -718,7 +731,7 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         {
           type: "assistant/message",
           seq: SessionSeq(15),
@@ -732,9 +745,10 @@ describe("SessionEditor edit", () => {
               content: [{ type: "text", text: "partial" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [],
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(16), time: 16, data: { turn: 3, step: 1 } },
         { type: "step/start", seq: SessionSeq(17), time: 17, data: { turn: 3, step: 2 } },
         {
@@ -748,7 +762,7 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(19), time: 19, data: { turn: 3, step: 2 } },
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
@@ -767,7 +781,7 @@ describe("SessionEditor edit", () => {
       expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
 
       // 真实落盘行：截断前缀（0..16，孤儿 step/start 17 被 balanceRewindPrefix
-      // 剔除——它配对的 step/end 19 已被 drop）；版本效果 ignorable 不落库；
+      // 剔除——它配对的 step/end 19 已被 drop）+ 版本效果原样落库（seq 17）；
       // 被 drop 的旧 followup（seq 18）与 step/end（19）不在 log 中。
       const backend = (
         ctx.sessionPersistence as unknown as {
@@ -782,8 +796,9 @@ describe("SessionEditor edit", () => {
       ).internals().backend;
       const rows = await backend.getEventRows(SessionIdBrand("src"));
       expect(rows.map((r) => r.fSequence)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
       ]);
+      expect(rows[17]?.fType).toBe("session-branch/version");
       expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 17)).toBe(false);
       expect(rows.some((r) => r.fType === "user/message" && r.fSequence === 18)).toBe(false);
       expect(rows.some((r) => r.fType === "step/end" && r.fSequence === 19)).toBe(false);
@@ -802,7 +817,7 @@ describe("SessionEditor edit", () => {
         seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
-      } as SessionEvent;
+      } as unknown as SessionEvent;
       const first = oneTurnLog().map(
         (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
       );
@@ -829,7 +844,7 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         {
           type: "assistant/message",
           seq: SessionSeq(16),
@@ -843,9 +858,10 @@ describe("SessionEditor edit", () => {
               content: [{ type: "text", text: "partial" }],
               source: { kind: "model", provider: "mock", model: "mock" },
             },
+            stream: [],
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(17), time: 17, data: { turn: 3, step: 1 } },
         { type: "step/start", seq: SessionSeq(18), time: 18, data: { turn: 3, step: 2 } },
         {
@@ -859,7 +875,7 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(20), time: 20, data: { turn: 3, step: 2 } },
       ];
       ctx.sessions.create(SessionIdBrand("live"), {
@@ -928,7 +944,7 @@ describe("SessionEditor edit", () => {
         seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
-      } as SessionEvent;
+      } as unknown as SessionEvent;
       const first = oneTurnLog().map(
         (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
       );
@@ -946,7 +962,7 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         {
           type: "assistant/message",
           seq: SessionSeq(10),
@@ -962,7 +978,7 @@ describe("SessionEditor edit", () => {
             },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(11), time: 12, data: { turn: 2, step: 1 } },
         { type: "step/start", seq: SessionSeq(12), time: 13, data: { turn: 2, step: 2 } },
         {
@@ -976,7 +992,7 @@ describe("SessionEditor edit", () => {
             source: { kind: "user" },
           },
           surfaceOp: "append",
-        } as SessionEvent,
+        } as unknown as SessionEvent,
         { type: "step/end", seq: SessionSeq(14), time: 15, data: { turn: 2, step: 2 } },
         {
           type: "turn/end",
@@ -999,7 +1015,7 @@ describe("SessionEditor edit", () => {
       });
       expect(result.sessionId).toBe(SessionIdBrand("src"));
 
-      const after = await ctx.sessionPersistence.load(SessionIdBrand("src"));
+      const after = await rdb(ctx).load(SessionIdBrand("src"));
       const outline = after.events
         .filter((e) =>
           ["turn/start", "turn/end", "user/message", "assistant/message"].includes(e.type),
@@ -1051,7 +1067,7 @@ describe("SessionEditor edit", () => {
         seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
-      } as SessionEvent;
+      } as unknown as SessionEvent;
       const first = oneTurnLog().map(
         (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
       );
@@ -1079,14 +1095,17 @@ describe("SessionEditor edit", () => {
         create: async () => {
           throw new Error("unused");
         },
-        resume: async (options: { resumeSessionId: string; agentOptions?: { provider: string; model: string } }) => {
+        resume: async (options: {
+          resumeSessionId: string;
+          agentOptions?: { provider: string; model: string };
+        }) => {
           resumed.push({
             sessionId: options.resumeSessionId,
             provider: options.agentOptions?.provider,
             model: options.agentOptions?.model,
           });
           // 真实 resume 会加载会话并建立 live entry（读 DB 现有事件）。
-          const stored = await ctx.sessionPersistence.load(SessionIdBrand("cold"));
+          const stored = await rdb(ctx).load(SessionIdBrand("cold"));
           ctx.sessions.create(SessionIdBrand("cold"), {
             meta: stored.meta,
             seed: [...stored.events],
@@ -1119,9 +1138,7 @@ describe("SessionEditor edit", () => {
       expect(resumed[0]).toMatchObject({ sessionId: "cold", provider: "mock", model: "mock" });
       // followup 收到编辑后的输入。
       expect(followups).toHaveLength(1);
-      const text = (
-        followups[0] as { content: Array<{ type: string; text?: string }> }
-      ).content
+      const text = (followups[0] as { content: Array<{ type: string; text?: string }> }).content
         .filter((b) => b.type === "text")
         .map((b) => b.text ?? "")
         .join("");
@@ -1142,7 +1159,7 @@ describe("SessionEditor edit", () => {
         seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
-      } as SessionEvent;
+      } as unknown as SessionEvent;
       const first = oneTurnLog().map(
         (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
       );
@@ -1171,7 +1188,7 @@ describe("SessionEditor edit", () => {
           cascade: "truncate",
         }),
       ).rejects.toThrow(/no agent factory registered|无法重放/);
-      const after = await ctx.sessionPersistence.load(SessionIdBrand("cold2"));
+      const after = await rdb(ctx).load(SessionIdBrand("cold2"));
       expect(after.events).toHaveLength(7); // header(0) + 轮 1(1..6) 完整
       disposeAgents();
     } finally {
@@ -1187,7 +1204,7 @@ describe("SessionEditor edit", () => {
         seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
-      } as SessionEvent;
+      } as unknown as SessionEvent;
       const first = oneTurnLog().map(
         (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
       );
@@ -1259,7 +1276,7 @@ describe("SessionEditor edit", () => {
         seq: SessionSeq(0),
         time: 1,
         data: { header: { config: { provider: "mock", model: "mock" } }, reason: "initial" },
-      } as SessionEvent;
+      } as unknown as SessionEvent;
       const first = oneTurnLog().map(
         (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
       );
