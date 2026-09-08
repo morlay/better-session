@@ -20,8 +20,8 @@ function run(args: string[], cwd: string): void {
   execFileSync("pnpm", args, { cwd, stdio: "inherit" });
 }
 
-console.log(`[build] pnpm install @ ${dir}`);
-run(["install"], dir);
+console.log(`[build] pnpm install --no-frozen-lockfile @ ${dir}`);
+run(["install", "--no-frozen-lockfile"], dir);
 console.log(`[build] pnpm run build @ ${dir}`);
 run(["run", "build"], dir);
 
