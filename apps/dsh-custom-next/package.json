@@ -15,14 +15,9 @@
     "@morlay/better-session": "workspace:^",
     "@morlay/dsh-llm-openai-compatible": "workspace:^"
   },
-  "peerDependencies": {
-    "@deepseek-ai/dsh": "workspace:^"
-  },
   "dsh": {
     "profile": {
       "bundles": [
-        "@deepseek-ai/dsh-base",
-        "@deepseek-ai/dsh-web-app",
         "@morlay/better-session",
         "@morlay/dsh-llm-openai-compatible"
       ]

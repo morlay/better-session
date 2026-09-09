@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readdirSync, statSync } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
@@ -30,7 +31,7 @@ import {
 type SqliteDb = NodeSQLiteDatabase & { $client: DatabaseSync };
 
 /** drizzle-kit 生成的迁移目录（随包根 drizzle/ 发布；src/dist 形态经相对 URL 统一解析）。 */
-const sqliteMigrationsDir = new URL("../drizzle/sqlite/", import.meta.url).pathname;
+const sqliteMigrationsDir = fileURLToPath(new URL("../drizzle/sqlite/", import.meta.url));
 
 const sqliteTxQueues = new Map<string, Promise<void>>();
 

@@ -16,7 +16,9 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 │   ├── ARCHITECTURE.md          # 本文档
 │   └── CODING_GUIDELINE.md      # 项目约定
 ├── apps/
-│   └── dsh-custom/              # 本地 GUI 应用壳（dsh-web-desktopify：dev / bundle）
+│   └── dsh-custom-next/          # 工作区：web 模式（dsh web）与 desktop 模式的拍平定义
+├── devpackages/
+│   └── dsh-desktopify/           # 桌面化打包工具（Electron 壳，dev 链接工作区 / bundle 静态打包）
 ├── packages/
 │   ├── session-branch/          # 契约层 @morlay/session-branch（provider 抽象 + 版本树）
 │   │   ├── CONTEXT.md           # 会话编辑上下文术语表
@@ -102,6 +104,48 @@ namespace 可覆盖为 PostgreSQL（`connectionString`）。官方
   （版本锁定完整代码，`DEEPSEEK_HARNESS_VERSION`），更新与适配流程见
   [dsh-side-workspace-plugin-develop skill](../.agents/skills/dsh-side-workspace-plugin-develop/SKILL.md) 与
   [ADR 0001](adr/0001-上游以side-workspace版本锁定完整代码而非发布版本.md)。
+
+## 桌面化（devpackages/dsh-desktopify）
+
+参考上游官方 `apps/desktop`（Electron 壳）+ `apps/desktop-host`（字节管道
+后端）实现，去掉 golang（原 dsh-web-desktopify 方案），全面统一到 pnpm +
+node，保持静态打包能力（无需签名与开发者账号）：
+
+- **工具形态**：`@morlay/dsh-desktopify` 是打包工具（bin
+  `dsh-desktopify`），工作区/应用作为参数或 `DSH_DESKTOP_WORKSPACE` 传入
+  （缺省当前目录），工具内不写死任何 app 路径或名字。
+- **壳**：Electron 主进程（`dsh-app://` 自定义协议 + host 子进程守护），
+  复用上游 `host-process.ts` / `host-protocol.ts`（纯 node 实现，协议版本
+  3）。窗口生命周期、后端守护、退出清理与官方一致。
+- **后端**：直接复用上游已构建的 `@deepseek-ai/dsh-desktop-host`（字节
+  管道协议），不重复实现 boot 逻辑。
+- **官方依赖内部维护**：`@deepseek-ai/*` 依赖清单（dsh、dsh-desktop-host、
+  cordis-plugin-group 及约 20 个 peer 包）由工具内部维护（
+  `src/official.ts`），app 只声明自己的 morlay 依赖；dev 项目与打包闭包由
+  工具装配，官方包经 `workspace:^` 从 vendor 源码解析。
+- **bundles 自动合并**：官方 bundles（`@deepseek-ai/dsh-base`、
+  `@deepseek-ai/dsh-web-app`）+ app 的 `dsh.profile.bundles` 自动合并进
+  dev 项目与种子 profile。
+- **dev**：`pnpm exec dsh-desktopify dev`（工作区 just：`just custom
+desktop`）——链接工作区（vendor dsh CLI + desktop-host + hoisted 闭包），
+  host 用系统 node + `--import=tsx/esm` 直载 morlay TS 源码；
+  `--allow-linked-profile` 放行工作区链接。
+- **bundle**：`pnpm exec dsh-desktopify bundle --dir`（工作区 just：
+  `just custom desktop:bundle`）——`pnpm deploy --prod` 导出工作区闭包 →
+  种子（`dsh-home/profiles/web` + `.seed-hash` 指纹）→ 下载校验 Node 二进制
+  （`prepare:runtime`）→ electron-builder `--dir` 静态打包（无签名、无
+  notarize）。
+- **XDG 路径**：`dshHome: xdg`（默认）→ `xdg.DataHome/<name>`（macOS
+  `~/Library/Application Support`、Linux `$XDG_DATA_HOME`），与参考实现
+  一致；`DSH_APP_DSH_HOME` 可覆盖（开发/测试）。
+- **shell 注入**：Unix 上 host 经 `$SHELL -c 'source ~/.bashrc; exec …'`
+  启动（bash/zsh），继承用户终端环境（API key 等）；`exec` 保持同进程，
+  进程组终止语义不受影响。
+- **morlay 插件适配**：desktop 模式禁用 `webserver`，`SessionEditor` 的
+  HTTP 路由改经 `connection.fetch` 注册到 `/api/session-editor`（web 模式
+  仍走 `webServer`）；客户端按 `__DSH_TRANSPORT__.ownsHost` 加 `/api`
+  前缀。种子闭包内 `@morlay/*` 的 exports 切到 publishConfig 的 dist
+  产物（打包环境无 tsx）。
 
 ## 决策索引
 

@@ -1,2 +1,0 @@
-dev:
-    pnpm exec tsx ./tool/dev.ts

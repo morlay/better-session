@@ -1,0 +1,37 @@
+{
+  "name": "@morlay/dsh-desktopify",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop packaging tool for dsh workspaces: hosts the upstream dsh-desktop-host child over framed byte pipes, with dev (workspace-linked) and bundle (static, unsigned) modes.",
+  "license": "MIT",
+  "bin": {
+    "dsh-desktopify": "bin/dsh-desktopify.mjs"
+  },
+  "files": [
+    "bin/dsh-desktopify.mjs",
+    "lib/*.js",
+    "lib/*.cjs",
+    "renderer/**/*",
+    "package.json"
+  ],
+  "type": "module",
+  "main": "lib/main.js",
+  "scripts": {
+    "build": "pnpm exec tsdown",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "workspace:^",
+    "@deepseek-ai/dsh-desktop-host": "workspace:^",
+    "commander": "^15.0.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-home-paths": "workspace:^",
+    "@types/node": "^26.5.0",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.16.1",
+    "extract-zip": "^2.0.1",
+    "sharp": "^0.35.4",
+    "tar": "^7.5.0"
+  }
+}

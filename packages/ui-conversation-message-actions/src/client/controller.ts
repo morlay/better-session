@@ -16,6 +16,13 @@ import {
   type VersionOperation,
 } from "../shared.ts";
 
+/** desktop 壳（官方 dsh-desktop-host）注入的 transport 标记：ownsHost 时 API 走 /api 前缀。 */
+function editorApiPath(): string {
+  const transport = (globalThis as { __DSH_TRANSPORT__?: { ownsHost?: boolean } })
+    .__DSH_TRANSPORT__;
+  return transport?.ownsHost === true ? `/api${SESSION_EDITOR_PATH}` : SESSION_EDITOR_PATH;
+}
+
 export interface SessionEditorState {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
@@ -157,7 +164,7 @@ export class SessionEditorController {
     });
     try {
       const response = await fetch(
-        `${SESSION_EDITOR_PATH}?sessionId=${encodeURIComponent(this.sessionId)}`,
+        `${editorApiPath()}?sessionId=${encodeURIComponent(this.sessionId)}`,
         {
           method: "GET",
           headers: { accept: "application/json" },
@@ -199,7 +206,7 @@ export class SessionEditorController {
       state.error = null;
     });
     try {
-      const response = await fetch(SESSION_EDITOR_PATH, {
+      const response = await fetch(editorApiPath(), {
         method: "POST",
         headers: { accept: "application/json", "content-type": "application/json" },
         body: JSON.stringify(operation),

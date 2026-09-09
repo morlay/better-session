@@ -1,0 +1,13 @@
+# dsh-custom 工作区：web 模式（浏览器）与 desktop 模式（Electron 壳）。
+
+# web 模式：起 dsh web 并打开浏览器（工作区依赖以 link: 装入 profile）。
+dev:
+    pnpm exec dsh-desktopify dev --web
+
+# desktop 模式：Electron 壳 + 链接工作区（TS 源码直载，无需构建 morlay 包）。
+desktop *args="--skip-build":
+    pnpm exec dsh-desktopify dev {{ args }}
+
+# 打包为静态桌面应用（--dir 产物，无签名）。
+bundle *args:
+    pnpm exec dsh-desktopify bundle --dir {{ args }}

@@ -16,6 +16,7 @@ allowBuilds:
   "@deepseek-ai/dsh-subprocess-local": true
   "@deepseek-ai/dsh-subprocess-local@file:vendor/deepseek-harness/packages/subprocess/subprocess-local": true
   "@google/genai": true
+  electron: true
   electron-winstaller: true
   esbuild: true
   fs-ext: true

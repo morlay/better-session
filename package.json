@@ -10,6 +10,7 @@
   },
   "type": "module",
   "devDependencies": {
+    "@morlay/dsh-desktopify": "workspace:^",
     "@types/node": "^26.5.0",
     "devkit": "workspace:^",
     "oxfmt": "^0.67.0",

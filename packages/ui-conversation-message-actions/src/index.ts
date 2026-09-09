@@ -661,9 +661,11 @@ async function handleRoute(
 }
 
 function registerHttpRoutes(ctx: Context): void {
-  const webServer = ctx.get("webServer") as HttpServerLike | undefined;
-  if (webServer === undefined) return;
+  // web 模式：注册到 webServer（dsh web 的 HTTP 面）。服务在构造期可能
+  // 尚未就绪，effect 回调在插件激活后执行，此时 ctx.get 才能取到。
   ctx.effect(() => {
+    const webServer = ctx.get("webServer") as HttpServerLike | undefined;
+    if (webServer === undefined) return () => {};
     const editor = ctx.sessionEditor;
     return webServer.register({
       kind: "exact",
@@ -671,4 +673,66 @@ function registerHttpRoutes(ctx: Context): void {
       handler: (request, response) => handleRoute(editor, request, response),
     });
   }, "session-editor: HTTP route");
+  // desktop 模式：注册到 connection 的共享 /api 通道（官方 desktop 禁用
+  // webserver，走 connection 网关；路径带 /api 前缀）。connection 是可选
+  // 服务（web 模式无），且可能在 SessionEditor 构造前已 provide（事件已
+  // 错过）——监听 internal/service 事件并立即检查一次。
+  const registerConnectionRoute = (): void => {
+    const connection = ctx.get("connection", false) as
+      | {
+          fetch: {
+            register(route: {
+              path: string;
+              methods: readonly ("GET" | "HEAD" | "POST")[];
+              requestBody: "buffered" | "streaming";
+              fetch: (request: Request) => Promise<Response>;
+            }): () => Promise<void>;
+          };
+        }
+      | undefined;
+    if (connection === undefined) return;
+    const editor = ctx.sessionEditor;
+    ctx.effect(
+      () =>
+        connection.fetch.register({
+          path: `/api${SESSION_EDITOR_PATH}`,
+          methods: ["GET", "POST"],
+          requestBody: "buffered",
+          fetch: (request) => handleFetchRoute(editor, request),
+        }),
+      "session-editor: connection fetch route",
+    );
+  };
+  ctx.on("internal/service", (name) => {
+    if (name === "connection") registerConnectionRoute();
+  });
+  registerConnectionRoute();
+}
+
+/** connection.fetch 路由的 Fetch 形态处理（与 webServer 的 node:http 形态同语义）。 */
+async function handleFetchRoute(editor: SessionEditor, request: Request): Promise<Response> {
+  try {
+    if (request.method === "GET") {
+      const url = new URL(request.url);
+      const sessionId = sessionIdOf(url.searchParams.get("sessionId"));
+      return jsonResponse(200, await readTimeline(editor, sessionId));
+    }
+    if (request.method === "POST") {
+      return jsonResponse(200, await runOperation(editor, decodeOperation(await request.json())));
+    }
+    return new Response(null, { status: 405 });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonResponse(error instanceof TypeError ? 400 : 409, { error: message });
+  }
+}
+
+function jsonResponse(status: number, value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { and, eq, gte, sql } from "drizzle-orm";
 import type { PgAsyncDatabase, PgAsyncTransaction } from "drizzle-orm/pg-core";
 import type { NodePgDatabase, NodePgQueryResultHKT } from "drizzle-orm/node-postgres";
@@ -18,7 +19,7 @@ import { postgresTableDefs } from "./entities/index.ts";
 import { sessionConflictRow, sessionInsertRow } from "./log.ts";
 
 /** drizzle-kit 生成的迁移目录（随包根 drizzle/ 发布；src/dist 形态经相对 URL 统一解析）。 */
-const postgresMigrationsDir = new URL("../drizzle/postgres/", import.meta.url).pathname;
+const postgresMigrationsDir = fileURLToPath(new URL("../drizzle/postgres/", import.meta.url));
 
 export interface PostgresBackendOptions {
   identityBase: string;

@@ -1,6 +1,6 @@
 mod pg 'packages/session-rdb/tool/pg/justfile'
 mod vendor 'vendor/justfile'
-mod custom 'apps/dsh-custom/justfile'
+mod custom 'apps/dsh-custom-next/justfile'
 
 default:
     just --list
