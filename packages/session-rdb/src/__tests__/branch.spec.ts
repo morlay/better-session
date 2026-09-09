@@ -281,6 +281,87 @@ describe("rewind", () => {
     }
   });
 
+  it("invalidates live projection cells on rewind so replayed events fold again", async () => {
+    const { ctx, dispose } = await harness();
+    try {
+      // 自定义 host-only 投影：折叠后等于已折入的事件数。水位用事件数即可
+      // 暴露 rewind 后 drive() 因 observedSeq 未回退而跳过新事件的问题。
+      const projections = ctx.sessionProjections as unknown as {
+        register(definition: unknown): () => void;
+        stateOf(session: Session, key: never): unknown;
+      };
+      projections.register({
+        key: "test/count",
+        stateSchema: {},
+        init: () => 0,
+        apply: (state: number) => state + 1,
+        stateVersion: 0,
+      });
+
+      ctx.sessions.create(SessionId("proj"), { meta: meta("proj"), seed: [...twoTurnLog()] });
+      const live = ctx.sessions.get(SessionId("proj"))!;
+      await ctx.sessions.flush(live);
+      // 先物化水位：投影已折过完整 log（12 个 seed 事件 + session/end-seed）。
+      expect(projections.stateOf(live, "test/count" as never)).toBe(13);
+
+      // 走服务面 rewind（SessionBranchRdb），确保投影失效钩子被触发。
+      await ctx.sessionBranch.rewind(SessionId("proj"), 5);
+      const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
+      liveAppend.append("turn/start", { turn: 3 });
+
+      // 截断后 append 的事件必须重新折入：保留 6 个事件 + 新事件。
+      expect(projections.stateOf(live, "test/count" as never)).toBe(7);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("rewind flushes the durable inbox cancellation of the live agent", async () => {
+    const { ctx, persistence, dispose } = await harness();
+    try {
+      ctx.sessions.create(SessionId("pending"), {
+        meta: meta("pending"),
+        seed: [...twoTurnLog()],
+      });
+      const live = ctx.sessions.get(SessionId("pending"))!;
+      await ctx.sessions.flush(live);
+
+      const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
+      const disposeAgents = ctx.provide("agents", {
+        get: (id: SessionId) =>
+          id === SessionId("pending")
+            ? {
+                session: live,
+                inbox: {
+                  clear: () => {
+                    liveAppend.append("agent/inbox/spliced", {
+                      target: "next-turn",
+                      start: 0,
+                      removedCount: 1,
+                      inserted: [],
+                      outcome: "canceled",
+                    });
+                  },
+                },
+              }
+            : undefined,
+      });
+
+      await ctx.sessionBranch.rewind(SessionId("pending"), 5);
+
+      // 保留 6 个事件（0..5）+ 取消 splice（seq 6）——rewind 返回前已落盘。
+      const backend = persistence.internals().backend as unknown as {
+        getHead(id: SessionId): Promise<{ fHeadSequence: number }>;
+      };
+      const head = await backend.getHead(SessionId("pending"));
+      expect(head.fHeadSequence).toBe(6);
+      expect(live.snapshotEvents().at(-1)?.type).toBe("agent/inbox/spliced");
+      disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
   it("rewinds a live session in place (memory log, RDB head, and coordinator resynced)", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {

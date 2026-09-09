@@ -66,14 +66,6 @@ export interface EditorAgent {
   followup(message: UserMessage): void;
   /** 等待 agent 到达 quiescence（当前 turn/任务结束后 resolve）。 */
   whenIdle(): Promise<void>;
-  /**
-   * 队列中是否有待处理输入（next-turn / next-step）。rewind 截断会删除这些
-   * 输入所属轮次的事件，残留的 inbox 状态会与截断后的 log 失配，使后续
-   * splice 落库后无法从日志重放——编辑前必须清空。
-   */
-  readonly inboxPending: boolean;
-  /** 清空待处理输入（落库 canceled splice，须在 rewind 前调用）。 */
-  clearInbox(): void;
 }
 
 export interface EditorAgentHandle {
@@ -333,6 +325,10 @@ export class SessionEditor extends Service {
             `session "${operation.sessionId}" has no live write handle for the version effect`,
           );
         }
+        // rewind 截断后可能已追加事件（如 inbox 取消 splice），它们仍在
+        // write-behind 缓冲里；直接对 handle 写版本效果前必须先把缓冲落盘，
+        // 否则 handle cursor 落后于 log 长度 → append seq mismatch。
+        await this.ctx.sessions.flush(live);
         await appendSeedSuffixLive(live, seedSuffix, (events) => handle.append(events));
         await this.ctx.sessions.flush(live);
       } else {
@@ -361,6 +357,13 @@ export class SessionEditor extends Service {
     // 缺失）时退化为已 durable 的就地版本。
     let queuedTurns = 0;
     if (replay.agent !== undefined && plan.queuedUsers.length > 0) {
+      // seedSuffix 里的 manualTurn 直接写入了 turn/start，而 agent 的轮次
+      // 游标仍停在 rewind 重置的位置；不同步就会把重放开成重复轮号。
+      const lastSeedTurn = seedSuffix.findLast((event) => event.type === "turn/start")?.data.turn;
+      if (lastSeedTurn !== undefined) {
+        const phase = (replay.agent as unknown as { phase?: { lastTurn?: number } }).phase;
+        if (phase !== undefined) phase.lastTurn = lastSeedTurn;
+      }
       for (const message of plan.queuedUsers) replay.agent.followup(message);
       await this.ctx.sessions.flush(replay.agent.session);
       queuedTurns = plan.queuedUsers.length;
@@ -410,10 +413,8 @@ export class SessionEditor extends Service {
     if (existing !== undefined) {
       await existing.whenIdle();
       signal?.throwIfAborted();
-      // 清空 inbox 残留（rewind 将删除这些输入所属轮次的事件；残留消息若
-      // 不清空，agent 后续 splice 落库后无法从日志重放——inbox 增量投影
-      // 假设 log 只 append）。
-      if (existing.inboxPending) existing.clearInbox();
+      // 排队输入由 rewind 在截断后强制 durable 取消（session-rdb 的
+      // LiveSessionHooks.inbox.clear），这里只需保证 agent 已停下。
       return { agent: existing };
     }
     // cold：resume 已持久化会话（create 会因「已存在持久化日志」失败）。

@@ -66,12 +66,26 @@ export interface LiveSessionHooks {
   getAgent(id: SessionId): LiveAgentLike | undefined;
 
   flush(session: Session): Promise<boolean>;
+
+  // 丢弃 live 会话已缓存的投影单元：rewind 直接截断内存 log，投影 registry
+  // 的 observedSeq 仍停在截断前，后续 append 的事件（seq 更小）会被 drive()
+  // 跳过，重放输入永远进不了 inbox 投影。可选：纯持久化环境没有投影服务。
+  resetProjections?(session: Session): void;
+}
+
+// 投影 registry 的失效面（上游私有结构，duck-type 读取）。
+interface ProjectionRegistryLike {
+  registrations?: Map<string, { cells: WeakMap<object, unknown> }>;
 }
 
 export interface LiveAgentLike {
   session: Session;
 
   requestHeaderLogged?: boolean;
+
+  // 上游 Agent 的 inbox 契约面（ReactLoopInbox.clear）：rewind 后残留的排队
+  // 输入必须 durable 取消，否则 agent 会继续处理它们。可选：测试替身可能没有。
+  inbox?: { clear(): void };
 }
 
 export function truncateLiveSession(session: Session, newLength: number): void {
@@ -314,6 +328,9 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       // agent 轮次游标。不调用 load——live 时 load 会先 flush 把旧内存写回，
       // 撤销本次截断。
       truncateLiveSession(live, keepLength);
+      // 投影缓存同样停在截断前的水位，必须先失效，否则截断后的重放事件
+      // （seq 回退）不会进入投影。
+      this.live.resetProjections?.(live);
       const agent = this.live.getAgent(id);
       if (agent !== undefined) {
         agent.requestHeaderLogged = false;
@@ -330,6 +347,12 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       if (handle !== undefined) {
         handle.resetAfterRewind(keepLength, newSeedLength === null ? undefined : newSeedLength);
       }
+      // 截断后强制清空排队输入：保留区里未被截断的 pending（`agent/inbox/spliced`）
+      // 仍会被 agent 处理，必须 durable 取消。cursor 已对齐，取消事件从截断点续接。
+      agent?.inbox?.clear();
+      // 取消事件先经 coordinator 缓冲，落盘后 rewind 才真正 durable（调用方
+      // 可能在 rewind 返回后直接读后端）。
+      await this.live.flush(live);
     }
 
     const row = await internals.backend.getSession(id);
@@ -375,6 +398,16 @@ export class SessionBranchRdb extends SessionBranch {
         return agents?.get(id);
       },
       flush: (session) => this.ctx.sessions.flush(session),
+      resetProjections: (session) => {
+        // sessionProjections 是可选服务（纯持久化环境无 agent-loop/投影）。
+        const registry = (this.ctx as unknown as { get(name: string): unknown }).get(
+          "sessionProjections",
+        ) as ProjectionRegistryLike | undefined;
+        if (registry?.registrations === undefined) return;
+        for (const registration of registry.registrations.values()) {
+          registration.cells.delete(session);
+        }
+      },
     },
   );
 

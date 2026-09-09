@@ -169,7 +169,7 @@ describe("editPlan", () => {
     );
   });
 
-  it("edits the first user of an open turn → message-level rewind", () => {
+  it("edits the first user of an open turn → whole-turn rewind (no rewindBoundary)", () => {
     const log = turnLog(0, 1, { closed: false });
     const plan = editPlan(
       {
@@ -182,7 +182,8 @@ describe("editPlan", () => {
       },
       closedTurns(log),
     );
-    expect(plan.rewindBoundary).toBe(2);
+    // 未闭合轮的轮首输入同样整轮截断：保留悬空 turn/start 会让重放开到下一轮。
+    expect(plan.rewindBoundary).toBeUndefined();
   });
 
   it("preserve cascade queues downstream turn inputs after the edited one", () => {

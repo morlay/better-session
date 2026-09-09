@@ -21,6 +21,8 @@
 - **edit / retry / reroll 是就地操作**：`rewind` 截断到目标轮之前的闭合
   `turn/end` 边界，再 `append` 版本效果 + 手工回合 / 重放输入回**同一会话**
   ——session id 不变，版本树保持单根；
+- **重放复用目标轮号**：轮首 user 编辑（含未闭合轮）整轮截断，重放接回原
+  轮号；编辑 assistant 写入 manualTurn 后同步 agent 的轮次游标；
 - **只有 `fork` 创建新 id**（`ForkOperation` / `forkFrom`，纯 append 派生）；
 - 版本效果事件（`session-branch/version`）携带 `ignorable: true`：live log 可见、
   **不落 canonical log**（rdb 持久化时过滤并稠密化剩余事件）；
@@ -32,6 +34,8 @@
 缺失时退化为「已 durable 的就地版本」（可随时 resume 续跑）：
 
 - **live agent**（会话驻留 / 已恢复）：直接 `followup` 排队，不重建、不换 id；
+  编辑前只等 agent 停下（`whenIdle`），残留排队输入由 rewind 在截断后强制
+  durable 取消（session-rdb 的 `LiveSessionHooks.inbox.clear`）；
 - **cold 会话**：`resume` 已持久化会话（`create` 对已持久化日志必失败），
   resume 后 agent 驻留（不 dispose，避免 session 被移出 store 破坏客户端窗口）；
 - 模型 provider/model 在 **rewind 之前**从 `request/header` 解析（就地编辑

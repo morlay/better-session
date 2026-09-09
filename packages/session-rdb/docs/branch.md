@@ -53,8 +53,11 @@ fork 的持久化闭环。
 3. **更新 `WriteGuard` 确认 head**：下一次 append 的并发写入者校验以截断后
    head 为基准；
 4. **live 会话同步**：截断内存 log 并重置派生缓存（`truncateLiveSession`）、
-   重置 agent 轮次游标、`resetAfterRewind()` 对齐 write handle 的 cursor 与
-   继承前缀。
+   失效 `ctx.sessionProjections` 的单元缓存（投影按 `observedSeq` 增量驱动，
+   水位不回退会让截断后的重放事件被 `drive()` 跳过）、重置 agent 轮次游标、
+   `resetAfterRewind()` 对齐 write handle 的 cursor 与继承前缀，最后强制
+   durable 取消 agent 的排队输入（`inbox.clear()`；落在保留区的 pending 同样
+   取消——否则 agent 会继续处理 rewind 已放弃的输入）。
 
 **保留区 replace range 完整性（不变量）**：replace 的 range 引用**更早事件**
 （上游契约：range `startSeq`/`endSeq` 必须存在于当前 surface，即已提交节点），

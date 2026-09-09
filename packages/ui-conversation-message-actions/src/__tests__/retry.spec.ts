@@ -123,8 +123,7 @@ describe("SessionEditor retry", () => {
                   followups.push(message);
                 },
                 whenIdle: async () => {},
-                inboxPending: false,
-                clearInbox: () => {},
+                inbox: { clear: () => {} },
               }
             : undefined,
         create: async () => {

@@ -92,22 +92,25 @@ describe("SessionEditor rewind / fork / timeline", () => {
       await ctx.sessions.flush(live);
 
       // mock 驻留 agent：phase.lastTurn = 2（编辑前游标），requestHeaderLogged = true。
+      let inboxCleared = false;
       const mockAgent: {
         session: typeof live;
         requestHeaderLogged: boolean;
         phase: { lastTurn: number };
         followup: () => void;
         whenIdle: () => Promise<void>;
-        inboxPending: boolean;
-        clearInbox: () => void;
+        inbox: { clear: () => void };
       } = {
         session: live,
         requestHeaderLogged: true,
         phase: { lastTurn: 2 },
         followup: () => {},
         whenIdle: async () => {},
-        inboxPending: false,
-        clearInbox: () => {},
+        inbox: {
+          clear: () => {
+            inboxCleared = true;
+          },
+        },
       };
       const disposeAgents = ctx.provide("agents", {
         get: (id: SessionIdBrand) => (id === SessionIdBrand("live") ? mockAgent : undefined),
@@ -131,6 +134,8 @@ describe("SessionEditor rewind / fork / timeline", () => {
       // turn 2（复用目标轮号），而不是递增出 turn 3。
       expect(mockAgent.phase.lastTurn).toBe(1);
       expect(mockAgent.requestHeaderLogged).toBe(false);
+      // rewind 强制 durable 取消残留排队输入。
+      expect(inboxCleared).toBe(true);
       disposeAgents();
     } finally {
       await dispose();

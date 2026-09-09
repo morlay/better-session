@@ -220,8 +220,7 @@ describe("SessionEditor edit", () => {
                   followups.push(message);
                 },
                 whenIdle: async () => {},
-                inboxPending: false,
-                clearInbox: () => {},
+                inbox: { clear: () => {} },
               }
             : undefined,
         create: async () => {
@@ -272,7 +271,7 @@ describe("SessionEditor edit", () => {
     }
   });
 
-  it("edits a user message in an open turn (rewind to the message, drop and replay)", async () => {
+  it("edits a user message in an open turn (whole-turn rewind, drop and replay)", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
       // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合：
@@ -312,8 +311,8 @@ describe("SessionEditor edit", () => {
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
 
-      // 编辑未闭合轮 3 的 user 消息（eventSeq 13）→ rewind 到该消息
-      // （exclusive drop 它及其后），重放编辑版。
+      // 编辑未闭合轮 3 的轮首 user（eventSeq 13）→ 整轮截断到轮 2 末尾
+      // （复用目标轮号，不留悬空 turn/start），重放编辑版。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("src"),
@@ -325,8 +324,8 @@ describe("SessionEditor edit", () => {
       expect(result.sessionId).toBe(SessionIdBrand("src"));
       expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
 
-      // 真实落盘行：截断前缀（0..12，含 turn/start 12）+ 版本效果原样落库
-      // （seq 13，ignorable 信封与 JSONL 一致）；无 agents 服务 → 重放输入
+      // 真实落盘行：截断前缀（0..11，轮 2 的 turn/end）+ 版本效果原样落库
+      // （seq 12，ignorable 信封与 JSONL 一致）；无 agents 服务 → 重放输入
       // 不落盘（退化为已 durable 的就地版本，可随时继续输入）。
       const backend = (
         ctx.sessionPersistence as unknown as {
@@ -340,21 +339,21 @@ describe("SessionEditor edit", () => {
         }
       ).internals().backend;
       const rows = await backend.getEventRows(SessionIdBrand("src"));
-      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-      expect(rows[12]?.fType).toBe("turn/start");
-      expect(rows[13]?.fType).toBe("session-branch/version");
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(rows[11]?.fType).toBe("turn/end");
+      expect(rows[12]?.fType).toBe("session-branch/version");
       // 被 drop 的旧 user/message（seq 13）与轮 3 partial assistant（seq 15）
       // 不在 log 中（轮 1/2 的 assistant/message 保留）。
       expect(rows.some((r) => r.fType === "user/message" && r.fSequence === 13)).toBe(false);
       expect(rows.some((r) => r.fType === "assistant/message" && r.fSequence === 15)).toBe(false);
       expect(rows.some((r) => r.fType === "assistant/message" && r.fSequence === 3)).toBe(true);
 
-      // 截断后继续 append 成功：版本效果占位 seq 13，后续输入从 seq 14 续接。
+      // 截断后继续 append 成功：版本效果占位 seq 12，后续输入从 seq 13 续接。
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
             ...event,
-            seq: event.seq + 14,
+            seq: event.seq + 13,
             time: event.time + 300,
             data: { ...event.data, turn: 3 },
           }) as SessionEvent,
@@ -362,7 +361,7 @@ describe("SessionEditor edit", () => {
       await rdb(ctx).append(SessionIdBrand("src"), continuation);
       const continued = await rdb(ctx).load(SessionIdBrand("src"));
       expect(continued.events.at(-1)?.type).toBe("turn/end");
-      expect(continued.events).toHaveLength(20);
+      expect(continued.events).toHaveLength(19);
     } finally {
       await dispose();
     }
@@ -467,10 +466,8 @@ describe("SessionEditor edit", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
 
-      // 编辑未闭合轮 3 的 user 消息（eventSeq 14）→ rewind 到该消息
-      // （exclusive drop 它及其后）。真实顺序下 step/start（13）在
-      // user/message 之前，会残留为孤儿——修复前 live 内存 log 对 token
-      // meter 重放非法。
+      // 编辑未闭合轮 3 的轮首 user（eventSeq 14）→ 整轮截断到轮 2 末尾
+      // （复用目标轮号，孤儿 step/start 随整轮一起丢弃）。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("live"),
@@ -482,13 +479,12 @@ describe("SessionEditor edit", () => {
       expect(result.sessionId).toBe(SessionIdBrand("live"));
       expect(result.queuedTurns).toBe(0);
 
-      // live 内存 log：截断前缀（0..12，孤儿 step/start 13 被剔除）+
-      // ignorable 版本效果（13）。
+      // live 内存 log：截断前缀（0..11，轮 2 的 turn/end）+ ignorable 版本效果（12）。
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
       ]);
-      expect(live.snapshotEvents()[12]?.type).toBe("turn/start");
-      expect(live.snapshotEvents()[13]?.type).toBe("session-branch/version");
+      expect(live.snapshotEvents()[11]?.type).toBe("turn/end");
+      expect(live.snapshotEvents()[12]?.type).toBe("session-branch/version");
       expect(live.snapshotEvents().some((e) => e.type === "step/start" && e.data.turn === 3)).toBe(
         false,
       );
@@ -654,10 +650,8 @@ describe("SessionEditor edit", () => {
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
 
-      // 编辑未闭合轮 3 的 user 消息（eventSeq 14）→ rewind 到该消息
-      // （exclusive drop 它及其后）。真实顺序下 step/start（13）在
-      // user/message 之前，会残留为孤儿——修复前续写落盘后 token meter
-      // 重放报 "step/start ... arrived before turn ... ended"。
+      // 编辑未闭合轮 3 的轮首 user（eventSeq 14）→ 整轮截断到轮 2 末尾
+      // （复用目标轮号；孤儿 step/start 随整轮一起丢弃）。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("src"),
@@ -669,8 +663,7 @@ describe("SessionEditor edit", () => {
       expect(result.sessionId).toBe(SessionIdBrand("src"));
       expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
 
-      // 真实落盘行：截断前缀（0..12，含 turn/start 12，孤儿 step/start 13
-      // 被剔除）+ 版本效果原样落库（seq 13）。
+      // 真实落盘行：截断前缀（0..11，轮 2 的 turn/end）+ 版本效果原样落库（seq 12）。
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -683,17 +676,17 @@ describe("SessionEditor edit", () => {
         }
       ).internals().backend;
       const rows = await backend.getEventRows(SessionIdBrand("src"));
-      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-      expect(rows[12]?.fType).toBe("turn/start");
-      expect(rows[13]?.fType).toBe("session-branch/version");
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(rows[11]?.fType).toBe("turn/end");
+      expect(rows[12]?.fType).toBe("session-branch/version");
       expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 13)).toBe(false);
 
-      // 截断后继续 append 成功：版本效果占位 seq 13，后续输入从 seq 14 续接。
+      // 截断后继续 append 成功：版本效果占位 seq 12，后续输入从 seq 13 续接。
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
             ...event,
-            seq: event.seq + 14,
+            seq: event.seq + 13,
             time: event.time + 300,
             data: { ...event.data, turn: 3 },
           }) as SessionEvent,
@@ -896,8 +889,7 @@ describe("SessionEditor edit", () => {
                   followups.push(message);
                 },
                 whenIdle: async () => {},
-                inboxPending: false,
-                clearInbox: () => {},
+                inbox: { clear: () => {} },
               }
             : undefined,
         create: async () => {
@@ -1268,7 +1260,7 @@ describe("SessionEditor edit", () => {
     }
   });
 
-  it("clears the live agent inbox before rewinding", async () => {
+  it("rewind durably cancels the live agent's leftover queued input", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
       const header: SessionEvent = {
@@ -1287,7 +1279,7 @@ describe("SessionEditor edit", () => {
       const live = ctx.sessions.get(SessionIdBrand("pending"))!;
       await ctx.sessions.flush(live);
 
-      // Agent inbox has leftover queued input (rewind would delete its turn).
+      // Leftover queued input must be durably canceled by rewind itself.
       let cleared = false;
       const followups: unknown[] = [];
       const disposeAgents = ctx.provide("agents", {
@@ -1299,9 +1291,10 @@ describe("SessionEditor edit", () => {
                   followups.push(message);
                 },
                 whenIdle: async () => {},
-                inboxPending: true,
-                clearInbox: () => {
-                  cleared = true;
+                inbox: {
+                  clear: () => {
+                    cleared = true;
+                  },
                 },
               }
             : undefined,
@@ -1322,7 +1315,6 @@ describe("SessionEditor edit", () => {
         cascade: "truncate",
       });
       expect(result.sessionId).toBe(SessionIdBrand("pending"));
-      // Rewind only happens after leftover inbox input is cleared.
       expect(cleared).toBe(true);
       expect(followups).toHaveLength(1);
       disposeAgents();

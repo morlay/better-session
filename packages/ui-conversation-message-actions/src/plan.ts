@@ -229,10 +229,11 @@ export function editPlan(operation: EditOperation, turns: readonly ClosedTurn[])
     const later = operation.cascade === "preserve" ? downstreamUsers(turns, turnIndex + 1) : [];
     return {
       anchorSeq: turn.startSeq,
-      // 轮首 user 编辑（闭合轮）：整轮截断重放（rewind 到前一轮 turn/end）；
-      // 其余情况（未闭合轮、轮内 followup）：rewind 到该消息本身
+      // 轮首 user 编辑：整轮截断重放（rewind 到前一轮 turn/end），重放复用
+      // 目标轮号；未闭合轮同样整轮截断——保留悬空的 turn/start 会让重放
+      // 开到下一轮，轮号对不上。轮内 followup 只 rewind 到该消息本身
       // （exclusive drop），保留轮内已落定的前置输入与回复。
-      ...(turn.closed && userIndex === 0 ? {} : { rewindBoundary: event.seq }),
+      ...(userIndex === 0 ? {} : { rewindBoundary: event.seq }),
       version: pairVersionEffect(operation.sessionId, {
         operation: "edit",
         cascade: operation.cascade,
