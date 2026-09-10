@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { PgAsyncDatabase, PgAsyncTransaction } from "drizzle-orm/pg-core";
 import type { NodePgDatabase, NodePgQueryResultHKT } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -16,7 +16,9 @@ import {
 } from "./backend.ts";
 import { toPostgresSchema } from "./adapters/index.ts";
 import { postgresTableDefs } from "./entities/index.ts";
-import { sessionConflictRow, sessionInsertRow } from "./log.ts";
+import { sessionConflictRow, sessionInsertRow, titleOfEventData } from "./log.ts";
+import { createStorageRepository } from "./storage-takeover/repository.ts";
+import type { StorageRepository } from "./storage-takeover/types.ts";
 
 /** drizzle-kit 生成的迁移目录（随包根 drizzle/ 发布；src/dist 形态经相对 URL 统一解析）。 */
 const postgresMigrationsDir = fileURLToPath(new URL("../drizzle/postgres/", import.meta.url));
@@ -35,14 +37,54 @@ export class PostgresBackend implements Backend {
 
   private readonly tables: Record<string, any>;
 
+  /** storages 接管表访问层；句柄在 open()（含迁移）完成后解析。 */
+  readonly storage: StorageRepository;
+
+  private readonly opened: Promise<void>;
+  private resolveOpened!: () => void;
+  private rejectOpened!: (error: unknown) => void;
+  /** 事务期间的连接覆盖：storage 写方法经它加入当前事务。 */
+  private txOverride: unknown;
+
   constructor(
     private readonly db: NodePgDatabase,
     private readonly options: PostgresBackendOptions,
   ) {
     this.tables = toPostgresSchema(postgresTableDefs, this.options.schema ?? "public");
+    this.opened = new Promise<void>((resolve, reject) => {
+      this.resolveOpened = resolve;
+      this.rejectOpened = reject;
+    });
+    // 每个 storage 原语都会重新 await 同一 promise，失败仍逐一可见；这个
+    // 守卫只防止 open 失败早于首次使用时的 unhandled rejection。
+    this.opened.catch(() => {});
+    this.storage = createStorageRepository({
+      db: () => this.opened.then(() => this.txOverride ?? this.db),
+      writeAtomically: (fn) =>
+        this.db.transaction(async (tx) => {
+          const previous = this.txOverride;
+          this.txOverride = tx;
+          try {
+            return await fn();
+          } finally {
+            this.txOverride = previous;
+          }
+        }),
+      tables: this.tables,
+    });
   }
 
   async open(): Promise<void> {
+    try {
+      await this.doOpen();
+      this.resolveOpened();
+    } catch (error: unknown) {
+      this.rejectOpened(error);
+      throw error;
+    }
+  }
+
+  private async doOpen(): Promise<void> {
     const schema = this.options.schema ?? "public";
     // drizzle-kit 迁移：v2 baseline 由旧版本建表（首次打开时标记为已应用），
     // 本版本只执行 v3 diff（删 f_original_seq）。
@@ -149,6 +191,7 @@ export class PostgresBackend implements Backend {
       updateHead: (id, headEventId, headSequence) =>
         this.updateHead(tx, id, headEventId, headSequence),
       bumpRevision: (id) => this.bumpRevision(tx, id),
+      refreshTitle: (id) => this.refreshTitle(tx, id),
       deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(tx, id, fromSequence),
       getPrevBridge: (id, sequence) => this.getPrevBridge(tx, id, sequence),
     };
@@ -287,6 +330,31 @@ export class PostgresBackend implements Backend {
     await exec
       .update(this.tables["t_sessions"])
       .set({ fRevision: sql`${this.tables["t_sessions"].fRevision} + 1` })
+      .where(eq(this.tables["t_sessions"].fSessionId, id))
+      .execute();
+  }
+
+  /** 从事件表重算标题（最后一条 `session/title`），写回会话行的 f_title 列。 */
+  private async refreshTitle(
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
+    id: SessionId,
+  ): Promise<void> {
+    const bridges = this.tables["t_session_events"];
+    const entities = this.tables["t_events"];
+    const row = (
+      await exec
+        .select({ fSequence: bridges.fSequence, fData: entities.fData })
+        .from(bridges)
+        .innerJoin(entities, eq(entities.fEventId, bridges.fEventId))
+        .where(and(eq(bridges.fSessionId, id), eq(entities.fType, "session/title")))
+        .orderBy(desc(bridges.fSequence))
+        .limit(1)
+        .execute()
+    )[0] as { fSequence: number; fData: string } | undefined;
+    const title = row === undefined ? undefined : titleOfEventData(row.fData);
+    await exec
+      .update(this.tables["t_sessions"])
+      .set({ fTitle: title ?? null, fTitleSeq: title === undefined ? null : row!.fSequence })
       .where(eq(this.tables["t_sessions"].fSessionId, id))
       .execute();
   }

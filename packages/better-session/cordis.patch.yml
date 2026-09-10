@@ -1,5 +1,25 @@
+# @morlay/better-session bundle patch：把 storages 一并接管到 session-rdb。
+#
+# - `session-persistence-jsonl`：官方 JSONL 持久化禁用，由 session-rdb 提供
+#   `ctx.sessionPersistence`。
+# - `session-projection-cache`：官方投影缓存插件禁用，由 session-rdb 提供同名
+#   `ctx.sessionProjectionCache` 服务（`t_session_projcache*` 语义表）。
+# - `storage-json`：JSON 介质禁用，storages 目录不再产生文件。
+# - `storage-domain`：改为把域路由到 session-rdb 注册的 `rdb` KV 后端
+#   （workspace 域 → `t_workspaces` / `t_workspace_state`）。
+
 - id: session-persistence-jsonl
   disabled: true
+
+- id: session-projection-cache
+  disabled: true
+
+- id: storage-json
+  disabled: true
+
+- id: storage-domain
+  config:
+    backend: rdb
 
 - insert:
     - id: session-branch

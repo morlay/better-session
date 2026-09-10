@@ -19,6 +19,13 @@ dsh plugin --profile web add "@morlay/better-session"
 - `ctx.sessionBranch` ← rewind / fork 数据层
 - `ctx.sessionEditor` ← edit / retry / fork 编排（HTTP：`/session-editor`）
 - `conversation.chat.node` ← 渲染替换（user 消息行内编辑 / 重试按钮）
+- `ctx.sessionProjectionCache` ← 投影 checkpoint（替换官方插件，落 rdb 语义表）
+- storage hub 的 `rdb` KV 后端 ← workspace 域落 rdb 语义表
+
+同时禁用官方 `session-persistence-jsonl`、`storage-json` 与
+`session-projection-cache`，并把 `storage-domain` 的 backend 路由为 `rdb`：
+`$DSH_HOME/storages` 不再产生文件，storages 数据与事件日志同库
+（[ADR 0009](../session-rdb/docs/adr/0009-接管storages到rdb语义表.md)）。
 
 ## 使用
 

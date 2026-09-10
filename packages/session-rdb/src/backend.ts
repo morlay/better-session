@@ -1,5 +1,6 @@
 import type { SessionId } from "@deepseek-ai/dsh-session";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
+import type { StorageRepository } from "./storage-takeover/types.ts";
 
 export interface SessionRow {
   fSessionId: string;
@@ -63,6 +64,9 @@ export interface BackendTx {
 
   updateSeedLength(id: SessionId, seedLength: number): Promise<void>;
 
+  /** 从事件表重算会话标题（最后一条 `session/title`）并写回会话行。 */
+  refreshTitle(id: SessionId): Promise<void>;
+
   insertEvents(events: EventInsert[]): Promise<void>;
 
   insertBridges(
@@ -90,6 +94,9 @@ export interface Backend {
   readonly kind: "sqlite" | "postgres";
 
   readonly storeIdentity: string;
+
+  /** storages 接管表（workspace 域与投影 checkpoint）的访问层：与事件日志同介质。 */
+  readonly storage: StorageRepository;
 
   open(): Promise<void>;
 

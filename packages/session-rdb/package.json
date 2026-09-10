@@ -63,8 +63,8 @@
     "@deepseek-ai/dsh-session-turn-outline": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
     "@deepseek-ai/dsh-storage-domain": "workspace:^",
-    "@deepseek-ai/dsh-storage-json": "workspace:^",
     "@deepseek-ai/dsh-token-meter": "workspace:^",
+    "@deepseek-ai/dsh-workspace": "workspace:^",
     "@types/pg": "^8.23.1",
     "drizzle-kit": "1.0.0-rc.5-ab785fc"
   },
@@ -78,6 +78,7 @@
     "@deepseek-ai/dsh-session-format-catalog": "workspace:^",
     "@deepseek-ai/dsh-session-persistence": "workspace:^",
     "@deepseek-ai/dsh-settings": "workspace:^",
+    "@deepseek-ai/dsh-storage": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^"
   },
   "dsh": {
@@ -96,6 +97,7 @@
     "chai": "6.2.2",
     "magic-string": "0.30.21",
     "tinyrainbow": "3.1.1",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "zod": "4.6.1"
   }
 }

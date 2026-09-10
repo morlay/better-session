@@ -51,6 +51,11 @@ import { PostgresBackend } from "./postgres.ts";
 import { SessionBranchRdb } from "./branch.ts";
 import { registerSessionImport } from "./import.ts";
 import { adoptLegacyRows, convertLegacyRows, isLegacyVersion } from "./legacy.ts";
+import { installStorageTakeover } from "./storage-takeover/index.ts";
+
+/** 投影缓存默认写节流（与上游 base 装配的部署值一致）。 */
+const DEFAULT_PROJECTION_WRITE_EVERY_EVENTS = 200;
+const DEFAULT_PROJECTION_WRITE_INTERVAL_MS = 5000;
 
 export { SCHEMA_VERSION } from "./schema.ts";
 export { SessionBranchRdb, SessionBranchRdbProvider, locateTurnEnd } from "./branch.ts";
@@ -79,6 +84,14 @@ export interface SessionPersistenceRdbInternals {
   registerReuseEventIds(childId: SessionId, map: ReadonlyMap<number, string>): void;
 }
 
+/** 投影 checkpoint 写节流（替换上游 `session-projection-cache` 的 Config）。 */
+export interface ProjectionCacheOptions {
+  /** 两次强制点之间累积多少已提交事件强制落盘（默认 200）。 */
+  writeEveryEvents?: number;
+  /** 脏 checkpoint 在强制点之间允许滞留的最长毫秒数（默认 5000）。 */
+  writeIntervalMs?: number;
+}
+
 export type Config =
   | {
       type: "sqlite";
@@ -88,6 +101,8 @@ export type Config =
       journalMode?: JournalMode;
 
       busyTimeout?: number;
+
+      projectionCache?: ProjectionCacheOptions;
     }
   | {
       type: "postgres";
@@ -95,6 +110,8 @@ export type Config =
       connectionString: string;
 
       schema?: string;
+
+      projectionCache?: ProjectionCacheOptions;
     };
 
 /** 一个已创建但未 materialize 的会话（本进程可见，其他进程不可见）。 */
@@ -441,11 +458,29 @@ export class SessionPersistenceRdb extends SessionPersistence {
       path: z.string().required(),
       journalMode: z.union(["wal", "delete", "truncate", "persist"] as const).default("wal"),
       busyTimeout: z.number().step(1).min(0).default(DEFAULT_BUSY_TIMEOUT_MS),
+      projectionCache: z
+        .object({
+          writeEveryEvents: z.natural().min(1).default(DEFAULT_PROJECTION_WRITE_EVERY_EVENTS),
+          writeIntervalMs: z.natural().min(1).default(DEFAULT_PROJECTION_WRITE_INTERVAL_MS),
+        })
+        .default({
+          writeEveryEvents: DEFAULT_PROJECTION_WRITE_EVERY_EVENTS,
+          writeIntervalMs: DEFAULT_PROJECTION_WRITE_INTERVAL_MS,
+        }),
     }),
     z.object({
       type: z.const("postgres"),
       connectionString: z.string().required(),
       schema: z.string().default("public"),
+      projectionCache: z
+        .object({
+          writeEveryEvents: z.natural().min(1).default(DEFAULT_PROJECTION_WRITE_EVERY_EVENTS),
+          writeIntervalMs: z.natural().min(1).default(DEFAULT_PROJECTION_WRITE_INTERVAL_MS),
+        })
+        .default({
+          writeEveryEvents: DEFAULT_PROJECTION_WRITE_EVERY_EVENTS,
+          writeIntervalMs: DEFAULT_PROJECTION_WRITE_INTERVAL_MS,
+        }),
     }),
   ]);
 
@@ -499,6 +534,18 @@ export class SessionPersistenceRdb extends SessionPersistence {
     new SessionBranchRdb(this.ctx);
     // 导入端点：webServer + connection 就绪后注册 `/api/session.import`。
     registerSessionImport(this.ctx, this);
+    // storages 接管：storage hub 的 `rdb` 后端（workspace 域）与
+    // `ctx.sessionProjectionCache` 服务（替换上游插件）。
+    installStorageTakeover(this.ctx, {
+      repository: this.backend.storage,
+      ready: this.ready,
+      projectionCache: {
+        writeEveryEvents:
+          this.config.projectionCache?.writeEveryEvents ?? DEFAULT_PROJECTION_WRITE_EVERY_EVENTS,
+        writeIntervalMs:
+          this.config.projectionCache?.writeIntervalMs ?? DEFAULT_PROJECTION_WRITE_INTERVAL_MS,
+      },
+    });
   }
 
   private async init(): Promise<void> {
@@ -1249,6 +1296,12 @@ async function appendEventTail(
   }
   if (eventRows.length > 0) await tx.insertEvents(eventRows);
   await tx.insertBridges(bridgeRows);
+  // 标题是会话数据的一部分：批内出现 session/title 时同步刷新会话行，
+  // 列表消费直接取列（sessions.title 直取）。
+  // 插件合并类型不在 core 的判别联合内，按字符串比较（同 eventDimensions）。
+  if (events.some((event) => (event.type as string) === "session/title")) {
+    await tx.refreshTitle(meta.id);
+  }
   return { headEventId: parentId, headSequence: nextSeq - 1 };
 }
 

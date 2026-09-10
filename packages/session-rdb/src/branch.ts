@@ -340,6 +340,8 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
         await tx.updateSeedLength(id, denseBoundary + 1);
         shrunk = denseBoundary + 1;
       }
+      // 截断可能删掉最新的 session/title：标题随保留前缀重算。
+      await tx.refreshTitle(id);
       await tx.bumpRevision(id);
       return shrunk;
     });

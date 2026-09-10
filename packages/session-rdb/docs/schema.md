@@ -46,7 +46,7 @@ session-rdb:
 
 | 表                    | 键                    | 说明                                                                                                                                                                                                                                                                                                                                           |
 | --------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `t_sessions`          | `f_session_id` UNIQUE | 会话元数据（`SessionHeader` 列：`f_version` / `f_created_at` / `f_cwd` / `f_parent_session` / `f_seed_length` / `f_origin` / `f_delegation_depth`）+ head 游标（`f_head_event_id` / `f_head_sequence`，事务内维护，append 时提供 parent 链与下一个 seq）+ materialization 身份（`f_incarnation` / `f_revision`）。行的存在即 materialized 信号 |
+| `t_sessions`          | `f_session_id` UNIQUE | 会话元数据（`SessionHeader` 列：`f_version` / `f_created_at` / `f_cwd` / `f_parent_session` / `f_seed_length` / `f_origin` / `f_delegation_depth`）+ head 游标（`f_head_event_id` / `f_head_sequence`，事务内维护，append 时提供 parent 链与下一个 seq）+ materialization 身份（`f_incarnation` / `f_revision`）+ 归档标记（`f_archived_at`，非空即已归档）+ 标题（`f_title` / `f_title_seq`，由 `session/title` 事件维护）。行的存在即 materialized 信号 |
 | `t_persistence_state` | `f_singleton`         | store 身份单例（`f_store_id`）                                                                                                                                                                                                                                                                                                                 |
 | `t_schema_meta`       | `f_key`               | schema 版本 / 应用身份键值对：双方言都建表，仅 PG 读写；SQLite 走 `PRAGMA user_version` / `application_id`                                                                                                                                                                                                                                     |
 
@@ -179,3 +179,33 @@ t_session_events)`。
 | -------------- | -------------- | ------------------------------------------- |
 | 稠密 seq       | `f_sequence`   | 会话内事件顺序（原样存储下即事件 seq）      |
 | surface 元数据 | `f_surface_op` | 事件进入 surface 的方式（append / replace） |
+
+## storages 接管表（workspace 域与投影 checkpoint）
+
+`$DSH_HOME/storages` 的两个域由本包接管（见
+[ADR 0009](adr/0009-接管storages到rdb语义表.md)）：官方 `storage-json` 与
+`session-projection-cache` 被禁用，数据落在与事件日志同库的表中。
+
+| 表                        | 键                                     | 说明                                                                                                                                              |
+| ------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `t_storage_units`         | `f_name`                               | 域版本账本：域首次打开时写入 descriptor version，其后按 accepted 集合校验（不匹配以 `version-mismatch` fail loud）。                               |
+| `t_workspaces`            | `f_workspace_id` UNIQUE                | workspace 记录：`f_path` / `f_title` / `f_created_at` / `f_updated_at`，`f_position` 是显示顺序（`workspaceIds` 的位次；不在顺序中的记录为 -1）。   |
+| `t_workspace_sessions`    | `UNIQUE(f_workspace_id, f_session_id)` | 会话归属：一个归属一行，`f_position` 是归属显示顺序；`f_session_id` 有独立索引，可按 session 反查 workspace。记录删除时随外键 CASCADE。            |
+| `t_workspace_state`       | `f_singleton`                          | workspace 单例的剩余状态：`f_initialized` 与拆列后的两写标记（`f_pending_operation` / `f_pending_workspace_id`）。                                 |
+| `t_session_projcache_row` | `UNIQUE(f_session_id, f_key)`          | 投影 checkpoint 行：`f_ver`（投影单元 stateVersion）/ `f_seq`（日志水位）/ `f_val`（wire 值 JSON）；`f_key` 有独立索引，可按 key 直查（如 title）。 |
+
+- **1:1 的状态不拆表**：会话归档是 `t_sessions.f_archived_at` 标记（非空即已
+  归档，与会话行一起查询）；投影 checkpoint 的日志 identity 直接复用
+  `t_sessions` 的 `f_version` / `f_created_at` / `f_cwd` / `f_seed_length`，
+  不另存记录头；投影行随会话行 `ON DELETE CASCADE` 清理。
+- workspace 域经 storage hub 的 `rdb` KV 后端写入（上游 `StorageBackend.kv`
+  契约），每次写入在同一介质事务内整体替换（记录 + 归属、顺序 + 归档不留
+  部分应用的中间态）；投影 checkpoint 由本包的 `ctx.sessionProjectionCache`
+  服务读写——SQLite 下读路径直接查表（进程内不保留镜像），PostgreSQL 因驱动
+  异步保留写穿镜像。
+- 投影行是派生数据：版本不匹配按 cache miss 处理。
+- **会话标题是会话数据**（`t_sessions.f_title` / `f_title_seq`）：写路径遇到
+  `session/title` 事件即刷新，rewind 截断后重算；列表消费在 checkpoint 行缺
+  title 时**直接取该列**（`readSessionTitleSync`，SQLite），不依赖缓存行是否存在。
+- 旧 `$DSH_HOME/storages` JSON 经 `just import-storages` 一次性导入（旧文件
+  保留不删）；导入 checkpoint 行要求对应会话行已存在（外键 fail loud）。

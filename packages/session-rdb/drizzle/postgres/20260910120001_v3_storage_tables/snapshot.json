@@ -1,0 +1,1236 @@
+{
+  "version": "8",
+  "dialect": "postgres",
+  "id": "8a51a71d-ed27-4028-be4d-2f9a0434b6a4",
+  "prevIds": [
+    "d4f668b2-5d9b-4755-8dba-5ab2c30cf372"
+  ],
+  "ddl": [
+    {
+      "isRlsEnabled": false,
+      "name": "t_events",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "t_persistence_state",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "t_schema_meta",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "t_session_events",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "t_sessions",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_event_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "''",
+      "generated": null,
+      "identity": null,
+      "name": "f_parent_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "''",
+      "generated": null,
+      "identity": null,
+      "name": "f_type",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "''",
+      "generated": null,
+      "identity": null,
+      "name": "f_kind",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "''",
+      "generated": null,
+      "identity": null,
+      "name": "f_role",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "''",
+      "generated": null,
+      "identity": null,
+      "name": "f_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "''",
+      "generated": null,
+      "identity": null,
+      "name": "f_action_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "''",
+      "generated": null,
+      "identity": null,
+      "name": "f_encoding",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_data",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "f_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_singleton",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_persistence_state"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_store_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_persistence_state"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_schema_meta"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_value",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_schema_meta"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_session_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_event_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_events"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_sequence",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_events"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_surface_op",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_events"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_session_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "''",
+      "generated": null,
+      "identity": null,
+      "name": "f_head_event_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "-1",
+      "generated": null,
+      "identity": null,
+      "name": "f_head_sequence",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_cwd",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_parent_session",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_seed_length",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_origin",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_delegation_depth",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_incarnation",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_revision",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "f_kind",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_events_kind",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "f_role",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_events_role",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "f_name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_events_name",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "f_action_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_events_action_id",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "t_events"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "f_event_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_session_events_event_id",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "t_session_events"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "f_session_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "t_sessions",
+      "columnsTo": [
+        "f_session_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "t_session_events_f_session_id_t_sessions_f_session_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "t_session_events"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "f_event_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "t_events",
+      "columnsTo": [
+        "f_event_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "t_session_events_f_event_id_t_events_f_event_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "t_session_events"
+    },
+    {
+      "columns": [
+        "f_id"
+      ],
+      "nameExplicit": false,
+      "name": "t_events_pkey",
+      "schema": "public",
+      "table": "t_events",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "f_singleton"
+      ],
+      "nameExplicit": false,
+      "name": "t_persistence_state_pkey",
+      "schema": "public",
+      "table": "t_persistence_state",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "f_key"
+      ],
+      "nameExplicit": false,
+      "name": "t_schema_meta_pkey",
+      "schema": "public",
+      "table": "t_schema_meta",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "f_id"
+      ],
+      "nameExplicit": false,
+      "name": "t_session_events_pkey",
+      "schema": "public",
+      "table": "t_session_events",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "f_id"
+      ],
+      "nameExplicit": false,
+      "name": "t_sessions_pkey",
+      "schema": "public",
+      "table": "t_sessions",
+      "entityType": "pks"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        "f_session_id",
+        "f_sequence"
+      ],
+      "nullsNotDistinct": false,
+      "name": "uq_session_events_session_sequence",
+      "entityType": "uniques",
+      "schema": "public",
+      "table": "t_session_events"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "f_event_id"
+      ],
+      "nullsNotDistinct": false,
+      "name": "t_events_f_event_id_key",
+      "schema": "public",
+      "table": "t_events",
+      "entityType": "uniques"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "f_session_id"
+      ],
+      "nullsNotDistinct": false,
+      "name": "t_sessions_f_session_id_key",
+      "schema": "public",
+      "table": "t_sessions",
+      "entityType": "uniques"
+    },
+    {
+      "value": "f_singleton = 1",
+      "name": "ck_persistence_state_singleton",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "t_persistence_state"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "t_session_projcache_row",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "t_storage_units",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "t_workspace_state",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "t_workspaces",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "t_workspace_sessions",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_archived_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_title",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_title_seq",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_sessions"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_projcache_row"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_session_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_projcache_row"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_projcache_row"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_ver",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_projcache_row"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_seq",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_projcache_row"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_val",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_session_projcache_row"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_storage_units"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_storage_units"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_singleton",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspace_state"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_initialized",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspace_state"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_pending_operation",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspace_state"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_pending_workspace_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspace_state"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspaces"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_workspace_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspaces"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_path",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspaces"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_title",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspaces"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspaces"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspaces"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "-1",
+      "generated": null,
+      "identity": null,
+      "name": "f_position",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspaces"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspace_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_workspace_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspace_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_session_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspace_sessions"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "f_position",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "t_workspace_sessions"
+    },
+    {
+      "columns": [
+        "f_id"
+      ],
+      "nameExplicit": false,
+      "name": "t_session_projcache_row_pkey",
+      "schema": "public",
+      "table": "t_session_projcache_row",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "f_name"
+      ],
+      "nameExplicit": false,
+      "name": "t_storage_units_pkey",
+      "schema": "public",
+      "table": "t_storage_units",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "f_singleton"
+      ],
+      "nameExplicit": false,
+      "name": "t_workspace_state_pkey",
+      "schema": "public",
+      "table": "t_workspace_state",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "f_id"
+      ],
+      "nameExplicit": false,
+      "name": "t_workspaces_pkey",
+      "schema": "public",
+      "table": "t_workspaces",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "f_id"
+      ],
+      "nameExplicit": false,
+      "name": "t_workspace_sessions_pkey",
+      "schema": "public",
+      "table": "t_workspace_sessions",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "f_session_id",
+        "f_key"
+      ],
+      "nameExplicit": true,
+      "name": "uq_session_projcache_row_session_key",
+      "entityType": "uniques",
+      "table": "t_session_projcache_row",
+      "nullsNotDistinct": false,
+      "schema": "public"
+    },
+    {
+      "columns": [
+        "f_workspace_id"
+      ],
+      "nameExplicit": false,
+      "name": "t_workspaces_f_workspace_id_unique",
+      "entityType": "uniques",
+      "table": "t_workspaces",
+      "nullsNotDistinct": false,
+      "schema": "public"
+    },
+    {
+      "columns": [
+        "f_workspace_id",
+        "f_session_id"
+      ],
+      "nameExplicit": true,
+      "name": "uq_workspace_sessions_workspace_session",
+      "entityType": "uniques",
+      "table": "t_workspace_sessions",
+      "nullsNotDistinct": false,
+      "schema": "public"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "f_key",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_session_projcache_row_key",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "t_session_projcache_row"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "f_session_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_workspace_sessions_session_id",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "t_workspace_sessions"
+    },
+    {
+      "value": "f_singleton = 1",
+      "name": "ck_workspace_state_singleton",
+      "entityType": "checks",
+      "table": "t_workspace_state",
+      "schema": "public"
+    },
+    {
+      "columns": [
+        "f_session_id"
+      ],
+      "tableTo": "t_sessions",
+      "columnsTo": [
+        "f_session_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_t_session_projcache_row_f_session_id_t_sessions_f_session_id_fk",
+      "entityType": "fks",
+      "table": "t_session_projcache_row",
+      "schemaTo": "public",
+      "schema": "public"
+    },
+    {
+      "columns": [
+        "f_workspace_id"
+      ],
+      "tableTo": "t_workspaces",
+      "columnsTo": [
+        "f_workspace_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_t_workspace_sessions_f_workspace_id_t_workspaces_f_workspace_id_fk",
+      "entityType": "fks",
+      "table": "t_workspace_sessions",
+      "schemaTo": "public",
+      "schema": "public"
+    }
+  ],
+  "renames": []
+}

@@ -20,5 +20,6 @@
                 inputModalities: [text]
                 reasoningEfforts:
                   off:
+                  low: low
                   high: high
                   max: max

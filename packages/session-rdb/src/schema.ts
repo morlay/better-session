@@ -21,6 +21,16 @@ export const tEvents = sqliteTables["t_events"]!;
 
 export const tSessionEvents = sqliteTables["t_session_events"]!;
 
+export const tStorageUnits = sqliteTables["t_storage_units"]!;
+
+export const tWorkspaces = sqliteTables["t_workspaces"]!;
+
+export const tWorkspaceSessions = sqliteTables["t_workspace_sessions"]!;
+
+export const tWorkspaceState = sqliteTables["t_workspace_state"]!;
+
+export const tSessionProjcacheRows = sqliteTables["t_session_projcache_row"]!;
+
 export type { SessionRow } from "./backend.ts";
 
 export type { EventRow } from "./backend.ts";

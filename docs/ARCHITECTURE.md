@@ -53,7 +53,7 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 | ------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | 契约层 | `@morlay/session-branch`                  | `SessionBranchProvider` 抽象（rewind / forkFrom / readBranchPrefix）+ `SessionBranch` 服务 + `buildTimeline` 版本树投影 |
 | 编排层 | `@morlay/ui-conversation-message-actions` | `SessionEditor` 编排（edit / retry / fork 完整功能）+ client bundle（`conversation.chat.node` 渲染替换）                |
-| 实现层 | `@morlay/session-rdb`                     | RDB 持久化（实现上游 `SessionHandle` 模型）+ 分支 provider（实现 `SessionBranchProvider`），双服务闭环                  |
+| 实现层 | `@morlay/session-rdb`                     | RDB 持久化（实现上游 `SessionHandle` 模型）+ 分支 provider（实现 `SessionBranchProvider`）+ storages 接管（投影缓存服务与 workspace 域 KV 后端） |
 | 聚合   | `@morlay/better-session`                  | profile bundle：`cordis.patch.yml` 一次性装配以上全部到 web profile                                                     |
 
 ## 核心设计
@@ -88,6 +88,14 @@ rdb 替换的起因与权衡见
 namespace 可覆盖为 PostgreSQL（`connectionString`）；官方
 `session-persistence-jsonl` 被禁用（`disabled: true`）。
 
+**storages 一并接管**：官方 `storage-json` 与 `session-projection-cache` 同被
+禁用，`storage-domain` 的 backend 路由为 session-rdb 注册的 `rdb` 后端——
+workspace 域经上游 `StorageBackend.kv` 契约落 `t_workspaces` /
+`t_workspace_state`，投影 checkpoint 由 session-rdb 提供的同名
+`ctx.sessionProjectionCache` 服务落 `t_session_projcache` /
+`t_session_projcache_row`；`$DSH_HOME/storages` 不再产生文件
+（[ADR 0009](../packages/session-rdb/docs/adr/0009-接管storages到rdb语义表.md)）。
+
 ## 操作语义
 
 `edit` / `retry` / `reroll` 就地重写同一会话（`rewind` 截断 + `append`
@@ -118,7 +126,7 @@ exports 收敛）、运行流程与运行时语义见
 | 仓库级   | [docs/adr/](adr/)                                                                                           | 上游 side workspace 版本锁定；workspace 跨 vendor 链接与 devkit 复用；桌面化迁移到 Electron + 上游 desktop-host                         |
 | 装配级   | [packages/better-session/docs/adr/](../packages/better-session/docs/adr/)                                   | rdb 替换官方 jsonl 持久化；配置经 settings 服务覆盖                                                                                     |
 | 上下文级 | [packages/session-branch/docs/adr/](../packages/session-branch/docs/adr/)                                   | 分支面 provider 抽象；ignorable 版本效果原样落库；迁移到上游 SessionHandle 模型                                                         |
-| 上下文级 | [packages/session-rdb/docs/adr/](../packages/session-rdb/docs/adr/)                                         | 原样存储；事件实体全局化；rewind 直接截断；并发写入 fail loud；未闭合轮次原样保留；导出即修复；混合世代回退；跟随上游 Session format v3 |
+| 上下文级 | [packages/session-rdb/docs/adr/](../packages/session-rdb/docs/adr/)                                         | 原样存储；事件实体全局化；rewind 直接截断；并发写入 fail loud；未闭合轮次原样保留；导出即修复；混合世代回退；跟随上游 Session format v3；storages 接管到 rdb 语义表 |
 | 上下文级 | [packages/ui-conversation-message-actions/docs/adr/](../packages/ui-conversation-message-actions/docs/adr/) | 就地编辑；client bundle 单文件；agent 驱动重放                                                                                          |
 | 上下文级 | [packages/llm-openai-compatible/docs/adr/](../packages/llm-openai-compatible/docs/adr/)                     | 起因（pi-ai 参数不完整）；传输层复用 ai-sdk；dict 多路由；模型目录缺省为空；凭据服务解析；采样合并规则                                  |
 

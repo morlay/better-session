@@ -695,3 +695,22 @@ export function toJsonlArtifact(
   }
   return lines.join("\n");
 }
+
+/**
+ * 事件行 JSON → `session/title` 的标题文本。存储层写路径保证 `f_data` 是完整
+ * 事件 JSON；形状不符（或损坏）按「无标题」处理——标题是派生显示数据。
+ * @param data - `t_events.f_data` 原文。
+ * @returns 标题文本，或 `undefined`。
+ */
+export function titleOfEventData(data: string): string | undefined {
+  try {
+    // 当前世代：`{...envelope, data:{title}}`；旧世代（v0-v2）的 f_data 直接
+    // 平铺事件 data，title 在顶层。两者都读，避免 legacy 会话的标题被清空。
+    const value = JSON.parse(data) as { data?: { title?: unknown }; title?: unknown };
+    const title = value.data?.title ?? value.title;
+    return typeof title === "string" ? title : undefined;
+  } catch {
+    // 写路径已保证 JSON；此处只可能是损坏数据，读作无标题。
+    return undefined;
+  }
+}

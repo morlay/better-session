@@ -4,7 +4,7 @@ import { mkdir, open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { migrate } from "drizzle-orm/node-sqlite/migrator";
 import type { SessionId } from "@deepseek-ai/dsh-session";
@@ -16,7 +16,7 @@ import {
   type EventRow,
   type SessionRow,
 } from "./backend.ts";
-import { sessionConflictRow, sessionInsertRow } from "./log.ts";
+import { sessionConflictRow, sessionInsertRow, titleOfEventData } from "./log.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   SCHEMA_VERSION,
@@ -24,9 +24,16 @@ import {
   tEvents,
   tPersistenceState,
   tSessionEvents,
+  tSessionProjcacheRows,
   tSessions,
+  tStorageUnits,
+  tWorkspaceSessions,
+  tWorkspaceState,
+  tWorkspaces,
   type JournalMode,
 } from "./schema.ts";
+import { createStorageRepository } from "./storage-takeover/repository.ts";
+import type { StorageRepository } from "./storage-takeover/types.ts";
 
 type SqliteDb = NodeSQLiteDatabase & { $client: DatabaseSync };
 
@@ -178,12 +185,69 @@ export class SqliteBackend implements Backend {
   readonly kind = "sqlite" as const;
   storeIdentity!: string;
 
+  /** storages 接管表访问层；句柄在 open() 完成后解析。 */
+  readonly storage: StorageRepository;
+
   private dbPath = "";
   private db!: SqliteDb;
+  private readonly dbReady: Promise<SqliteDb>;
+  private resolveDb!: (db: SqliteDb) => void;
+  private rejectDb!: (error: unknown) => void;
 
-  constructor(private readonly options: SqliteBackendOptions) {}
+  constructor(private readonly options: SqliteBackendOptions) {
+    this.dbReady = new Promise<SqliteDb>((resolve, reject) => {
+      this.resolveDb = resolve;
+      this.rejectDb = reject;
+    });
+    // 每个 storage 原语都会重新 await 同一 promise，失败仍逐一可见；这个
+    // 守卫只防止 open 失败早于首次使用时的 unhandled rejection。
+    this.dbReady.catch(() => {});
+    this.storage = createStorageRepository({
+      db: () => this.dbReady,
+      // 同步驱动：读路径直读介质（open 之前的调用是装配错误，fail loud）。
+      dbSync: () => {
+        if (this.db === undefined) throw new Error("sqlite session database is not open");
+        return this.db;
+      },
+      writeAtomically: (fn) =>
+        enqueueSqliteTx(this.dbPath, async () => {
+          const db = await this.dbReady;
+          db.$client.exec("BEGIN IMMEDIATE");
+          try {
+            const result = await fn();
+            db.$client.exec("COMMIT");
+            return result;
+          } catch (error: unknown) {
+            try {
+              db.$client.exec("ROLLBACK");
+            } catch {
+              // 原始 SQLite 失败仍是可操作的根因。
+            }
+            throw error;
+          }
+        }),
+      tables: {
+        t_sessions: tSessions,
+        t_storage_units: tStorageUnits,
+        t_workspaces: tWorkspaces,
+        t_workspace_sessions: tWorkspaceSessions,
+        t_workspace_state: tWorkspaceState,
+        t_session_projcache_row: tSessionProjcacheRows,
+      },
+    });
+  }
 
   async open(): Promise<void> {
+    try {
+      await this.doOpen();
+      this.resolveDb(this.db);
+    } catch (error: unknown) {
+      this.rejectDb(error);
+      throw error;
+    }
+  }
+
+  private async doOpen(): Promise<void> {
     const actual =
       this.options.path === ":memory:" ? this.options.path : resolve(this.options.path);
     this.dbPath = actual;
@@ -290,6 +354,7 @@ export class SqliteBackend implements Backend {
     insertBridges: (rows) => this.insertBridges(rows),
     updateHead: (id, headEventId, headSequence) => this.updateHead(id, headEventId, headSequence),
     bumpRevision: (id) => this.bumpRevision(id),
+    refreshTitle: (id) => this.refreshTitle(id),
     deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(id, fromSequence),
     getPrevBridge: (id, sequence) => this.getPrevBridge(id, sequence),
   };
@@ -384,6 +449,24 @@ export class SqliteBackend implements Backend {
     this.db
       .update(tSessions)
       .set({ fRevision: sql`${tSessions.fRevision} + 1` })
+      .where(eq(tSessions.fSessionId, id))
+      .run();
+  }
+
+  /** 从事件表重算标题（最后一条 `session/title`），写回会话行的 f_title 列。 */
+  private async refreshTitle(id: SessionId): Promise<void> {
+    const row = this.db
+      .select({ fSequence: tSessionEvents.fSequence, fData: tEvents.fData })
+      .from(tSessionEvents)
+      .innerJoin(tEvents, eq(tEvents.fEventId, tSessionEvents.fEventId))
+      .where(and(eq(tSessionEvents.fSessionId, id), eq(tEvents.fType, "session/title")))
+      .orderBy(desc(tSessionEvents.fSequence))
+      .limit(1)
+      .get() as { fSequence: number; fData: string } | undefined;
+    const title = row === undefined ? undefined : titleOfEventData(row.fData);
+    this.db
+      .update(tSessions)
+      .set({ fTitle: title ?? null, fTitleSeq: title === undefined ? null : row!.fSequence })
       .where(eq(tSessions.fSessionId, id))
       .run();
   }

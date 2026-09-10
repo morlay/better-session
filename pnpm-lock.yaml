@@ -339,12 +339,12 @@ importers:
       '@deepseek-ai/dsh-storage-domain':
         specifier: workspace:^
         version: link:../../vendor/deepseek-harness/packages/storage/storage-domain
-      '@deepseek-ai/dsh-storage-json':
-        specifier: workspace:^
-        version: link:../../vendor/deepseek-harness/packages/storage/storage-json
       '@deepseek-ai/dsh-token-meter':
         specifier: workspace:^
         version: link:../../vendor/deepseek-harness/packages/llm/token-meter
+      '@deepseek-ai/dsh-workspace':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/workspace/workspace
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
