@@ -327,6 +327,21 @@ importers:
       '@deepseek-ai/dsh-session-projection':
         specifier: workspace:^
         version: link:../../vendor/deepseek-harness/packages/session/session-projection
+      '@deepseek-ai/dsh-session-projection-cache':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/session/session-projection-cache
+      '@deepseek-ai/dsh-session-turn-outline':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/session/session-turn-outline
+      '@deepseek-ai/dsh-storage':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/storage/storage
+      '@deepseek-ai/dsh-storage-domain':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/storage/storage-domain
+      '@deepseek-ai/dsh-storage-json':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/storage/storage-json
       '@deepseek-ai/dsh-token-meter':
         specifier: workspace:^
         version: link:../../vendor/deepseek-harness/packages/llm/token-meter

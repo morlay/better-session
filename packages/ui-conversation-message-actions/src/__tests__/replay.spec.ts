@@ -149,6 +149,19 @@ const threeTurns = (): SessionEvent[] => [
   ...turnLog(13, 3),
 ];
 
+/** 空轮：turn/start 后直接 turn/end（早期重放缺陷的遗留形状）。 */
+function emptyTurn(base: number, turn: number): SessionEvent[] {
+  return [
+    { type: "turn/start", seq: SessionSeq(base), time: base, data: { turn } },
+    {
+      type: "turn/end",
+      seq: SessionSeq(base + 1),
+      time: base + 1,
+      data: { turn, reason: { kind: "completed" } },
+    },
+  ] as unknown as SessionEvent[];
+}
+
 function pendingSplice(seq: number, text: string): SessionEvent {
   return {
     type: "agent/inbox/spliced",
@@ -340,6 +353,60 @@ describe("SessionEditor replay turn numbering", () => {
       });
       expect(agent.received).toEqual(["turn 2 input", "turn 3 input"]);
       expect(turnsOf(live.snapshotEvents())).toEqual([1, 2, 3]);
+      disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("retry after an empty turn absorbs it and replays continuously", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // turn1（内容）→ turn2（空轮）→ turn3（内容）：重试 turn3 应把空轮
+      // 一并截断，重放成 turn2，而不是留下 1,2,3 里的空 turn2。
+      const live = await liveSession(ctx, "s", [
+        header,
+        ...turnLog(1, 1),
+        ...emptyTurn(7, 2),
+        ...turnLog(9, 3),
+      ]);
+      const agent = miniAgent(live);
+      const disposeAgents = provideAgents(ctx, agent);
+      await editor.retry({
+        action: "retry",
+        sessionId: SessionIdBrand("s"),
+        turn: 3,
+        cascade: "truncate",
+      });
+      expect(agent.received).toEqual(["turn 3 input"]);
+      expect(turnsOf(live.snapshotEvents())).toEqual([1, 2]);
+      disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("assistant edit after an empty turn writes the manual turn continuously", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      const live = await liveSession(ctx, "s", [
+        header,
+        ...turnLog(1, 1),
+        ...emptyTurn(7, 2),
+        ...turnLog(9, 3),
+      ]);
+      const agent = miniAgent(live);
+      const disposeAgents = provideAgents(ctx, agent);
+      // turnLog(9, 3) 的 assistant/message 在 seq 12。
+      await editor.edit({
+        action: "edit",
+        sessionId: SessionIdBrand("s"),
+        eventSeq: 12,
+        blockIndex: 0,
+        text: "edited assistant 3",
+        cascade: "truncate",
+      });
+      expect(turnsOf(live.snapshotEvents())).toEqual([1, 2]);
       disposeAgents();
     } finally {
       await dispose();

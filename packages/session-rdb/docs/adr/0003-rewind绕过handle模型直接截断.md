@@ -4,8 +4,8 @@
 操作后端事务：边界校验（闭合 `turn/end` 或 `-1`）→ 事务内截断（删桥接行 +
 head 游标回退 + revision bump，Abort 整体回滚）→ 更新 WriteGuard 确认 head
 → live 会话同步（截断内存 log、失效投影缓存、重置 agent 轮次游标、对齐
-handle cursor、取消排队输入）。**只删桥接行，事件行保留**（全局实体，可能
-被其他会话引用）。
+handle cursor、取消排队输入）→ 刷新持久化投影检查点。**只删桥接行，事件行
+保留**（全局实体，可能被其他会话引用）。
 
 ## 考虑过的选项
 
@@ -28,3 +28,8 @@ handle cursor、取消排队输入）。**只删桥接行，事件行保留**（
 - 截断后必须 durable 取消 agent 的排队输入（`inbox.clear()`，cursor 对齐后
   执行）：落在保留区的 pending 事件不会随截断消失，不取消则 agent 会继续
   处理 rewind 已放弃的输入。
+- 截断后必须刷新 `ctx.sessionProjectionCache` 的持久化检查点：rewind 不产生
+  事件，缓存行的水位仍停在截断前。cold 读的 `restore` 会丢弃超前行，但列表
+  hints 的零 I/O 读与客户端投影 store 的 higher-seq-wins 会让超前行锁死旧
+  值（轮次导航残留已删除的轮次）。刷新是 fail-soft：缓存是派生数据，写失败
+  只记日志。

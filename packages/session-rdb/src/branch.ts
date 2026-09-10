@@ -71,6 +71,25 @@ export interface LiveSessionHooks {
   // 的 observedSeq 仍停在截断前，后续 append 的事件（seq 更小）会被 drive()
   // 跳过，重放输入永远进不了 inbox 投影。可选：纯持久化环境没有投影服务。
   resetProjections?(session: Session): void;
+
+  // 用截断后的 log 重写该会话的持久化投影检查点：rewind 不会产生事件，
+  // 缓存行的水位（以及基于它折出的值）仍停在截断前。超前行不会被前端投影
+  // store 的 higher-seq-wins 规则覆盖（rewind 后的正确值 seq 更小），表现为
+  // 轮次导航残留被删除的旧轮次。可选：纯持久化环境没有投影缓存服务。
+  refreshProjectionCache?(session: ProjectionCacheSession): Promise<void>;
+}
+
+/**
+ * 投影检查点刷新所需的最小会话面：cold rewind 没有 live Session 可复用，
+ * 而截断后的前缀未必是合法的独立会话（surface 引用可能悬空），不能走
+ * `Session.create` 的校验；缓存服务只读 id / header / inheritedEventCount
+ * 与事件前缀，用普通对象承载即可。
+ */
+export interface ProjectionCacheSession {
+  readonly id: SessionId;
+  readonly header: SessionHeader;
+  readonly inheritedEventCount: SessionLogOffset;
+  snapshotEvents(): readonly SessionEvent[];
 }
 
 // 投影 registry 的失效面（上游私有结构，duck-type 读取）。
@@ -260,8 +279,12 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     if (live !== undefined) await this.live.flush(live);
     // 边界校验用原始事件（readLog，不补 closers）——inspect 会给未闭合
     // log 补合成 closers，把 user/message 边界掩盖成 turn/end，丢失 exclusive
-    // 语义。
-    const raw = live === undefined ? await this.readRawEvents(id, signal) : undefined;
+    // 语义。cold 分支同时取回 inheritedEventCount：刷新投影检查点时要用它
+    // 重建与存储一致的会话身份。
+    const raw = live === undefined ? await this.persistence.readLog(id, {}, signal) : undefined;
+    if (live === undefined && raw === undefined) {
+      throw new SessionBranchError(`session "${id}" not found`, "SESSION_NOT_FOUND");
+    }
     const inspection =
       live === undefined ? undefined : await this.persistence.internals().inspect(id, signal);
     const events = live === undefined ? raw!.events : inspection!.events;
@@ -284,7 +307,8 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     // 编辑版替换）。exclusive 截断可能残留孤儿 step/start，经平衡化剔除。
     const rawKeepLength =
       toBoundary === -1 ? 0 : boundaryEvent!.type === "turn/end" ? toBoundary + 1 : toBoundary;
-    const keepLength = balanceRewindPrefix(events.slice(0, rawKeepLength)).length;
+    const kept = balanceRewindPrefix(events.slice(0, rawKeepLength));
+    const keepLength = kept.length;
 
     const internals = this.persistence.internals();
     // 原样存储（无过滤）：live 视图与 RDB head 同空间（上游 seq），
@@ -353,6 +377,18 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       // 取消事件先经 coordinator 缓冲，落盘后 rewind 才真正 durable（调用方
       // 可能在 rewind 返回后直接读后端）。
       await this.live.flush(live);
+      // 持久化投影检查点也要退到截断后的水位：rewind 不产生事件，缓存行
+      // 会停在截断前；超前行锁死前端（higher-seq-wins），轮次导航残留旧轮次。
+      await this.refreshProjectionCache(live);
+    } else {
+      // cold：用截断后的前缀 + 存储身份构造最小会话面，让缓存服务按截断后
+      // 的 log 重写检查点（没有 live 会话可复用，也不为此 resume 一个 agent）。
+      await this.refreshProjectionCache({
+        id,
+        header: meta,
+        inheritedEventCount: SessionLogOffset(raw!.inheritedEventCount),
+        snapshotEvents: () => kept,
+      });
     }
 
     const row = await internals.backend.getSession(id);
@@ -376,6 +412,19 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       };
     }
     return { header: rowToMeta(row), revision: (await internals.readStoredRevision(id))! };
+  }
+
+  /**
+   * 让持久化投影检查点跟随截断后的 log（见 {@link LiveSessionHooks.refreshProjectionCache}）。
+   * 缓存是派生数据：刷新失败只让缓存多滞后一轮，不能让 rewind 失败。
+   */
+  private async refreshProjectionCache(session: ProjectionCacheSession): Promise<void> {
+    if (this.live.refreshProjectionCache === undefined) return;
+    try {
+      await this.live.refreshProjectionCache(session);
+    } catch {
+      // 实现方（SessionBranchRdb）已记日志；此处只保证 rewind 不因派生数据失败。
+    }
   }
 }
 
@@ -406,6 +455,20 @@ export class SessionBranchRdb extends SessionBranch {
         if (registry?.registrations === undefined) return;
         for (const registration of registry.registrations.values()) {
           registration.cells.delete(session);
+        }
+      },
+      refreshProjectionCache: async (session) => {
+        // sessionProjectionCache 是可选服务（纯持久化环境无投影缓存）。
+        const cache = this.ctx.get("sessionProjectionCache") as
+          | { write(session: ProjectionCacheSession): Promise<void> }
+          | undefined;
+        if (cache === undefined) return;
+        try {
+          await cache.write(session);
+        } catch (error: unknown) {
+          this.ctx.logger.warn(
+            `session-rdb: projection cache refresh after rewind for "${session.id}" failed (cache stays stale): ${String(error)}`,
+          );
         }
       },
     },

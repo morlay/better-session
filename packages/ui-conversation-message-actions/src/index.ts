@@ -33,6 +33,7 @@ import {
   closedTurns,
   editableMessages,
   editPlan,
+  precedingContentIndex,
   retryPlan,
   rerollPlan,
   retryableTurns,
@@ -280,11 +281,27 @@ export class SessionEditor extends Service {
     const headerConfig = events.findLast((event) => event.type === "request/header")?.data.header
       .config;
 
+    const turnIndex = turns.findIndex((turn) => turn.startSeq === plan.anchorSeq);
+    // 空轮吸收：目标轮之前的空轮（早期重放缺陷的遗留）随截断一并删除，
+    // 重放按保留前缀续号——轮次导航不再出现点不开的空项与轮号空洞。
+    const preceding = precedingContentIndex(turns, turnIndex);
+    const boundary =
+      plan.rewindBoundary !== undefined
+        ? plan.rewindBoundary
+        : preceding < 0
+          ? -1
+          : turns[preceding]!.endSeq!;
+    // manualTurn 的轮号同样按保留前缀续号：正常会话等于目标轮号，有空轮
+    // 时收敛为连续编号。
+    const replayTurn = preceding < 0 ? 1 : turns[preceding]!.turn + 1;
+
     // 派生 seed 后缀：版本效果 + 可选手工回合。版本事件对核心是 ignorable，
     // 保证非 branch 读者可安全跳过。
     const seedSuffix: SessionEvent[] = [];
     appendLogSeedEvent(seedSuffix, "session-branch/version", plan.version, true);
-    if (plan.manualTurn !== undefined) appendManualTurn(seedSuffix, plan.manualTurn);
+    if (plan.manualTurn !== undefined) {
+      appendManualTurn(seedSuffix, { ...plan.manualTurn, turn: replayTurn });
+    }
 
     // 就地编辑：不创建新会话、不改变 id。需要重放排队输入时，先在 rewind
     // 前确保 agent 就绪（live agent 等其停；cold 先 resume）——rewind 截断后
@@ -296,13 +313,6 @@ export class SessionEditor extends Service {
       headerConfig,
     );
 
-    const turnIndex = turns.findIndex((turn) => turn.startSeq === plan.anchorSeq);
-    const boundary =
-      plan.rewindBoundary !== undefined
-        ? plan.rewindBoundary
-        : turnIndex <= 0
-          ? -1
-          : turns[turnIndex - 1]!.endSeq!;
     const live = this.ctx.sessions.get(operation.sessionId);
     await this.ctx.sessionBranch.rewind(operation.sessionId, boundary, signal);
     if (seedSuffix.length > 0) {

@@ -57,7 +57,15 @@ fork 的持久化闭环。
    水位不回退会让截断后的重放事件被 `drive()` 跳过）、重置 agent 轮次游标、
    `resetAfterRewind()` 对齐 write handle 的 cursor 与继承前缀，最后强制
    durable 取消 agent 的排队输入（`inbox.clear()`；落在保留区的 pending 同样
-   取消——否则 agent 会继续处理 rewind 已放弃的输入）。
+   取消——否则 agent 会继续处理 rewind 已放弃的输入）；
+5. **刷新持久化投影检查点**（`ctx.sessionProjectionCache.write`）：rewind 不
+   产生事件，缓存行（及其水位）仍停在截断前。超前行有两个危害：cold 读的
+   `restore` 虽会因「行超出日志末尾」丢弃它，但列表 hints 的零 I/O 读
+   （`cachedSnapshot`）直接返回旧值，且客户端投影 store 的 higher-seq-wins
+   规则让 rewind 后的低 seq 正确值永远覆盖不上——表现为轮次导航残留已删除
+   的旧轮次。live 用截断后的会话重写检查点；cold 没有 live 会话，用截断后
+   的前缀 + 存储身份构造最小会话面（截断前缀未必是合法独立会话，不能走
+   `Session.create` 校验）。缓存是派生数据：刷新失败只记日志，不影响 rewind。
 
 **保留区 replace range 完整性（不变量）**：replace 的 range 引用**更早事件**
 （上游契约：range `startSeq`/`endSeq` 必须存在于当前 surface，即已提交节点），

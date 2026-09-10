@@ -162,6 +162,22 @@ export function retryableTurns(turns: readonly ClosedTurn[]): RetryableTurn[] {
   );
 }
 
+/**
+ * 目标轮之前最后一个「有内容」轮次的下标：跳过既无用户输入也无助手回复的
+ * 空轮。空轮是早期重放缺陷的遗留（turn/start 后直接 turn/end），在轨迹 /
+ * 轮次导航里表现为点不开的空项，并让后续轮号出现空洞。rewind 把它们随
+ * 目标轮一起截断，重放按保留前缀续号即可自愈。
+ */
+export function precedingContentIndex(turns: readonly ClosedTurn[], turnIndex: number): number {
+  let index = turnIndex - 1;
+  while (index >= 0) {
+    const turn = turns[index]!;
+    if (turn.users.length > 0 || turn.assistants.length > 0) break;
+    index -= 1;
+  }
+  return index;
+}
+
 export function downstreamUsers(turns: readonly ClosedTurn[], start: number): UserMessage[] {
   return turns
     .slice(start)

@@ -23,6 +23,10 @@
   ——session id 不变，版本树保持单根；
 - **重放复用目标轮号**：轮首 user 编辑（含未闭合轮）整轮截断，重放接回原
   轮号；编辑 assistant 写入 manualTurn 后同步 agent 的轮次游标；
+- **空轮吸收**：目标轮之前的空轮（`turn/start` 后直接 `turn/end`，早期重放
+  缺陷的遗留形状）随截断一并删除，重放按保留前缀续号——轮次导航不再出现
+  点不开的空项与轮号空洞；manualTurn 的轮号同样按保留前缀收敛（正常会话
+  等于目标轮号）。版本效果仍记录**原**目标轮号（操作历史）；
 - **只有 `fork` 创建新 id**（`ForkOperation` / `forkFrom`，纯 append 派生）；
 - 版本效果事件（`session-branch/version`）携带 `ignorable: true`：live log 可见、
   **不落 canonical log**（rdb 持久化时过滤并稠密化剩余事件）；
@@ -54,7 +58,10 @@
   增长；重试先弹确认；未闭合轮次不显示重试；
 - **操作后刷新**：就地编辑后优先调用客户端会话级 `resync()`（重置窗口并重新
   拉取历史，不整页重载——rewind 的删除无法经 append-only 事件流表达，seq
-  回退只做增量会残留旧节点），不可用时回退 `location.reload()`；
+  回退只做增量会残留旧节点），随后丢弃该会话的全部投影行
+  （`projections.truncate(-1)`）——投影 store 按 higher-seq-wins 保留 rewind
+  前的高 seq 旧值，截断后的正确值 seq 更小，永远覆盖不上（轮次导航残留已
+  删除的轮次）；不可用时回退 `location.reload()`；
 - **构建约束**：client bundle 必须是**单文件**（client-modules 只服务/加载
   `client.js`）——`noExternal` 全内联第三方 + `inlineDynamicImports` 合并
   动态 import，`@deepseek-ai/*` 一律 external（平台 seed 词或独立插件，

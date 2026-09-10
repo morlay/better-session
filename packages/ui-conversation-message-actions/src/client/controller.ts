@@ -236,6 +236,18 @@ export class SessionEditorController {
       if (resync !== undefined) {
         try {
           await resync.call(face);
+          // resync 只重建事件窗口；投影 store 按 higher-seq-wins 保留 rewind
+          // 前的高 seq 旧值（截断后的正确值 seq 更小，永远覆盖不上），轮次
+          // 导航会残留已删除的轮次。丢弃全部投影行，等 host 推送重建；拿不到
+          // 丢弃入口时整页重载兜底。
+          const projections = (
+            face as unknown as { projections?: { truncate?(lastSeq: number): void } }
+          ).projections;
+          if (typeof projections?.truncate !== "function") {
+            location.reload();
+            return true;
+          }
+          projections.truncate(-1);
           void this.load();
           return true;
         } catch {

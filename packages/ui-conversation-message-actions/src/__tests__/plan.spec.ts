@@ -1,14 +1,28 @@
 import { describe, expect, it } from "vitest";
-import type { SessionEvent } from "@deepseek-ai/dsh-session";
+import { SessionSeq, type SessionEvent } from "@deepseek-ai/dsh-session";
 import {
   closedTurns,
   editableMessages,
   editPlan,
+  precedingContentIndex,
   retryPlan,
   rerollPlan,
   retryableTurns,
 } from "@morlay/ui-conversation-message-actions/plan";
 import { turnLog, twoTurnLog } from "@morlay/ui-conversation-message-actions/testing";
+
+/** 空轮：turn/start 后直接 turn/end（早期重放缺陷的遗留形状）。 */
+function emptyTurn(base: number, turn: number): SessionEvent[] {
+  return [
+    { type: "turn/start", seq: SessionSeq(base), time: base, data: { turn } },
+    {
+      type: "turn/end",
+      seq: SessionSeq(base + 1),
+      time: base + 1,
+      data: { turn, reason: { kind: "completed" } },
+    },
+  ] as SessionEvent[];
+}
 
 // —— 底层纯函数（plan.ts）全矩阵：不落库、无 IO，直接断言计划输出。 ——
 
@@ -329,5 +343,21 @@ describe("rerollPlan", () => {
     expect(() => rerollPlan({ action: "reroll", sessionId }, closedTurns(open))).toThrow(
       /没有可重生成的已落定助手回复/,
     );
+  });
+});
+
+describe("precedingContentIndex", () => {
+  const log = [...turnLog(0, 1), ...emptyTurn(6, 2), ...turnLog(8, 3)];
+
+  it("skips empty turns between the target and the last content turn", () => {
+    const turns = closedTurns(log);
+    expect(turns.map((turn) => turn.turn)).toEqual([1, 2, 3]);
+    expect(precedingContentIndex(turns, 2)).toBe(0);
+  });
+
+  it("stops at a content turn and returns -1 before the first turn", () => {
+    const turns = closedTurns(log);
+    expect(precedingContentIndex(turns, 1)).toBe(0);
+    expect(precedingContentIndex(turns, 0)).toBe(-1);
   });
 });

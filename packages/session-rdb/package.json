@@ -59,6 +59,11 @@
   },
   "devDependencies": {
     "@deepseek-ai/dsh-session-projection": "workspace:^",
+    "@deepseek-ai/dsh-session-projection-cache": "workspace:^",
+    "@deepseek-ai/dsh-session-turn-outline": "workspace:^",
+    "@deepseek-ai/dsh-storage": "workspace:^",
+    "@deepseek-ai/dsh-storage-domain": "workspace:^",
+    "@deepseek-ai/dsh-storage-json": "workspace:^",
     "@deepseek-ai/dsh-token-meter": "workspace:^",
     "@types/pg": "^8.23.1",
     "drizzle-kit": "1.0.0-rc.5-ab785fc"
