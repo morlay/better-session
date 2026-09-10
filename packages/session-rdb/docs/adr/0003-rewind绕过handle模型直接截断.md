@@ -1,7 +1,8 @@
-# 0006-rewind 绕过 handle 模型直接截断
+# 0003-rewind 绕过 handle 模型直接截断
 
 上游 `SessionHandle` 模型只有 append-only，没有显式回退原语。rewind 直接
-操作后端事务：边界校验（闭合 `turn/end` 或 `-1`）→ 事务内截断（删桥接行 +
+操作后端事务：边界校验（闭合 `turn/end`、`user/message` 排除式截断，或
+`-1` 空前缀）→ 事务内截断（删桥接行 +
 head 游标回退 + revision bump，Abort 整体回滚）→ 更新 WriteGuard 确认 head
 → live 会话同步（截断内存 log、失效投影缓存、重置 agent 轮次游标、对齐
 handle cursor、取消排队输入）→ 刷新持久化投影检查点。**只删桥接行，事件行
@@ -16,8 +17,8 @@ handle cursor、取消排队输入）→ 刷新持久化投影检查点。**只�
 ## 后果
 
 - rewind 是 rdb 特有的直接截断，未与 handle 模型的 per-id 串行链互斥
-  （无法从外部访问）——文档要求对 cold 会话调用（无 live owner、无
-  in-flight append）；多实例共享数据库时由事务 + head 校验兜底。
+  （无法从外部访问）；live 与 cold 会话都支持，调用方需保证该会话没有
+  in-flight append；多实例共享数据库时由事务 + head 校验兜底。
 - 截断进入继承前缀时须收缩 `f_seed_length`（只收缩、不扩张），否则存储
   出现「继承前缀超过存储事件数」的矛盾，上游 load 拒绝。
 - 保留区 replace range 完整性由数学保证：replace 的 range 引用更早事件，

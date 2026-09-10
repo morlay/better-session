@@ -51,14 +51,7 @@ session-rdb:
 
 ## 本地开发
 
-本包是 monorepo（pnpm workspaces）的一员，命令入口见根 [justfile](../../justfile)：
-
-```sh
-just dep      # 安装依赖
-just build    # 构建全部包（tsdown）
-just test     # vitest（含 PostgreSQL 契约测试，需 TEST_PG_URL）
-just lint     # oxlint
-```
-
-架构与约定见 [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) 与
-[docs/CODING_GUIDELINE.md](../../docs/CODING_GUIDELINE.md)。
+本包是 monorepo（pnpm workspaces）的一员：命令入口见根
+[justfile](../../justfile)，约定见
+[docs/CODING_GUIDELINE.md](../../docs/CODING_GUIDELINE.md)，架构见
+[docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)。

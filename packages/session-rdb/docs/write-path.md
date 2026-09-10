@@ -3,7 +3,7 @@
 ```
 live log（上游 seq）
   │
-  ├─ v2 校验：validateStoredEvents（未知类型非 ignorable / 非法消息形状拒绝）
+  ├─ 当前格式校验：validateStoredEvents（未知类型非 ignorable / 非法消息形状拒绝）
   │
   ├─ f_data：完整事件原样落库（type/seq/time/data/ignorable 信封，与 JSONL
   │   每行同构）
@@ -24,8 +24,8 @@ live log（上游 seq）
   经 legacy 转换链动态转换；写打开时若迁移视图与存储桥接行数不一致（迁移链
   会生成/合并事件），先整体落库一次，使读写同坐标（见
   [legacy-clean.md](legacy-clean.md)）。
-- 事件行**已存在则复用**（fork 派生会话引用父会话事件行），否则新建
-  （`INSERT OR IGNORE` 语义 + 桥接行引用已存在 id）。
+- 事件行**已存在则复用**（fork 派生会话引用父会话事件行，经 seq→eventId
+  复用映射命中则跳过插入），否则新建。
 - 事务是原子性 + 持久性边界：mid-batch 失败（UNIQUE 冲突）整体回滚。
 - 写锁：SQLite `BEGIN IMMEDIATE`（busy_timeout 排队）；PG 依赖事务行锁 +
   `UNIQUE(f_session_id, f_sequence)` 拒绝冲突批次。

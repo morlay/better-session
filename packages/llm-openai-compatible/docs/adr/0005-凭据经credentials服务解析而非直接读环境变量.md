@@ -1,9 +1,9 @@
 # 0005-凭据经 credentials 服务解析而非直接读环境变量
 
-profile 设置 `apiKeyEnv` 后：`ctx.credentials` 优先，其次
-`launchEnvironmentOf(ctx)`；解析不到 → `LlmError('MISSING_CREDENTIAL')`。
-profile 不设置 `apiKeyEnv` → 请求不带 `authorization` 头（无认证端点，如
-本地 Ollama）。
+profile 设置 `apiKeyEnv` 后经 `ctx.credentials` 解析（服务缺失时回退
+`launchEnvironmentOf(ctx)`）；解析不到 → `LlmError('MISSING_CREDENTIAL')`。
+不设置 → 请求不带 `authorization` 头（无认证端点，如本地 Ollama）。现状细节
+见 [README](../../README.md)。
 
 ## 考虑过的选项
 
@@ -15,4 +15,3 @@ profile 不设置 `apiKeyEnv` → 请求不带 `authorization` 头（无认证�
 
 - 凭据缺失时错误信息指引用户「通过 credentials 服务（web Models 页面）或
   launch environment 提供」。
-- 无认证端点（不设 `apiKeyEnv`）的请求不带 `authorization` 头。

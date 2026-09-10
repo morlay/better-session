@@ -16,8 +16,9 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 │   ├── ARCHITECTURE.md          # 本文档
 │   └── CODING_GUIDELINE.md      # 项目约定
 ├── apps/
-│   └── dsh-custom-next/          # 工作区：web 模式（dsh web）与 desktop 模式的拍平定义
+│   └── dsh-custom-next/          # 示例工作区：web 模式（dsh web）与 desktop 模式（Electron 壳）
 ├── devpackages/
+│   ├── devkit/                   # 共享开发配置（cordis 插件 tsdown 预设 + tsconfig）
 │   └── dsh-desktopify/           # 桌面化打包工具（Electron 壳，dev 链接工作区 / bundle 静态打包）
 ├── packages/
 │   ├── session-branch/          # 契约层 @morlay/session-branch（provider 抽象 + 版本树）
@@ -76,30 +77,27 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 
 ## 装配（`@morlay/better-session` bundle patch）
 
-```
-ctx.sessionPersistence  ← RDB（SQLite / PostgreSQL）持久化后端（替换官方 jsonl）
-ctx.sessionBranch       ← rewind / fork 数据层
-ctx.sessionEditor       ← edit / retry / fork 编排（HTTP：/session-editor）
-conversation.chat.node  ← 渲染替换（user 消息行内编辑 / 重试按钮）
-```
+`cordis.patch.yml` 一次装配四层服务：持久化（RDB，替换官方 jsonl）、分支
+数据、edit / retry / fork 编排、`conversation.chat.node` 渲染替换。装配链
+与服务调用示例见
+[packages/better-session/README.md](../packages/better-session/README.md)，
+rdb 替换的起因与权衡见
+[ADR 0001](../packages/better-session/docs/adr/0001-rdb替换官方jsonl持久化.md)。
 
 默认配置为 SQLite（`$DSH_HOME/sessions/sessions.sqlite`）；`session-rdb`
-namespace 可覆盖为 PostgreSQL（`connectionString`）。官方
-`session-persistence-jsonl` 被禁用（`disabled: true`）——rdb 替换的起因与
-权衡见 [ADR 0001](../packages/better-session/docs/adr/0001-rdb替换官方jsonl持久化.md)。
+namespace 可覆盖为 PostgreSQL（`connectionString`）；官方
+`session-persistence-jsonl` 被禁用（`disabled: true`）。
 
 ## 操作语义
 
-| 操作    | 路径                                                    | 会话 id |
-| ------- | ------------------------------------------------------- | ------- |
-| `edit`  | 编辑已落定文本块 → `rewind` 截断 → `append` 重写 → 重放 | 不变    |
-| `retry` | 重放该回合输入（带确认弹窗）                            | 不变    |
-| `fork`  | 从任意闭合边界派生新会话（纯 append，不触碰源会话）     | 新      |
+`edit` / `retry` / `reroll` 就地重写同一会话（`rewind` 截断 + `append`
+重放，session id 不变），只有 `fork` 派生新 id。各操作的完整语义见
+[packages/ui-conversation-message-actions/README.md](../packages/ui-conversation-message-actions/README.md)。
 
 ## 与上游的关系
 
-- 上游 `@deepseek-ai/*` 代码**不可修改**：node_modules 只读；扩展走 cordis
-  插件层（plugin / patch bundle / settings namespace）。
+- 上游 `@deepseek-ai/*` 不可修改（红线见 [AGENTS.md](../AGENTS.md)）：扩展走
+  cordis 插件层（plugin / patch bundle / settings namespace）。
 - 上游源码以 side workspace 形式 vendor 到 `vendor/deepseek-harness/`
   （版本锁定完整代码，`DEEPSEEK_HARNESS_VERSION`），更新与适配流程见
   [dsh-side-workspace-plugin-develop skill](../.agents/skills/dsh-side-workspace-plugin-develop/SKILL.md) 与
@@ -117,7 +115,7 @@ exports 收敛）、运行流程与运行时语义见
 
 | 级别     | 位置                                                                                                        | 决策                                                                                                                                    |
 | -------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| 仓库级   | [docs/adr/](adr/)                                                                                           | 上游以 side workspace 版本锁定完整代码而非发布版本                                                                                      |
+| 仓库级   | [docs/adr/](adr/)                                                                                           | 上游 side workspace 版本锁定；workspace 跨 vendor 链接与 devkit 复用；桌面化迁移到 Electron + 上游 desktop-host                         |
 | 装配级   | [packages/better-session/docs/adr/](../packages/better-session/docs/adr/)                                   | rdb 替换官方 jsonl 持久化；配置经 settings 服务覆盖                                                                                     |
 | 上下文级 | [packages/session-branch/docs/adr/](../packages/session-branch/docs/adr/)                                   | 分支面 provider 抽象；ignorable 版本效果原样落库；迁移到上游 SessionHandle 模型                                                         |
 | 上下文级 | [packages/session-rdb/docs/adr/](../packages/session-rdb/docs/adr/)                                         | 原样存储；事件实体全局化；rewind 直接截断；并发写入 fail loud；未闭合轮次原样保留；导出即修复；混合世代回退；跟随上游 Session format v3 |

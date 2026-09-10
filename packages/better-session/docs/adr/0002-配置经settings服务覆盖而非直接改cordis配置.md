@@ -3,8 +3,8 @@
 `session-rdb` 的配置（SQLite / PostgreSQL 选择、路径、连接串等）经
 `$DSH_HOME/settings.yaml` 的 `session-rdb` namespace 覆盖 cordis 层 entry
 config（注册于 `ctx.settings`，见 `SessionPersistenceRdb.settingsNs`），
-未写出的字段回落到 bundle patch / cordis.yml 的 config 默认值。默认配置为
-SQLite（`$DSH_HOME/sessions/sessions.sqlite`）。
+未写出的字段回落到 bundle patch / cordis.yml 的 config 默认值。字段清单、
+默认路径与示例见 [README](../../README.md)。
 
 ## 考虑过的选项
 

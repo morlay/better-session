@@ -2,8 +2,7 @@
 
 传输层复用 **[@ai-sdk/openai-compatible](https://www.npmjs.com/package/@ai-sdk/openai-compatible)**
 （`LanguageModelV4.doStream`：wire 序列化与 SSE 解析由 SDK 负责）；本插件
-只负责 harness 消息 → AI SDK prompt 转换、采样默认合并、stream part →
-`StreamChunk` 翻译、错误归一化与凭据策略。
+只负责 harness 适配（转换范围与传输细节见 [README](../../README.md)）。
 
 ## 考虑过的选项
 
@@ -14,6 +13,5 @@
 
 ## 后果
 
-- 非标准字段（`top_k`）经 `providerOptions` 透传进请求体。
-- 用量转换（`convertUsage`）需兼容 DeepSeek 方言
-  （`prompt_cache_hit_tokens`）。
+- 非标准字段与用量方言需在本层显式处理（`top_k` 经 `providerOptions` 透传、
+  `convertUsage` 兼容 `prompt_cache_hit_tokens`），现状见 [README](../../README.md)。

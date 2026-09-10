@@ -3,7 +3,8 @@
 命名统一：表一律 `t_` 前缀、字段一律 `f_` 前缀；**实体在 `src/entities/`
 纯定义**（每张表一个文件，方言无关的描述；无任何实现逻辑），SQLite
 （`sqliteTable`）与 PostgreSQL（`pgTable`）的 drizzle 表对象以及建表 DDL
-由 `src/adapters/` 从这些实体转化生成——无手写 DDL、无迁移工具链。除键列外
+由 `src/adapters/` 从这些实体转化生成——无手写 DDL；表结构级升级由
+drizzle-kit 生成迁移（见下）。除键列外
 各表另带 `f_id` serial 自增主键（`t_persistence_state` 以 `f_singleton`、
 `t_schema_meta` 以 `f_key` 为键列，无 `f_id`）。**多表关联一律用业务键、
 不用 `f_id`**；查询与 join 只走业务键，不为不可达查询维护额外索引。
@@ -11,7 +12,8 @@
 ## SCHEMA_VERSION 与升级
 
 - `SCHEMA_VERSION` 是**破坏性变更门禁**：表结构变更（列增删、列语义变化）
-  必须 bump；`openDatabase` 对非当前版本**拒绝打开**（不迁移）。
+  必须 bump；`openDatabase` 接受空库 / v2 / 当前版本（v2 先把 baseline 标记
+  为已应用、只执行 v3 diff），其余版本拒绝打开。
 - 表结构级升级由 **drizzle-kit 生成迁移**（`drizzle/` 目录，sqlite/pg 各一
   份；`pnpm db:generate` 重新生成），运行时经 drizzle `migrate()` 执行；
   旧版本库首次打开时把 v2 baseline 标记为已应用，只执行 v3 diff。同版本内
@@ -46,7 +48,7 @@ session-rdb:
 | --------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `t_sessions`          | `f_session_id` UNIQUE | 会话元数据（`SessionHeader` 列：`f_version` / `f_created_at` / `f_cwd` / `f_parent_session` / `f_seed_length` / `f_origin` / `f_delegation_depth`）+ head 游标（`f_head_event_id` / `f_head_sequence`，事务内维护，append 时提供 parent 链与下一个 seq）+ materialization 身份（`f_incarnation` / `f_revision`）。行的存在即 materialized 信号 |
 | `t_persistence_state` | `f_singleton`         | store 身份单例（`f_store_id`）                                                                                                                                                                                                                                                                                                                 |
-| `t_schema_meta`       | `f_key`               | PG 专用：schema 版本 / 应用身份键值对（SQLite 用 `PRAGMA user_version` / `application_id`）                                                                                                                                                                                                                                                    |
+| `t_schema_meta`       | `f_key`               | schema 版本 / 应用身份键值对：双方言都建表，仅 PG 读写；SQLite 走 `PRAGMA user_version` / `application_id`                                                                                                                                                                                                                                     |
 
 ## 事件实体表（全局，忠实存储原始事件）
 
@@ -70,7 +72,9 @@ session-rdb:
 
 ### 事件维度（f_kind / f_role / f_name / f_action_id）
 
-四列从事件分类提取，覆盖全部已知事件类型（未知插件扩展类型保持空值）。
+四列从事件分类提取；未映射的事件类型（未知插件扩展，以及部分 v3 新增类型
+如 `system/message`、`deliverables/presented`、`subagent/catalog`、
+`feedback/message-put|delete`）保持空值。
 
 **`f_kind`** — 事件种类（粗分类，查询过滤用）：
 
@@ -79,7 +83,7 @@ session-rdb:
 | `message`    | `user/message` / `assistant/message`（content 无 reasoning 块）                                                             |
 | `thinking`   | `assistant/message`（content 含 reasoning 块）                                                                              |
 | `turn`       | `turn/start` / `turn/end` / `step/start` / `step/end` / `session/end-seed`                                                  |
-| `tool`       | `tool/call` / `tool/result` / `tool/code-dispatch-start` / `tool/code-dispatch`                                             |
+| `tool`       | `tool/call` / `tool/result` / `tool/ptc-dispatch-start` / `tool/ptc-dispatch`（v2 旧名 `tool/code-dispatch*` 由读路径归一） |
 | `request`    | `request/header` / `request/context`                                                                                        |
 | `config`     | `model/selection` / `permission/preset` / `approval/policy` / `sandbox/mode` / `plan/mode` / `agent-preset/selected`        |
 | `audit`      | `approval/asked` / `approval/decided` / `command/run` / `command/done` / `hook/invoked` / `hook/result` / `feedback/record` |
@@ -127,7 +131,7 @@ session-rdb:
 | ------------------------------------------------------------------- | ------------------------------------ |
 | `tool/call`                                                         | `data.callId`                        |
 | `tool/result`                                                       | `data.message.content[0].toolCallId` |
-| `tool/code-dispatch-start` / `tool/code-dispatch`                   | `data.subCallId`                     |
+| `tool/ptc-dispatch-start` / `tool/ptc-dispatch`（v2 旧名同）        | `data.subCallId`                     |
 | `command/run` / `command/done`                                      | `data.commandId`                     |
 | `approval/asked` / `approval/decided`                               | `data.id`                            |
 | `hook/invoked` / `hook/result`                                      | `data.handlerId`                     |
@@ -162,14 +166,12 @@ session-rdb:
 约束：`UNIQUE(f_session_id, f_sequence)`（自动建唯一索引，覆盖全部访问模式：
 按 session 过滤 + 按 seq 范围/排序/取尾）。
 
-**孤儿事件行清理**：rewind / torn-tail 物理删除 / 会话删除（CASCADE 删桥接行）
-后，无任何桥接行引用的 `t_events` 行成为孤儿。清理策略：
-
-- **惰性 GC**：rewind / 会话删除路径顺带删除该会话不再引用的孤儿事件行
-  （`DELETE FROM t_events WHERE f_event_id NOT IN (SELECT f_event_id
-FROM t_session_events)`，经 `t_session_events.f_event_id` 索引）；
-- 不做全局定时 GC（多实例共享数据库时跨实例引用不可知，惰性清理只处理
-  本会话可见的孤儿）。
+**孤儿事件行**：rewind / torn-tail 截断 / 会话删除（CASCADE 删桥接行）后，
+无任何桥接行引用的 `t_events` 行成为孤儿（事件实体全局共享，删除只删桥接
+行）。**当前不做清理**：跨会话引用不可知（多实例共享数据库时尤甚），全局
+GC 需要引用计数或全库扫描，收益不足；如需回收可离线执行
+`DELETE FROM t_events WHERE f_event_id NOT IN (SELECT f_event_id FROM
+t_session_events)`。
 
 **session 专属信息清单**（全部在桥接行，事件实体不关心）：
 

@@ -1,8 +1,9 @@
 # 事件 id 关联与重建可行性分析
 
-本文件系统梳理上游 `SessionEventMap` 全部事件类型的 **id 关联**（跨事件配对 /
-seq 引用），验证「事件实体无 session 信息 + 桥接行存 surface 元数据 +
-sourceEventSeqs 不落库」的设计能否完整重建会话。
+本文件梳理上游事件里**带跨事件引用的事件类型**（id 配对 / seq 引用），验证
+「事件实体无 session 信息 + 桥接行存 surface 元数据 + sourceEventSeqs 不落库」
+的设计能否完整重建会话。类型全集以 `@deepseek-ai/dsh-session` 的
+`KNOWN_SESSION_EVENT_TYPES` 为准，本文只列与重建相关的类型。
 
 ## 结论摘要
 
@@ -42,6 +43,7 @@ turn/end、step/start ↔ step/end）由事件顺序 + 坐标保证，无跨事�
 | ------------------- | ----------------------------------------------- | -------------- | ----------------------------------------------------------------------------------- |
 | `user/message`      | `UserMessage`（含 `id`）                        | `f_surface_op` | 消息 `id` 自包含（inbox 配对用，见下）                                              |
 | `assistant/message` | `{ turn, step, message, usage?, interrupted? }` | `f_surface_op` | 无 seq 引用（上游禁止 `sourceEventSeqs`，流式 delta 嵌入 `stream`）                 |
+| `system/message`    | v3 新增：surface 承载 system / tools            | `f_surface_op` | 无跨事件 id 引用（会话 header 的 system 重建载体）                                  |
 | `tool/result`       | `{ turn, step, message, error?, meta? }`        | `f_surface_op` | `message.source.callId` 配对 `tool/call`；无 seq 引用（上游禁止 `sourceEventSeqs`） |
 
 **replace 事件**（`surfaceOp: { op: "replace", startSeq, endSeq }`，桥接行原样存）：
@@ -69,7 +71,7 @@ turn/end、step/start ↔ step/end）由事件顺序 + 坐标保证，无跨事�
 | `hook/invoked` ↔ `hook/result`                                      | `handlerId` + `point` | 钩子执行配对                                                                                                                          |
 | `llm/retry` ↔ `llm/retry-started`                                   | `retryId`             | 重试调度配对                                                                                                                          |
 | `tool-workflow/run-start` ↔ `agent-start` ↔ `agent-end` ↔ `run-end` | `runId` + `seq`       | 工作流成员配对                                                                                                                        |
-| `tool/code-dispatch-start` ↔ `tool/code-dispatch`                   | `subCallId`           | 子调用配对                                                                                                                            |
+| `tool/ptc-dispatch-start` ↔ `tool/ptc-dispatch`                     | `subCallId`           | 子调用配对（v2 旧名 `code-dispatch` 读路径归一）                                                                                      |
 
 全部按**字符串 id** 配对，不引用 seq——重建安全，与坐标无关。
 

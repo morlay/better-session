@@ -46,20 +46,18 @@ AI SDK 流式响应单元——本插件翻译为 harness `StreamChunk`。
 _避免使用_：流块、chunk
 
 **流空闲超时（stream idle timeout）**：
-`streamIdleTimeoutMs` 控制流空闲超时（`TIMEOUT`）；`timeoutMs` 控制整体
-请求超时（缺省不设）。
+区分流空闲超时与整体请求超时两个传输参数。
 _避免使用_：空闲超时、流超时
 
 **错误归一化（error normalization）**：
-HTTP 状态 + 错误体 → harness `LlmError` 码：401/403 → `AUTH`、429 →
-`RATE_LIMIT`、400+上下文 → `CONTEXT_WINDOW_EXCEEDED`、5xx → `SERVER`、
-配额 → `QUOTA_EXCEEDED`。
+HTTP 状态 + 错误体 → harness `LlmError` 码（映射表见
+[README](README.md#传输)）。
 _避免使用_：错误映射、错误翻译
 
 **凭据策略（credential policy）**：
-profile 设置 `apiKeyEnv` 后：`ctx.credentials` 优先，其次
-`launchEnvironmentOf(ctx)`；解析不到 → `MISSING_CREDENTIAL`。不设置 →
-请求不带 `authorization` 头（无认证端点，如本地 Ollama）。
+profile 的 `apiKeyEnv` 经凭据服务解析（服务缺失时回退进程环境）；解析不到 →
+`MISSING_CREDENTIAL`。不设置 → 请求不带 `authorization` 头（无认证端点，如
+本地 Ollama）。
 _避免使用_：认证方式、密钥解析
 
 **cacheReadTokens**：

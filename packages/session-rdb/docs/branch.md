@@ -22,9 +22,8 @@ fork 的持久化闭环。
 - **事件行复用**：`t_events` 是全局实体，派生会话的桥接行直接引用源会话
   已存在的事件行（`f_event_id` 复用），**不复制事件行**——只插入
   `t_session_events` 桥接行（新 `f_sequence` + `f_surface_op`）。轮次编号
-  **延续**（f_data 完整保留 turn/step，复用事件行即延续），子会话后续 append
-  从边界处继续编号。写路径按「事件行已存在则复用、否则新建」处理
-  （`INSERT OR IGNORE` 语义 + 桥接行引用已存在 id）；
+  **延续**（`f_data` 完整保留 turn/step，复用事件行即延续），子会话后续 append
+  从边界处继续编号（复用机制见 [write-path.md](write-path.md)）；
 - `seedSuffix`（版本效果事件等）按调用方构造追加；携带 `ignorable: true` 的
   版本效果事件**原样落库**（与 JSONL 一致），live 会话的内存 log 与 canonical
   log 一致。

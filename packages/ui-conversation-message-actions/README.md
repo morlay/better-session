@@ -2,8 +2,8 @@
 
 `rewind / retry / fork` 的**编排层**：在 `@morlay/session-branch` 的 provider
 抽象之上组装完整功能（产品语义对齐 [dsh-message-edit](https://github.com/Moeblack/dsh-message-edit)），
-并提供**浏览器半**（client bundle）：替换 `conversation.chat.node` 渲染，
-在 user 消息行内直接挂编辑 / 重试入口。
+并提供**浏览器半**（client bundle）：替换 `conversation.chat.node` 的
+`user` / `steering` 渲染，在 user 消息行内直接挂编辑 / 重试入口。
 
 ## 服务面（`ctx.sessionEditor`）
 
@@ -28,8 +28,8 @@
   点不开的空项与轮号空洞；manualTurn 的轮号同样按保留前缀收敛（正常会话
   等于目标轮号）。版本效果仍记录**原**目标轮号（操作历史）；
 - **只有 `fork` 创建新 id**（`ForkOperation` / `forkFrom`，纯 append 派生）；
-- 版本效果事件（`session-branch/version`）携带 `ignorable: true`：live log 可见、
-  **不落 canonical log**（rdb 持久化时过滤并稠密化剩余事件）；
+- 版本效果事件（`session-branch/version`）携带 `ignorable: true`：**原样落库**
+  （rdb 不按信封过滤，与 JSONL 一致），非 branch 读者凭信封跳过；
 - 重放输入经 agent 驱动（见下）排队到原会话，agent 基于截断后历史回复。
 
 ## agent 驱动（重放排队输入）
@@ -39,7 +39,7 @@
 
 - **live agent**（会话驻留 / 已恢复）：直接 `followup` 排队，不重建、不换 id；
   编辑前只等 agent 停下（`whenIdle`），残留排队输入由 rewind 在截断后强制
-  durable 取消（session-rdb 的 `LiveSessionHooks.inbox.clear`）；
+  durable 取消（session-rdb 的 live 会话钩子 `inbox.clear`）；
 - **cold 会话**：`resume` 已持久化会话（`create` 对已持久化日志必失败），
   resume 后 agent 驻留（不 dispose，避免 session 被移出 store 破坏客户端窗口）；
 - 模型 provider/model 在 **rewind 之前**从 `request/header` 解析（就地编辑
@@ -47,12 +47,11 @@
 
 ## 浏览器半（client bundle）
 
-`lib/client.js` 经 `__ModuleLoader__.load` 手递，替换整个 `conversation.chat.node`：
+`dist/client.js` 经 `__ModuleLoader__.load` 手递，替换 `conversation.chat.node`
+的 `user` / `steering` 渲染：
 
-- **shadow 注册**：12 个 key（user / steering / context / assistant-step /
-  command / manual-compaction / compaction / model-retry / turn-error /
-  turn-max-tokens / turn-tail / unknown）全部以 `priority: -1` 重新注册，
-  最低优先级渲染，shadow 上游渲染器；
+- **shadow 注册**：`user` / `steering` 两个 key 以 `priority: -1` 重新注册
+  （最低优先级渲染，shadow 上游默认注册）；其余 key 沿用上游渲染器；
 - **编辑 / 重试按钮只挂在 user 消息**（`UserMessageNodeView`）：编辑弹窗复用
   dsh settings 同款 `Modal` + `Button`，输入框复用 composer-card 视觉与自动
   增长；重试先弹确认；未闭合轮次不显示重试；
@@ -63,14 +62,14 @@
   前的高 seq 旧值，截断后的正确值 seq 更小，永远覆盖不上（轮次导航残留已
   删除的轮次）；不可用时回退 `location.reload()`；
 - **构建约束**：client bundle 必须是**单文件**（client-modules 只服务/加载
-  `client.js`）——`noExternal` 全内联第三方 + `inlineDynamicImports` 合并
-  动态 import，`@deepseek-ai/*` 一律 external（平台 seed 词或独立插件，
-  内联会把别的插件的 `__ModuleLoader__.load` 嵌进来导致 duplicate factory）；
-  CSS Modules 经 lightningcss 内联 + `<style data-plugin>` 注入。
+  `client.js`）——`deps.neverBundle` 保持 react 与 `@deepseek-ai/*` external
+  （平台 seed 词或独立插件，内联会把别的插件的 `__ModuleLoader__.load` 嵌进来
+  导致 duplicate factory），其余依赖全部内联，`inlineDynamicImports` 合并动态
+  import；CSS Modules 经 lightningcss 内联 + `<style data-plugin>` 注入。
 
 ## 分层边界
 
-- 数据层（`forkFrom` / `rewind` / `readBranchPrefix` / `syncLiveCursor`）来自
+- 数据层（`forkFrom` / `rewind` / `readBranchPrefix`）来自
   `ctx.sessionBranch`（provider 实现，如 `@morlay/session-rdb`）；
 - 本服务只做**编排**：闭合轮次扫描、版本效果事件构造、派生 seed 组装、
   rewind 命令透传、agent 驱动、HTTP 面（`POST /session-editor` 执行
@@ -81,12 +80,12 @@
 ```yaml
 # cordis.patch.yml
 - insert:
-    - id: session-editor
+    - id: ui-conversation-message-actions
       name: "@morlay/ui-conversation-message-actions"
 ```
 
-依赖 `ctx.sessionBranch`（需先装配 `@morlay/session-rdb` 等
-provider 实现）与 `ctx.sessions`（dsh-session）；`agents` 可选。
+依赖 `ctx.sessionBranch` / `ctx.sessionPersistence`（需先装配
+`@morlay/session-rdb` 等 provider 实现）与 `ctx.sessions`；`agents` 可选。
 
 端到端装配真实 rdb 后端，验证 retry / rewind / fork / timeline 闭环，
-以及 live 会话的 rewind（内存 log / coordinator cursor 同步）与 agent 重放。
+以及 live 会话的 rewind（内存 log 截断 / handle cursor 对齐）与 agent 重放。

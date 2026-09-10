@@ -1,10 +1,9 @@
 # @morlay/dsh-desktopify
 
 把任意 dsh 工作区打包 / 运行为桌面应用的工具：`dev` 链接工作区直接跑，
-`bundle` 产出静态、无签名的应用目录。参考上游官方 `apps/desktop`（Electron
-壳）+ `apps/desktop-host`（字节管道后端）实现，去掉 golang（原
-dsh-web-desktopify 方案），全面统一到 pnpm + node，保持静态打包能力（无需
-签名与开发者账号）。
+`bundle` 产出静态、无签名的应用目录。实现参考上游官方 `apps/desktop`
+（Electron 壳）+ `apps/desktop-host`（字节管道后端），迁移决策见
+[ADR 0003](../../docs/adr/0003-桌面化从golang壳迁移到Electron与上游desktop-host.md)。
 
 ## 命令
 
@@ -12,21 +11,22 @@ dsh-web-desktopify 方案），全面统一到 pnpm + node，保持静态打包�
 | ------------------------------------------------------- | -------------------------------------------------------------- |
 | `dsh-desktopify dev [--web] [--skip-build] [workspace]` | 启动 Electron 壳（不打包）；`--web` 改为在浏览器里跑 `dsh web` |
 | `dsh-desktopify bundle [--dir] [--install] [workspace]` | 构建当前平台的静态、无签名桌面应用                             |
-| `dsh-desktopify build`                                  | 只构建壳产物（tsdown）                                         |
+| `dsh-desktopify build`                                  | 壳产物检查（源码形态的壳构建由 `pnpm build` 负责）             |
 | `dsh-desktopify prepare:runtime [workspace]`            | 下载并校验随包 Node.js 运行时                                  |
 | `dsh-desktopify prepare:seed [workspace]`               | 生成打包用 profile 种子                                        |
 
 工作区取首个位置参数（缺省当前目录），CLI 会把它写进
-`DSH_DESKTOP_WORKSPACE`；工具内不写死任何 app 路径或名字。本仓库示例
-工作区：`just custom desktop`（dev）/ `just custom bundle`（打包）。
+`DSH_DESKTOP_WORKSPACE`；工具内不写死任何 app 路径或名字。壳产物由
+`pnpm build` 生成，dev / bundle 不重建（`--skip-build` 因此无实际作用）。
+本仓库示例工作区：`just custom desktop`（dev）/ `just custom bundle`（打包）。
 
 ## 结构
 
 - **工具形态**：源码与 CLI 全 TS。开发形态 `bin` 直指 `src/cli/index.ts`
   （Node 原生类型剥离直接执行）；`exports` / `bin` / `main` 由
-  `src/build.ts` 的 `defineDesktopifyConfig()` 经 tsdown 的 `exports` 选项
-  在构建期收敛进 package.json——开发形态指 `src/*.ts`，发布形态经
-  `publishConfig` 指 `dist/*`，对外只有 bin 一个入口。
+  `tsdown.config.ts` 的 `exports` 选项在构建期收敛进 package.json——开发
+  形态指 `src/*.ts`，发布形态经 `publishConfig` 指 `dist/*`，对外只有 bin
+  一个入口。
 - **壳**：Electron 主进程（`dsh-app://` 自定义协议 + host 子进程守护），
   复用上游 `host-process.ts` / `host-protocol.ts`（纯 node 实现，协议版本
   3）；无标题栏窗口（macOS 隐藏标题栏保留交通灯，Windows 经 `titleBarOverlay`

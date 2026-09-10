@@ -50,6 +50,8 @@ type Config =
       type: "postgres";
       /** node-postgres 连接串；首次打开自动建表并写入 store 身份。 */
       connectionString: string;
+      /** 目标 schema（默认 public，必须已存在）；见 docs/schema.md。 */
+      schema?: string;
     };
 ```
 

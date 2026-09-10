@@ -32,19 +32,21 @@ just vendor sync   # 同步上游 deepseek-harness 到 vendor/（clone + patch�
 just vendor build  # 上游构建：vendor 内干净 pnpm install → build → 清理
                    # （上游自带 lockfile；同步链不需要根 just dep）
 just vendor prepare # vendor sync + build 聚合入口（需 mise 环境提供版本变量）
-just custom::dev    # 本地 GUI 开发（dsh-web-desktopify）
-just custom::bundle # 本地 GUI 打包
+just custom dev    # 示例工作区 web 模式（dsh web）
+just custom desktop # 示例工作区桌面模式（Electron 壳，链接工作区）
+just custom bundle # 示例工作区桌面打包（静态 --dir 产物）
 ```
 
 > vendor 命令依赖 `DEEPSEEK_HARNESS_VERSION`（mise.toml 注入）：请在 mise
 > 环境下执行（`mise exec -- just vendor sync` 或 shell 已 `mise activate`）。
-> `just vendor sync` 会删除旧 vendor 目录再重克隆；`just vendor build` 内含
-> 干净的 `pnpm install`，上游同步链不需要单独跑根 `just dep`。
+> `just vendor sync` 复用现有 clone（fetch + reset --hard + 检出目标提交，
+> 仅目录缺失时才 clone）；`just vendor build` 内含干净的 `pnpm install`，
+> 上游同步链不需要单独跑根 `just dep`。
 
 ## 代码约定
 
-- **上游 `@deepseek-ai/*` 不可修改**：node_modules 只读；扩展走 cordis
-  插件层（plugin / patch bundle / settings namespace）。
+- **上游 `@deepseek-ai/*` 不可修改**（红线见 [AGENTS.md](../AGENTS.md)）；
+  扩展走 cordis 插件层。
 - **工具链在根**：各包 `package.json` 只声明自身依赖；上游包以
   `workspace:^` 声明在 `peerDependencies`（插件契约面）或
   `devDependencies`（测试用，如 `dsh-token-meter`、`dsh-session-projection`）。
@@ -60,11 +62,13 @@ just custom::bundle # 本地 GUI 打包
 - 测试位于各包 `src/__tests__/`（vitest 配置 `packages/*/src/__tests__/**/*.spec.ts`）。
 - RDB 测试用 SQLite `:memory:`；PostgreSQL 契约测试（`pg.spec.ts`）需要
   `TEST_PG_URL`，本地未设置时自动跳过（CI 提供 postgres service）。
-- 测试装配模式（见 `packages/session-rdb/src/__tests__/testing/helpers.ts`）：
+- 测试装配辅助见 `packages/session-rdb/src/testing/`（经包内
+  `@morlay/session-rdb/testing` 暴露；契约 fixture 在 `contract.ts` /
+  `coordinator-contract.ts`）：
   - `EmptySettings`：空 settings provider，满足 `static inject: ['settings']`。
   - `new SessionProjectionRegistry(ctx)`：`TokenMeter` 等上游服务要求
     `ctx.sessionProjections` 可用时在 harness 中实例化。
-- 分支语义的端到端用例见 `branch.spec.ts` / `editor.spec.ts`（真实 SQLite
+- 分支语义的端到端用例见 `branch.spec.ts` / `edit.spec.ts`（真实 SQLite
   后端 + coordinator 状态同步）。
 
 ## 发布

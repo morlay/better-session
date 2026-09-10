@@ -40,7 +40,7 @@
   （Node 24 的 tsx strip-only 模式不支持 parameter properties，morlay
   TS 源码转换失败导致 boot 卡死）。
 - **bundle**：`pnpm deploy --prod` 导出工作区闭包 → 种子
-  （`dsh-home/profiles/web` + `.seed-hash` 指纹）→ 下载校验 Node 二进制
+  （`dsh-home/profiles/desktop` + `.seed-hash` 指纹）→ 下载校验 Node 二进制
   → electron-builder `--dir` 静态打包（无签名、无 notarize、无开发者
   账号）。
 - **XDG 路径**：`dshHome: xdg` → `xdg.DataHome/<name>`，与参考实现一致；
@@ -61,8 +61,9 @@
 - **DSH_HOME 显式设置**：用户 shell 环境可能残留旧应用的 DSH_HOME
   export，host 经 shell 注入启动时会继承它——壳启动 host 时显式传
   `DSH_HOME`。
-- **种子解引用**：deploy 闭包的 `file:` 依赖是符号链接，`cpSync
-dereference` 不跟随目录链接——手动遍历复制（`copyDeref`）。
+- **种子复制**：deploy 闭包先以 pnpm `nodeLinker: hoisted` 拍平（顶层真实
+  目录、无虚拟存储、无外部链接），再原样复制进种子；`seed.ts` 复制时保留
+  符号链接原样（相对链接指向闭包内副本），不解引用。
 - **peer 闭包**：`pnpm deploy --prod` 不装 peerDependencies，desktop-host
   boot 依赖的 `@deepseek-ai/*` peer 包（cordis-plugin-group 等 20 个）
   由工具注入为 `workspace:^` 依赖（deploy 目标生成的 pnpm-workspace.yaml

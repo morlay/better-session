@@ -1,4 +1,4 @@
-# 0007-同 id 单写入者与并发写入 fail loud
+# 0004-同 id 单写入者与并发写入 fail loud
 
 rdb 后端事件**原样落库**（无过滤无重编号，事件 seq 即稠密 seq），而每个
 `SessionPersistenceRdb` 实例只在内存维护自己的 handle cursor——两个后端

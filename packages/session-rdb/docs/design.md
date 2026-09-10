@@ -21,9 +21,10 @@ packages/session-rdb/
 │   ├── legacy-clean.md          # 旧数据修复（读取/导出视图修复）
 │   ├── concurrency.md           # 并发写入者检测
 │   └── event-reconstruction.md  # 事件 id 关联与重建可行性分析
-├── package.json                 # 包元数据；exports 指向 lib/ 产物
-├── src/                         # 只 import 官方包（@deepseek-ai/*）与 @morlay/session-branch
-│   ├── __tests__/               # vitest 测试（testing/ 为共享契约与辅助）
+├── package.json                 # 包元数据；exports 开发指 src、发布指 dist
+├── src/                         # 依赖：官方包（@deepseek-ai/*）、@morlay/session-branch、drizzle-orm / pg 等
+│   ├── __tests__/               # vitest 测试
+│   ├── testing/                 # 跨包共享的测试契约与辅助（./testing 导出）
 │   ├── branch.ts                # 分支 provider 实现（rewind / forkFrom / timeline）
 │   └── …                        # entities / adapters / 后端实现
 ├── tool/pg/                     # PostgreSQL 测试实例（compose + justfile）

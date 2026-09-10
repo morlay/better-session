@@ -48,7 +48,8 @@ _避免使用_：回合、round
 _避免使用_：空回合、幽灵轮次
 
 **闭合边界（closed boundary）**：
-已落定 `turn/end` 的轮次边界——rewind 截断与 fork 派生的唯一合法锚点。
+已落定 `turn/end` 的轮次边界——fork 派生的唯一合法锚点；rewind 另接受
+`user/message`（排除该消息的截断）与 `-1`（空前缀）。
 _避免使用_：检查点、checkpoint
 
 **cascade 策略**：
@@ -68,12 +69,13 @@ fork / rewind）的目标轮次、变更前后文本与逆操作。
 _避免使用_：版本事件、变更记录
 
 **ignorable 事件**：
-对核心可跳过的事件：live 内存 log 可见、**不进 canonical log**（rdb
-持久化时过滤）。
+携带 `ignorable: true` 信封、非 branch 读者可安全跳过的事件——**原样落库**
+（写路径不按信封过滤，与 JSONL 一致），读侧凭信封决定是否参与投影。
 _避免使用_：瞬时事件（瞬时事件是另一概念）
 
 **canonical log**：
-会话的持久化事件日志——ignorable 事件不进入，非 branch 读者可安全跳过。
+会话的持久化事件日志（与存储内容一致，ignorable 事件同样在其中）；核心
+读者凭信封跳过 ignorable 事件。
 _避免使用_：主日志、持久化日志
 
 **版本树（timeline）**：
@@ -92,8 +94,8 @@ _避免使用_：初始状态、initial state
 ## 会话状态
 
 **live 会话**：
-驻留内存（`ctx.sessions` 有 owner）的会话——rewind 就地截断内存 log 并
-同步 coordinator cursor。
+驻留内存（`ctx.sessions` 有 owner）的会话——rewind 就地截断内存 log，并
+复位派生缓存、对齐 handle cursor 与继承前缀（`resetAfterRewind()`）。
 _避免使用_：活动会话、打开中的会话
 
 **cold 会话**：
@@ -108,21 +110,22 @@ _避免使用_：重生成、regenerate
 ## 坐标模型
 
 **稠密 seq（dense seq）**：
-持久化坐标：幸存事件按持久化计数压缩重编号，连续递增、无空洞。
-_避免使用_：持久化 seq、f_sequence
+持久化坐标（`f_sequence`）：写路径零转换，事件按落库顺序连续编号、无空洞。
+_避免使用_：持久化 seq
 
 **上游 seq（original seq）**：
-事件产生时的 seq（含瞬时事件计数）——读取时经 `f_original_seq →
-f_sequence` 映射重映射坐标。
+事件产生时的 seq（含不入库事件留下的空洞）——持久化坐标即稠密 seq，v3 起
+不再存映射列。
 _避免使用_：原始 seq、逻辑 seq
 
 **瞬时事件（transient event）**：
-`assistant/chunk` 等不入库的事件——上游 seq 空洞的根源。
+上游 seq 中不落库的事件留下的空洞来源；当前写路径不按类型过滤（落库事件
+与内存事件一致），坐标由稠密 seq 承担。
 _避免使用_：流式事件、chunk 事件
 
 **桥接行（bridge row）**：
-`t_session_events` 行：会话专属信息（稠密 seq、上游 seq、surface 元数据）
-挂在桥接行，事件实体本身不含会话信息。
+`t_session_events` 行：会话专属信息（`f_sequence`、surface op 元数据）挂在
+桥接行，事件实体本身不含会话信息。
 _避免使用_：关联行、映射行
 
 **事件行复用（event row reuse）**：
@@ -130,15 +133,12 @@ fork 派生会话的桥接行直接引用父会话已存在的事件行，不复
 _避免使用_：事件共享、行复用
 
 **torn tail**：
-崩溃留下的未闭合尾部——load 时物理删除 + 内存合成 closers 修复。
+崩溃留下的未闭合尾部——读打开只标记 `tornFrom`，物理删除推迟到下一次写
+append（截断后重写 head）。
 _避免使用_：损坏尾部、残尾
 
-**合成 closers（synthetic closers）**：
-load 时内存合成的轮次闭合事件（不落库），修复崩溃尾部。
-_避免使用_：虚拟事件、补全事件
-
 **孤儿事件行（orphan event row）**：
-无任何桥接行引用的事件行——rewind / 删除后惰性 GC。
+无任何桥接行引用的事件行（rewind 只删桥接行，事件行保留）——当前不做清理。
 _避免使用_：垃圾行、悬空行
 
 **并发写入者（concurrent writer）**：

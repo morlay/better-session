@@ -2,8 +2,8 @@
 
 本仓库与 vendor 上游构成**单一 pnpm workspace**（成员含
 `vendor/deepseek-harness/packages/*/*` 等），且工具链集中在
-`devpackages/devkit`。三个 workspace 配置必须为 true——它们不能沿用 pnpm
-默认（`hoistWorkspacePackages` / `autoInstallPeers` 默认 false）：
+`devpackages/devkit`。三个 workspace 配置显式声明为 true——固定语义，不依赖
+pnpm 默认值随版本变化：
 
 ```yaml
 linkWorkspacePackages: true
@@ -25,9 +25,9 @@ autoInstallPeers: true
 工具链集中 `devpackages/devkit`（private workspace 包，TS 源码直出），
 插件包不再各自维护重复的编译 / 构建配置：
 
-- **tsconfig 复用**：根 `tsconfig.json` 与各包统一 `extends`
-  `devkit/tsconfig.json`——编译选项单点声明（strict /
-  noUncheckedIndexedAccess / nodenext 等），全仓库一致。
+- **tsconfig 复用**：根 `tsconfig.json` `extends` `devkit/tsconfig.json`
+  ——编译选项单点声明（strict / noUncheckedIndexedAccess / nodenext 等），
+  全仓库一致；新建包需要独立 face 配置时同样 extends 它。
 - **tsdown 配置工厂** `defineCordisPluginConfig()`（devkit 导出）：
   收敛 cordis 插件包重复的公共构建选项（ESM、exports：packageJson /
   devExports / cordis.patch.yml 与 `./client` 透传、deps.onlyBundle、
@@ -61,7 +61,7 @@ autoInstallPeers: true
 
 - 编译 / 构建配置单点声明，升级工具链（tsdown / typescript）只改
   devkit 与根。
-- 新插件包脚手架 = 一行 tsdown 配置 + extends devkit tsconfig，无模板
-  复制。
-- devkit 是 TS 源码直出（`exports: { ".": "./src/tsdown.ts" }`），由
-  tsdown / tsx 等 TS 加载器消费，无需自身构建链。
+- 新插件包脚手架 = 一行 tsdown 配置（根 tsconfig 已 extends devkit），无
+  模板复制。
+- devkit 是 TS 源码直出（`exports: { ".": "./src/index.ts", "./tsconfig.json":
+"./tsconfig.json" }`），由 tsdown / tsx 等 TS 加载器消费，无需自身构建链。

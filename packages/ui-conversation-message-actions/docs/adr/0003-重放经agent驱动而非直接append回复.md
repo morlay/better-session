@@ -1,4 +1,4 @@
-# 0012-重放经 agent 驱动而非直接 append 回复
+# 0003-重放经 agent 驱动而非直接 append 回复
 
 edit / retry / reroll 的重放输入经 `agents` 服务驱动（duck-typed 接口，
 不硬依赖 `@deepseek-ai/dsh-agent`）：live agent 直接 `followup` 排队（不
@@ -16,7 +16,6 @@ edit / retry / reroll 的重放输入经 `agents` 服务驱动（duck-typed 接�
 
 ## 后果
 
-- agents 服务缺失时退化为「已 durable 的就地版本」（可随时 resume 续跑）
-  ——重放是可选增强，不是正确性前提。
-- agent resume 失败不应使已 durable 的版本失效：组合失败仅告警，版本
-  保持可用。
+- agents 缺失时退化为「已 durable 的就地版本」（可随时 resume 续跑）；
+  resume 失败是 rewind 前的硬错误。现状与完整语义见
+  [README「agent 驱动」](../../README.md)。

@@ -57,7 +57,8 @@ t_session_events JOIN t_events（按 f_sequence 排序）
 - 读取结果 seq 稠密连续 → `ctx.sessions.create(id, { seed })` 直接通过上游
   contiguous-from-0 校验，后续 append 从稠密 cursor 继续。
 - 崩溃尾部语义：last `turn/end` 之前的缺陷（unparsable / seq gap）拒绝；
-  之后的缺陷容忍为 torn tail（`tornFrom` 标记，load 时物理删除）。
+  之后的缺陷容忍为 torn tail（`tornFrom` 标记；物理删除在下一次写 append
+  时执行——写打开发现 torn tail，append 前先截断并重写 head）。
 - 未闭合轮次（无 turn/end）**原样保留**：持久化层不补合成 closers，补
   closers 由消费方（Session 恢复 / agent-loop resume）负责。
 - **混合世代 log 回退**：`f_version < SESSION_FORMAT_VERSION` 的会话先走上游

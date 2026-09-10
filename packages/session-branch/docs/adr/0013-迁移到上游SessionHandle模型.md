@@ -102,6 +102,11 @@ ignorable 信封，与 JSONL 每行同构），读回时整体解析。`rowToEve
 库的纯 data 形状（判别完整事件四键）。schema 保持 v2（`SCHEMA_VERSION = 2`），
 无 v2→v3 迁移。
 
+> 后续演进已被
+> [session-rdb ADR 0008](../../../session-rdb/docs/adr/0008-跟随上游session-format-v3.md)
+> 取代：现为 `SCHEMA_VERSION = 3`（v3 迁移删除 `f_original_seq`），读取迁移链
+> 目标为 `SESSION_FORMAT_VERSION = 3`。
+
 **写路径 v2 校验（fail-closed）**：`appendBatch` 落库前经 `validateStoredEvents`
 校验——未知类型（非 ignorable）与非法消息形状拒绝入库，新入库数据只能是 v2
 形状。旧格式（v0/v1）数据只在读取时经 legacy 转换链动态转换，不落新库。

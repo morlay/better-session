@@ -86,8 +86,9 @@ llm-openai-compatible:
 
 ### 凭据
 
-- profile 设置 `apiKeyEnv` 后：`ctx.credentials` 优先，其次
-  `launchEnvironmentOf(ctx)`；解析不到 → `LlmError('MISSING_CREDENTIAL')`。
+- profile 设置 `apiKeyEnv` 后：存在 `ctx.credentials` 服务时经它解析
+  （credentials-local 覆盖进程环境 / `.env`）；服务缺失时回退
+  `launchEnvironmentOf(ctx)`。解析不到 → `LlmError('MISSING_CREDENTIAL')`。
 - profile 不设置 `apiKeyEnv` → 请求不带 `authorization` 头（无认证端点，
   如本地 Ollama）。
 
@@ -105,9 +106,10 @@ llm-openai-compatible:
 
 ## 从 `llm-pi-ai` 迁移
 
-把 `llm-pi-ai.providers.<route>` 的 `api`/`baseURL`/`models`/采样字段平移到
-`llm-openai-compatible.providers.<route>`，`apiKeyEnv` 与 `retryPolicy` 原样
-保留；`reasoningEfforts` 的 `off` 空值语义一致。
+把 `llm-pi-ai.providers.<route>` 的 `baseURL`/`models`/采样字段平移到
+`llm-openai-compatible.providers.<route>`（无 `api` 字段——协议固定
+chat-completions），`apiKeyEnv` 与 `retryPolicy` 原样保留；
+`reasoningEfforts` 的 `off` 空值语义一致。
 
 ## 暂缓能力（YAGNI）
 
@@ -119,7 +121,7 @@ llm-openai-compatible:
 
 ```bash
 pnpm install
-pnpm --filter @morlay/dsh-llm-openai-compatible run prepare   # → lib/*.mjs + *.d.mts
+pnpm --filter @morlay/dsh-llm-openai-compatible run build     # → dist/*.mjs + *.d.mts
 pnpm exec tsc --noEmit
 pnpm exec vitest run
 ```

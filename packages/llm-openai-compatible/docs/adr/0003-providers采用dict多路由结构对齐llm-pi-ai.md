@@ -1,10 +1,9 @@
 # 0003-providers 采用 dict 多路由结构对齐 llm-pi-ai
 
 `providers` 是 **dict：key 就是 provider 路由键**（选择器与
-`GenerateOptions.provider` 使用），值是 profile——与内置 `llm-pi-ai` 的
-多路由结构一致，用户可将现有 `llm-pi-ai` 配置近乎无缝迁移（`api` /
-`baseURL` / `models` / 采样字段平移，`apiKeyEnv` 与 `retryPolicy` 原样
-保留，`reasoningEfforts` 的 `off` 空值语义一致）。
+`GenerateOptions.provider` 使用），值是 profile——与内置 `llm-pi-ai` 的多路由
+结构一致，现有配置近乎无缝迁移（字段映射见
+[README「从 llm-pi-ai 迁移」](../../README.md)）。
 
 ## 考虑过的选项
 
@@ -15,7 +14,7 @@
 
 ## 后果
 
-- 配置 schema 支持 **profile 级默认采样参数**（`temperature` / `topP` /
-  `topK` / `presencePenalty` / `frequencyPenalty` / `seed`），请求级
+- 配置 schema 支持 **profile 级默认采样参数**，请求级
   `GenerateOptions.temperature` 优先——这是与内置 `llm-pi-ai` /
-  `llm-deepseek` 的差异点。
+  `llm-deepseek` 的差异点（规则见
+  [0006](./0006-采样默认值合并规则与省略语义.md)）。
