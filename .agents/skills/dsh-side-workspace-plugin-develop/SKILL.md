@@ -18,8 +18,8 @@ description: 以 side workspace 形态基于上游 deepseek-harness（dsh）开�
 └── 版本变量配置               # 如 mise.toml：DEEPSEEK_HARNESS_*
 ```
 
-skill 自带脚本 `scripts/{sync,patch,build}.ts`，用 **`tsx` 执行**，勿用 `pnpm exec`——node_modules 缺失时会触发隐式 install，下载
-已裁剪依赖）：
+skill 自带脚本 `scripts/{sync,patch,build}.ts`，用 **`tsx` 执行**（勿用
+`pnpm exec`：node_modules 缺失时会触发隐式 install，下载已裁剪依赖）：
 
 | env                                                   | 含义                                                            |
 | ----------------------------------------------------- | --------------------------------------------------------------- |
@@ -27,6 +27,8 @@ skill 自带脚本 `scripts/{sync,patch,build}.ts`，用 **`tsx` 执行**，勿�
 | `DEEPSEEK_HARNESS_VERSION`                            | 目标版本（tag `dsh-v{version}` 优先，回退同名 branch）          |
 | `DEEPSEEK_HARNESS_REVISION`                           | 可选，特定 commit / 短 sha，**优先于 VERSION**                  |
 | `DEEPSEEK_HARNESS_EXCLUDE`                            | 可选，逗号分隔待裁剪包目录完整相对路径（相对上游根）            |
+| `DEEPSEEK_HARNESS_PATCHES`                            | 可选，patches 根目录（默认 `<workspace 根>/patches`）           |
+| `DEEPSEEK_HARNESS_STEPS`                              | 可选，steps.json 路径（默认 `<patches>/steps.json`）            |
 | `DEEPSEEK_HARNESS_REPO` / `DEEPSEEK_HARNESS_NO_CLEAN` | 可选                                                            |
 
 ## 初始化：对齐 workspace（一次性）
@@ -38,11 +40,11 @@ skill 自带脚本 `scripts/{sync,patch,build}.ts`，用 **`tsx` 执行**，勿�
    ```
 
 2. **`pnpm-workspace.yaml` 对齐**：参考上游自己的 pnpm-workspace.yaml，把
-   其成员目录以 `vendor/<name>/` 为前缀映射进 `packages` globs，再附本仓库
+   其成员目录以 `vendor/<name>/` 为前缀映射进 `packages` globs，再附插件包
    目录（对齐不全 → 部分上游包从 registry 解析，出现双副本）。
 
-3. **三个配置必须为 true**（不能与上游默认一致——它们是本仓库跨 vendor
-   源码引用得以成立的开关）：
+3. **三个配置显式声明为 true**（跨 vendor 源码引用得以成立的开关；显式声明
+   固定语义，不依赖 pnpm 默认值随版本变化）：
 
    ```yaml
    linkWorkspacePackages: true
@@ -50,9 +52,9 @@ skill 自带脚本 `scripts/{sync,patch,build}.ts`，用 **`tsx` 执行**，勿�
    autoInstallPeers: true
    ```
 
-   - `linkWorkspacePackages`：workspace 内互引一律链接——`@deepseek-ai/*`
-     全仓库唯一一份上游源码；否则上游包从 registry 解析成发布副本，与源码
-     并存 → 同名 branded 类型 / 枚举双份，tsc 下互不兼容（类型唯一性破坏）。
+   - `linkWorkspacePackages`：workspace 内互引一律链接，`@deepseek-ai/*`
+     全仓库唯一一份上游源码（否则 registry 发布副本与源码并存 → 同名
+     branded 类型 / 枚举双份，tsc 下互不兼容）。
    - `hoistWorkspacePackages` + `autoInstallPeers`：peer 依赖（如
      `@deepseek-ai/cordis`）自动安装并提升到根——各插件包无需为每个上游包
      重复声明 devDeps。
@@ -79,7 +81,7 @@ skill 自带脚本 `scripts/{sync,patch,build}.ts`，用 **`tsx` 执行**，勿�
 ## 同步流程
 
 完整同步 = sync → patch → build（**同步链不需要根目录 `pnpm install`**；
-build 内含干净 install）。顺序固定：
+build 内含干净 install）。顺序固定，用 `tsx` 直调脚本（勿用 `pnpm exec`）：
 
 ```sh
 tsx <skill 路径>/scripts/sync.ts    # 1. 对齐到目标提交
@@ -118,9 +120,8 @@ tsx <skill 路径>/scripts/build.ts   # 3. 干净构建
 
 ### build.ts：干净构建
 
-上游目录内 `pnpm install && pnpm run build`（上游自带 lockfile），默认清理
-其 node_modules（`DEEPSEEK_HARNESS_NO_CLEAN=1` 保留）。验证 `lib/` 产物
-存在。
+上游目录内 `pnpm install --no-frozen-lockfile && pnpm run build`，默认清理
+其 node_modules（`DEEPSEEK_HARNESS_NO_CLEAN=1` 保留）。
 
 > 仓库可封装为命令（如 just：`vendor sync` / `vendor patch` / `vendor
 build`），直接 `tsx` 调用脚本，语义与流程一致。
@@ -130,7 +131,7 @@ build`），直接 `tsx` 调用脚本，语义与流程一致。
 1. 改 `DEEPSEEK_HARNESS_VERSION`（或 `DEEPSEEK_HARNESS_REVISION`）。
 2. 记旧 HEAD。
 3. sync → patch（失效即信号）→ build。
-4. 门禁（本仓库）：test / lint / build，与 CI 一致。
+4. 门禁：test / lint / build，与 CI 一致。
 5. **适配评估（必做）**：对照「cordis 扩展面清单」逐面核对变化；结论记录
    为决策文档或变更日志；行为变更连同测试一起改。
 
@@ -138,21 +139,21 @@ build`），直接 `tsx` 调用脚本，语义与流程一致。
 
 上游代码不可修改，扩展走 cordis 插件层。按扩展面组织插件：
 
-| 扩展面        | 机制                                          | 适配检查点                               |
-| ------------- | --------------------------------------------- | ---------------------------------------- |
-| 服务注册      | `Service` 子类 + `ctx.inject`                 | 服务键唯一；可选服务用 `ctx.get(name)`   |
-| 上游抽象实现  | 实现上游接口（如 `PersistenceBackend`）再注册 | 原语签名 / 标记语义 / 事务模式随版本演进 |
-| 事件合并      | `declare module` 扩展 `SessionEventMap`       | 结构化守卫；`ignorable: true` 信封语义   |
-| 配置          | `Config` schema（schemastery）                | schema 与 settings namespace 一致        |
-| 用户覆盖      | settings namespace                            | `installSection` 钩子；纯 YAML 无 `!!js` |
-| 运行时协调    | 读取 / 同步上游服务内部状态                   | 私有字段名与语义是升级时最脆弱的面       |
-| client bundle | 手递单文件替换上游渲染                        | 单文件约束、external 边界                |
-| 不变量        | `./invariant`（仅观察可发散时）               | 注册命名、disposer                       |
+| 扩展面        | 机制                                     | 适配检查点                               |
+| ------------- | ---------------------------------------- | ---------------------------------------- |
+| 服务注册      | `Service` 子类 + `ctx.inject`            | 服务键唯一；可选服务用 `ctx.get(name)`   |
+| 上游抽象实现  | 实现上游接口（如 `SessionHandle`）再注册 | 原语签名 / 标记语义 / 事务模式随版本演进 |
+| 事件合并      | `declare module` 扩展 `SessionEventMap`  | 结构化守卫；`ignorable: true` 信封语义   |
+| 配置          | `Config` schema（schemastery）           | schema 与 settings namespace 一致        |
+| 用户覆盖      | settings namespace                       | `installSection` 钩子；纯 YAML 无 `!!js` |
+| 运行时协调    | 读取 / 同步上游服务内部状态              | 私有字段名与语义是升级时最脆弱的面       |
+| client bundle | 手递单文件替换上游渲染                   | 单文件约束、external 边界                |
+| 不变量        | `./invariant`（仅观察可发散时）          | 注册命名、disposer                       |
 
 ## 排查上游行为
 
 1. 源码即真源：`vendor/<name>/packages/<group>/<pkg>/src/`。
-2. 上游测试是契约活文档：`vendor/<name>/packages/<pkg>/tests/`。
+2. 上游测试是契约活文档：`vendor/<name>/packages/<group>/<pkg>/tests/`。
 3. 上游自带约定文档优先于猜测。
 4. 排查结论影响插件决策则记录（ADR / 变更日志）。
 
@@ -166,7 +167,5 @@ build`），直接 `tsx` 调用脚本，语义与流程一致。
 
 ## 验证与发布
 
-- 契约测试若有外部依赖（如 PostgreSQL）：本地缺环境自动跳过、CI 提供
-  service——先本地跑无依赖面，再在 CI 确认全量。
-- **发布走 CI**：严禁本地私自 publish。版本 bump 提交后由 CI 构建 + 发布；
+- **发布走 CI**：严禁本地私自 publish；版本 bump 提交后由 CI 构建 + 发布，
   本地只构建验证。

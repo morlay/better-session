@@ -9,8 +9,8 @@
 版本可控的完整 cordis 插件集合。上游 deepseek-harness（dsh）改动频繁且处于 pre-release 阶段（无兼容承诺），
 插件扩展往往依赖**发布包不含的上下文**：
 
-- **上游私有实现**：许多扩展要协调上游服务内部状态（例如持久化后端的
-  coordinator 私有 `states`），发布包只有 lib 产物与 d.ts。
+- **上游私有实现**：许多扩展要协调上游服务内部状态（例如 rewind 需同步
+  live 会话的内存 log 与 agent 轮次游标），发布包只有 lib 产物与 d.ts。
 - **类型 / 事件映射**：插件经 `SessionEventMap` declaration merging 扩展
   现有判别联合、按 `ignorable` 信封语义跳过事件——需要看上游事件定义与
   格式版本机制。
@@ -23,8 +23,8 @@
 主仓库版本控制，主仓库 gitignore），作为根 pnpm workspace 成员参与安装与
 构建，使 `@deepseek-ai/*` 解析到该版本源码。同步用 git 操作（fetch +
 reset + checkout 到版本），**不是删旧重克隆**——保留完整历史，可 diff、
-可回退。版本由一处配置变量锁定（`DEEPSEEK_HARNESS_VERSION`，对应上游
-分支 `dsh-v{version}`）。
+可回退。版本由一处配置变量锁定（`DEEPSEEK_HARNESS_VERSION`，同步时 tag
+`dsh-v{version}` 优先、回退同名 branch）。
 
 **收益**：完整源码与私有实现上下文；类型与测试随版本固化；可打本地
 patch；升级是显式动作（改一个变量 + git 同步 + 适配评估），完整历史在
@@ -35,10 +35,9 @@ patch；升级是显式动作（改一个变量 + git 同步 + 适配评估）�
 等成员）。插件集合要拿到上游源码，主仓库的 workspace 必须把上游的每个
 成员目录都映射进来（前缀 `vendor/<name>/`）——否则漏掉的成员会从
 registry 解析成**发布副本**，与源码副本并存 → 同一 branded 类型 / 枚举
-出现两份，tsc 下互不兼容（类型唯一性破坏）。这正是
-`linkWorkspacePackages` / `hoistWorkspacePackages` / `autoInstallPeers`
-三者必须为 true 的原因：内部互引一律链接、peer 依赖自动装到根、各插件
-无需为每个上游包重复声明 devDeps。
+出现两份，tsc 下互不兼容。三个 workspace 开关
+（`linkWorkspacePackages` / `hoistWorkspacePackages` / `autoInstallPeers`）
+因此必须显式声明为 true。
 
 ## 被拒选项
 
