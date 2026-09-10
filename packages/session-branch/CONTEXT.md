@@ -84,7 +84,9 @@ _避免使用_：主日志、持久化日志
 _避免使用_：分支图、版本历史
 
 **lineage（血统）**：
-会话的祖先链：`parentSession` 指向父会话，`seedLength` 是继承前缀长度。
+会话的祖先链：`parentSession` 指向父会话；继承前缀长度在 v0/v1 header 为
+`seedLength`，v2 起为 `isSeeded`（长度由 log 内 `session/end-seed` 推导），
+存储列为 `f_seed_length`、写路径参数名为 `inheritedEventCount`。
 _避免使用_：家谱、祖先链
 
 **seed（种子）**：
