@@ -1,7 +1,7 @@
 [env]
 DEEPSEEK_HARNESS_DIR = "vendor/deepseek-harness"
 DEEPSEEK_HARNESS_EXCLUDE = "packages/subagent/subagent-claude-code,packages/subagent/subagent-codex"
-DEEPSEEK_HARNESS_VERSION = "0.1.5-alpha.1"
+DEEPSEEK_HARNESS_VERSION = "0.1.5-alpha.2"
 
 [tools]
 node = "26"
