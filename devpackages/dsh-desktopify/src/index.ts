@@ -76,11 +76,22 @@ function developmentProject(): string | undefined {
 }
 
 /**
- * 无标题栏窗口框架：macOS 隐藏标题栏（保留交通灯，顶部区域仍可拖动），
- * 其余平台去掉系统边框。
+ * 无标题栏窗口框架：macOS 隐藏标题栏（保留交通灯，顶部仍可拖动）；Windows
+ * 隐藏标题栏并用 `titleBarOverlay` 保留系统窗口控制按钮（透明底、中性符号
+ * 色，避免与页面内容冲突）；其余平台去掉系统边框。
  */
-function windowFrame(): Pick<BrowserWindowConstructorOptions, "titleBarStyle" | "frame"> {
-  return process.platform === "darwin" ? { titleBarStyle: "hidden" } : { frame: false };
+function windowFrame(): Pick<
+  BrowserWindowConstructorOptions,
+  "titleBarStyle" | "frame" | "titleBarOverlay"
+> {
+  if (process.platform === "darwin") return { titleBarStyle: "hidden" };
+  if (process.platform === "win32") {
+    return {
+      titleBarStyle: "hidden",
+      titleBarOverlay: { color: "#00000000", symbolColor: "#888888" },
+    };
+  }
+  return { frame: false };
 }
 
 function createWindow(
