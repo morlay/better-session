@@ -32,11 +32,9 @@ replace 的 `start`/`end` 改名 `startSeq`/`endSeq`；system prompt 从
   `validateStoredEvents` 之前剥掉 `header.system` / 空 `tools` / 空
   `adapterDefaults`，让这类 v2 会话保持可读；system prompt 因此不再进入模型
   请求，会话下次运行由 v3 的 `system/message` 机制重建。
-- **读取视图修复先于校验**：`open`/`load` 在 `validateStoredEvents` 之前应用
-  `repairReadView`。旧写入器重编号事件后，桥接行里的 replace range 可能仍落
-  在旧坐标空间（`end` 远大于自身 seq），上游 v3 校验以「startSeq and endSeq
-  must reference earlier events」fail loud；夹取/降级必须在校验之前完成（此前
-  只在 `handle.read` / `readRaw` 生效，历史会话的加载入口因此仍失败）。
+- **读取视图修复先于校验**：夹取/降级必须在 `validateStoredEvents` 看到
+  replace range 之前完成，否则历史会话的加载入口失败（流程与顺序见
+  [read-path.md](../read-path.md)）。
 - **回退视图归一 PTC 词汇**：`renameLegacyPtcEvents` 把 `tool/code-dispatch-*`
   改名为 `tool/ptc-dispatch-*`、`tools-code-mode` 插件来源改为 `tools-ptc`、
   agent preset 值 `code` 改为 `ptc`——上游 v3 对旧类型名 fail loud，改写与

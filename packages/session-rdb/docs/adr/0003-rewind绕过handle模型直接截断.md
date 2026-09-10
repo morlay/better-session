@@ -23,14 +23,7 @@ handle cursor、取消排队输入）→ 刷新持久化投影检查点。**只�
   出现「继承前缀超过存储事件数」的矛盾，上游 load 拒绝。
 - 保留区 replace range 完整性由数学保证：replace 的 range 引用更早事件，
   截断尾部不可能破坏保留区 range。
-- 截断后必须失效 `ctx.sessionProjections` 的单元缓存：投影按 `observedSeq`
-  增量驱动，水位停在截断前就永远跳过 seq 回退的重放事件（inbox 投影收不到
-  重放输入，agent 只开空轮、不产生模型请求）。
-- 截断后必须 durable 取消 agent 的排队输入（`inbox.clear()`，cursor 对齐后
-  执行）：落在保留区的 pending 事件不会随截断消失，不取消则 agent 会继续
-  处理 rewind 已放弃的输入。
-- 截断后必须刷新 `ctx.sessionProjectionCache` 的持久化检查点：rewind 不产生
-  事件，缓存行的水位仍停在截断前。cold 读的 `restore` 会丢弃超前行，但列表
-  hints 的零 I/O 读与客户端投影 store 的 higher-seq-wins 会让超前行锁死旧
-  值（轮次导航残留已删除的轮次）。刷新是 fail-soft：缓存是派生数据，写失败
-  只记日志。
+- 截断后必须同步的派生状态（投影单元缓存失效、agent 排队输入 durable 取消、
+  持久化投影检查点刷新）与 fail-soft 语义见
+  [branch.md](../branch.md) 的 rewind 步骤；漏掉任一项会让被截断的历史在
+  读取侧重现或重放错乱。

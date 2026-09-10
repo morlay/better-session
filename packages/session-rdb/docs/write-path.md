@@ -16,8 +16,8 @@ live log（上游 seq）
 
 ## 规则
 
-- **写路径零转换**：事件内容、surfaceOp 全部原样落库；无过滤无重编号——
-  事件 seq 即稠密 seq（上游 seq 与稠密 seq 恒等）。
+- **写路径零转换**：事件内容、surfaceOp 全部原样落库；无过滤无重编号
+  （不变量与坐标模型见 [design.md](design.md)）。
 - **写路径当前格式校验（fail-closed）**：`appendBatch` 落库前经
   `validateStoredEvents` 校验——未知类型（非 ignorable）与非法消息形状拒绝
   入库，新入库数据只能是当前格式形状。非当前格式（v0/v1/v2）数据只在读取时

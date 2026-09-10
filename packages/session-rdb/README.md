@@ -61,16 +61,12 @@ type Config =
 provider 抽象并**随插件自动注册 `ctx.sessionBranch`**（`SessionBranchRdb`），
 在不修改上游代码的前提下提供 `rewind / retry / fork` 的持久化闭环：
 
-- **`forkFrom`**：走标准 handle 路径（`create` + `append`）从闭合边界
-  派生新会话（纯 append，`parentSession` / `seedLength` lineage）；
-- **`rewind`**：直接操作后端事务截断到闭合边界（DELETE 尾部 + head 回退 +
-  revision bump），并更新并发写检测 head；**支持 live 会话**（`ctx.sessions`
-  有 owner 时同样就地工作：先 flush write-behind 缓冲 → 截断 RDB → 截断
-  live 内存 log 并复位 surface/header/context/derived 派生缓存 → 重置 agent
-  请求头标记 → 对齐 handle cursor；不调用 `load`——live 时 load 会先 flush
-  撤销截断）；
-- **`timeline`**：`parentSession` + `seedLength` 版本树投影（live 会话含
-  版本效果；cold 会话版本事件原样落库，效果详情可恢复）。
+- `forkFrom`：纯 append 从闭合边界派生新会话（事件行复用，不复制）；
+- `rewind`：直接操作后端事务截断（只删桥接行），支持 live 与 cold 会话；
+- `timeline`：lineage 版本树投影。
+
+三个原语的完整语义（含 live 同步步骤、事件行复用机制、坐标论证与已知限制）
+见 [docs/branch.md](docs/branch.md)。
 
 上层编排（edit / reroll / retry / rewind / fork 完整功能）由
 `@morlay/ui-conversation-message-actions` 提供，或直接在 `ctx.sessionBranch` /

@@ -17,11 +17,8 @@
   - 引用**持久化 surface 节点的强校验引用**（replace 的 `sourceEventSeqs`、
     `compaction/summary.shadowedRange`）→ 读取时重计算 / 原样消费（见
     [read-path.md](read-path.md)）。
-- **原样存储、原样读取**：`t_events.f_data` 存完整事件（含 ignorable 信封），
-  事件 seq 即稠密 seq，无坐标映射；`sourceEventSeqs` 不落库，replace 的
-  provenance 读取时重计算（优先权威 shadowedSeqs，回退 range 扫描）。fork
-  前缀经 `readLog` 读取视图（已是稠密坐标），重编号后子会话坐标与父稠密
-  坐标数值相同，无需额外重映射（见 [branch.md](branch.md)）。
+- **原样存储、原样读取**：不变量与坐标模型见 [design.md](design.md)；fork
+  坐标自洽见 [branch.md](branch.md)。
 
 ## 事件类型清单
 

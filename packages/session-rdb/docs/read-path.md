@@ -37,8 +37,8 @@ t_session_events JOIN t_events（按 f_sequence 排序）
 
 ## 规则
 
-- **原样存储、原样读取**：事件 seq 即稠密 seq，无坐标映射；`f_data` 存完整
-  事件（含 ignorable 信封），读回时整体解析。
+- **原样存储、原样读取**：事件 seq 即稠密 seq，无坐标映射（不变量与坐标
+  模型见 [design.md](design.md)）。
 - **修复先于校验**：`open`/`load` 在 `validateStoredEvents` 之前应用
   `repairReadView`。旧写入器重编号事件后，桥接行里的 replace range 可能仍
   落在旧坐标空间（`end` 远大于自身 seq），上游 v3 事件校验以
