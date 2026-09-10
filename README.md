@@ -15,7 +15,7 @@ DeepSeek Harness 的**分支式会话编辑** monorepo：在不修改上游
 | `packages/llm-openai-compatible/`           | LLM 适配层：OpenAI-compatible 多 provider 路由（可选组件）          | [README](packages/llm-openai-compatible/README.md)                                                   |
 | `apps/dsh-custom-next/`                     | 示例工作区：web 模式（`dsh web`）与 desktop 模式（Electron 壳）     | [justfile](apps/dsh-custom-next/justfile) · `just custom desktop`                                    |
 | `devpackages/devkit/`                       | 共享开发配置：cordis 插件 tsdown 预设 + tsconfig（packages/* 复用） | [tsconfig](devpackages/devkit/tsconfig.json)                                                         |
-| `devpackages/dsh-desktopify/`               | 桌面化打包工具（`dsh-desktopify` CLI：dev / bundle / prepare:*）    | [README](devpackages/dsh-desktopify/README.md)                                                       |
+| `packages/dsh-desktopify/`                  | 桌面化打包工具（`dsh-desktopify` CLI：dev / bundle / prepare:*）    | [README](packages/dsh-desktopify/README.md)                                                          |
 | `vendor/`                                   | 上游 deepseek-harness side workspace（同步 / 裁剪 / 构建）          | [dsh-side-workspace-plugin-develop skill](.agents/skills/dsh-side-workspace-plugin-develop/SKILL.md) |
 
 ## 文档

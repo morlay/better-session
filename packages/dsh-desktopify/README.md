@@ -37,15 +37,18 @@
   `src/cli/electron-builder.ts` 内配置（无独立配置文件）。壳以最小 app
   目录（`dist/` + 入口 manifest，版本取工作区版本）打包，工具自身的构建
   依赖不进 app；`--dir` 产出未打包的应用目录，不签名、不 notarize。
-- **后端**：直接复用上游已构建的 `@deepseek-ai/dsh-desktop-host`（字节管
-  道协议），不重复实现 boot 逻辑。
+- **后端**：复用上游已构建的 desktop-host 产物（字节管道协议），不重复实现
+  boot 逻辑。上游 `@deepseek-ai/dsh-desktop-host` 是 `private` 包、不发布，
+  所以 `tsdown.config.ts` 构建时把它的 `lib/index.js` +
+  `config/desktop.cordis.patch.yml` + manifest `copy` 进 `dist/desktop-host`，
+  运行时从这里装配；`package.json` 不再依赖该私有包，可正常发布。
 - **官方依赖内部维护**：`@deepseek-ai/*` 依赖清单（dsh、dsh-desktop-host、
   cordis-plugin-group 及约 20 个 peer 包）由工具内部维护
   （`src/official.ts`），app 只声明自己的依赖、`dsh.version` 与 bundles。
   官方依赖 spec 由工具按 `dsh.version` + 已安装包解析
   （`src/cli/official-deps.ts`）：app 工作区优先，工具自身安装兜底，不写死
-  `workspace:`，仓库外的独立项目同样可装配；`dsh-desktop-host` 未发布，
-  固定由工具引入（同一 workspace 用 `link:`，独立项目暂存后 `file:`）。
+  `workspace:`，仓库外的独立项目同样可装配；desktop-host 用工具自带的产物
+  （同一 workspace 用 `link:`，独立项目暂存后 `file:`）。
 - **bundles 自动合并**：官方 bundles（`@deepseek-ai/dsh-base`、
   `@deepseek-ai/dsh-web-app`）+ app 的 `dsh.profile.bundles` 自动合并进 dev
   项目与种子 profile。
@@ -118,5 +121,7 @@
 
 - pnpm workspace（dev 依赖 `findWorkspaceRoot` 装配临时项目；bundle 依赖
   `pnpm deploy`）。
-- `vendor/deepseek-harness` 已构建（dev 需要 dsh CLI 与 desktop-host 的
-  `lib/` 产物）。
+- `vendor/deepseek-harness` 已构建（`just vendor prepare`：dev 需要 dsh CLI，
+  工具构建需要 desktop-host 的 `lib/` 产物来 stage 进 `dist/desktop-host`）。
+- 工具自身已构建（`pnpm build`）：dev / bundle 用 `dist/desktop-host` 里的
+  后端产物。

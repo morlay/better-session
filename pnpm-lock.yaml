@@ -193,9 +193,6 @@ importers:
       '@deepseek-ai/dsh':
         specifier: workspace:^
         version: link:../../vendor/deepseek-harness/apps/cli
-      '@deepseek-ai/dsh-desktop-host':
-        specifier: workspace:^
-        version: link:../../vendor/deepseek-harness/apps/desktop-host
       commander:
         specifier: ^15.0.0
         version: 15.0.0

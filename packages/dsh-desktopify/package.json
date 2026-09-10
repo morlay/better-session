@@ -43,7 +43,6 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh": "workspace:^",
-    "@deepseek-ai/dsh-desktop-host": "workspace:^",
     "commander": "^15.0.0",
     "electron": "^44.3.0",
     "electron-builder": "^26.16.1",

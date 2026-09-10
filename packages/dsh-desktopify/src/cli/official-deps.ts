@@ -9,9 +9,8 @@
  * repository resolves the same way:
  *   - `@deepseek-ai/dsh` → `dsh.version` when declared (concrete version,
  *     range, or `workspace:` in-tree), else `^<resolved>`;
- *   - `@deepseek-ai/dsh-desktop-host` → `link:<dir>`, or a staged `file:`
- *     copy when the host lives outside the app workspace (the host is not
- *     published, so it always comes from the tool);
+ *   - `@deepseek-ai/dsh-desktop-host` → the tool's own bundled host artifact
+ *     (upstream never publishes it), `link:<dir>` or a staged `file:` copy;
  *   - every other official package → `^<resolved>`.
  *
  * `hasTsx` reports whether the workspace can load TypeScript sources directly;
@@ -21,7 +20,7 @@
 
 import { cpSync, existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { OFFICIAL_RUNTIME_PACKAGES } from "../official.ts";
 
 /** Installation anchor the upstream desktop host resolves profile bundles from. */
@@ -88,6 +87,32 @@ export function resolveOfficialPackage(
 }
 
 /**
+ * The tool's bundled desktop-host artifact. Upstream keeps
+ * `@deepseek-ai/dsh-desktop-host` private (never published), so the tool ships
+ * its built output itself: `dist/desktop-host`, written by the `tsdown` build.
+ */
+export function desktopHostDir(toolRoot: string): string | undefined {
+  const dir = join(toolRoot, "dist", "desktop-host");
+  return existsSync(join(dir, "lib", "index.js")) ? realpathSync(dir) : undefined;
+}
+
+/** The bundled desktop host, or `undefined` when it has not been built. */
+export function desktopHost(input: OfficialResolutionInput): OfficialPackage | undefined {
+  const dir = desktopHostDir(input.toolRoot);
+  if (dir === undefined) return undefined;
+  try {
+    const value = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+      version?: unknown;
+    };
+    return typeof value.version === "string" && value.version !== ""
+      ? { dir, version: value.version }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The tool's own `node_modules` root holding the official surface, used as a
  * dev fallback for an app that declares only `dsh.version` and has not
  * installed the official packages itself. Prefers the surrounding store (the
@@ -113,18 +138,23 @@ export function officialDependencySpecs(input: OfficialResolutionInput): Record<
   const specs: Record<string, string> = {};
   const missing: string[] = [];
   for (const packageName of OFFICIAL_RUNTIME_PACKAGES) {
-    const resolved = resolveOfficialPackage(packageName, input);
     if (packageName === DSH_PACKAGE && input.dshVersion !== undefined) {
       // `dsh.version` is the app-configured dsh spec (concrete or `workspace:`).
       specs[packageName] = input.dshVersion;
       continue;
     }
-    if (resolved === undefined) {
-      missing.push(packageName);
+    if (packageName === DESKTOP_HOST_PACKAGE) {
+      const host = desktopHost(input);
+      if (host === undefined) {
+        missing.push(packageName);
+        continue;
+      }
+      specs[packageName] = `link:${host.dir}`;
       continue;
     }
-    if (packageName === DESKTOP_HOST_PACKAGE) {
-      specs[packageName] = `link:${resolved.dir}`;
+    const resolved = resolveOfficialPackage(packageName, input);
+    if (resolved === undefined) {
+      missing.push(packageName);
       continue;
     }
     specs[packageName] = `^${resolved.version}`;
@@ -138,30 +168,25 @@ export function officialDependencySpecs(input: OfficialResolutionInput): Record<
   return specs;
 }
 
-/** Whether `candidate` is `root` itself or nested under it. */
-export function isInside(root: string, candidate: string): boolean {
-  const rel = relative(resolve(root), resolve(candidate));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
 /**
- * Dependency spec for the private desktop host in a `pnpm deploy` closure.
+ * Dependency spec for the tool's desktop host in a `pnpm deploy` closure.
  *
- * In-repo the host lives inside the same pnpm workspace, so a `link:` spec is
- * copied by deploy. When the app workspace is elsewhere, `pnpm deploy` refuses
- * paths outside it: stage a copy inside the app workspace (with the host's
- * `workspace:` dependencies rewritten to the specs already computed) and use a
- * `file:` spec. The staged directory is temporary and removed by the caller.
+ * `pnpm deploy` only copies linked packages that are workspace members, so a
+ * `link:` to the tool's own `dist/desktop-host` would be dropped. Stage a copy
+ * inside the app workspace instead (with the host's `workspace:` dependencies
+ * rewritten to the specs already computed) and inject it as a `file:` dep. The
+ * staged directory is temporary and removed by the caller.
  */
 export function stageDesktopHost(
   input: OfficialResolutionInput,
   specs: Readonly<Record<string, string>>,
 ): string {
-  const host = resolveOfficialPackage(DESKTOP_HOST_PACKAGE, input);
+  const host = desktopHost(input);
   if (host === undefined) {
-    throw new Error(`dsh-desktopify: cannot resolve ${DESKTOP_HOST_PACKAGE}`);
+    throw new Error(
+      `dsh-desktopify: bundled ${DESKTOP_HOST_PACKAGE} is missing; run the tool build (pnpm build)`,
+    );
   }
-  if (isInside(input.workspaceRoot, host.dir)) return `link:${host.dir}`;
   const staged = join(input.workspace, ".dsh-desktopify-host");
   rmSync(staged, { recursive: true, force: true });
   cpSync(host.dir, staged, {

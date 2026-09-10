@@ -19,10 +19,13 @@
 ## 决策
 
 - **壳**：Electron 主进程，复用上游 `host-process.ts` / `host-protocol.ts`
-  （复制到 `devpackages/dsh-desktopify/src/`，纯 node 无 electron 依赖）。
+  （复制到 `packages/dsh-desktopify/src/`，纯 node 无 electron 依赖）。
   窗口生命周期、`dsh-app://` 自定义协议、host 守护与官方一致。
-- **后端**：直接复用上游已构建的 `@deepseek-ai/dsh-desktop-host`，不重复
-  实现 boot 逻辑。
+- **后端**：复用上游已构建的 desktop-host 产物，不重复实现 boot 逻辑。
+  上游 `@deepseek-ai/dsh-desktop-host` 是 `private` 包、不发布，`tsdown`
+  构建时把它的 `lib/index.js` + `config/` + manifest `copy` 进
+  `dist/desktop-host`，运行时从这里装配，因此工具不依赖该私有包、可正常
+  发布。
 - **工具形态**：`@morlay/dsh-desktopify` 提供 bin `dsh-desktopify`
   （`dev` / `bundle` / `build` / `prepare:runtime` / `prepare:seed`），
   工作区作为参数或 `DSH_DESKTOP_WORKSPACE` 传入（缺省当前目录），工具内
@@ -31,8 +34,8 @@
   cordis-plugin-group 及约 20 个 peer 包）由工具内部维护，app 只声明自己
   的依赖、`dsh.version` 与 bundles；dev 项目与打包闭包由工具装配，官方
   依赖 spec 按 `dsh.version` + 已安装包解析（app 工作区优先，工具安装兜底），
-  不写死 `workspace:`——仓库外的独立项目同样可装配；未发布的 desktop-host
-  固定以 `link:` 从工具引入。
+  不写死 `workspace:`——仓库外的独立项目同样可装配；desktop-host 用工具
+  自带的产物（同一 workspace `link:`，独立项目暂存 `file:`）。
 - **bundles 自动合并**：官方 bundles（`@deepseek-ai/dsh-base`、
   `@deepseek-ai/dsh-web-app`）+ app 的 `dsh.profile.bundles` 自动合并进
   dev 项目与种子 profile。

@@ -18,8 +18,7 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 ├── apps/
 │   └── dsh-custom-next/          # 示例工作区：web 模式（dsh web）与 desktop 模式（Electron 壳）
 ├── devpackages/
-│   ├── devkit/                   # 共享开发配置（cordis 插件 tsdown 预设 + tsconfig）
-│   └── dsh-desktopify/           # 桌面化打包工具（Electron 壳，dev 链接工作区 / bundle 静态打包）
+│   └── devkit/                   # 共享开发配置（cordis 插件 tsdown 预设 + tsconfig）
 ├── packages/
 │   ├── session-branch/          # 契约层 @morlay/session-branch（provider 抽象 + 版本树）
 │   │   ├── CONTEXT.md           # 会话编辑上下文术语表
@@ -27,7 +26,8 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 │   ├── ui-conversation-message-actions/  # 编排层 @morlay/ui-conversation-message-actions
 │   ├── session-rdb/             # 实现层 @morlay/session-rdb（RDB 持久化 + branch provider 双服务）
 │   ├── better-session/          # 聚合层 @morlay/better-session（装配决策 docs/adr/）
-│   └── llm-openai-compatible/   # LLM 适配 @morlay/dsh-llm-openai-compatible（独立上下文）
+│   ├── llm-openai-compatible/   # LLM 适配 @morlay/dsh-llm-openai-compatible（独立上下文）
+│   └── dsh-desktopify/          # 桌面化打包工具（Electron 壳，dev 链接工作区 / bundle 静态打包）
 ├── vendor/
 │   └── deepseek-harness/        # 上游 side workspace（独立 git 仓库，见 dsh-side-workspace-plugin-develop skill）
 ├── .agents/skills/dsh-side-workspace-plugin-develop/ # 上游同步与适配流程 skill
@@ -111,13 +111,13 @@ workspace 域经上游 `StorageBackend.kv` 契约落 `t_workspaces` /
   [dsh-side-workspace-plugin-develop skill](../.agents/skills/dsh-side-workspace-plugin-develop/SKILL.md) 与
   [ADR 0001](adr/0001-上游以side-workspace版本锁定完整代码而非发布版本.md)。
 
-## 桌面化（devpackages/dsh-desktopify）
+## 桌面化（packages/dsh-desktopify）
 
 `@morlay/dsh-desktopify` 把任意工作区打包 / 运行为桌面应用：Electron 壳
 （`dsh-app://` 协议 + 上游 `dsh-desktop-host` 字节管道后端），`dev` 链接
 工作区直接跑，`bundle` 产出静态、无签名的应用目录。工具形态（全 TS、
 exports 收敛）、运行流程与运行时语义见
-[devpackages/dsh-desktopify/README.md](../devpackages/dsh-desktopify/README.md)。
+[packages/dsh-desktopify/README.md](../packages/dsh-desktopify/README.md)。
 
 ## 决策索引
 
@@ -141,4 +141,4 @@ exports 收敛）、运行流程与运行时语义见
   [packages/session-rdb/docs/design.md](../packages/session-rdb/docs/design.md)
 - 聚合 bundle：[packages/better-session/README.md](../packages/better-session/README.md)
 - LLM 适配：[packages/llm-openai-compatible/README.md](../packages/llm-openai-compatible/README.md)
-- 桌面化：[devpackages/dsh-desktopify/README.md](../devpackages/dsh-desktopify/README.md)
+- 桌面化：[packages/dsh-desktopify/README.md](../packages/dsh-desktopify/README.md)

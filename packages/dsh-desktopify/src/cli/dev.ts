@@ -36,6 +36,7 @@ import { writeAppConfig } from "../appconfig.ts";
 import {
   DESKTOP_HOST_PACKAGE,
   DSH_PACKAGE,
+  desktopHost,
   hasTsx,
   officialDependencySpecs,
   resolveOfficialPackage,
@@ -177,10 +178,13 @@ function prepareDevelopmentProject(
 ): string {
   const manifest = workspaceManifest(workspace);
   const dsh = resolveOfficialPackage(DSH_PACKAGE, input);
-  const host = resolveOfficialPackage(DESKTOP_HOST_PACKAGE, input);
+  const host = desktopHost(input);
   if (dsh === undefined) throw new Error(`desktop development: cannot resolve ${DSH_PACKAGE}`);
-  if (host === undefined)
-    throw new Error(`desktop development: cannot resolve ${DESKTOP_HOST_PACKAGE}`);
+  if (host === undefined) {
+    throw new Error(
+      `desktop development: bundled ${DESKTOP_HOST_PACKAGE} is missing; run the tool build (pnpm build)`,
+    );
+  }
   // 工作区闭包：优先 pnpm 虚拟存储（isolated 布局），否则回退到工作区自己的
   // node_modules（hoisted 布局，独立项目）。
   const virtualStore = join(input.workspaceRoot, "node_modules", ".pnpm", "node_modules");
