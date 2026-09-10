@@ -3,8 +3,15 @@
  * dependency closure with `pnpm deploy`, then assemble `dsh-home/profiles/desktop`
  * from the workspace whitelist (package.json, cordis.patch.yml, declared
  * `files`) plus the flattened closure as `node_modules`, stamped with a
- * `.seed-hash` fingerprint of the whitelisted workspace content. The shell
- * forces the runtime home's profile to this seed at startup.
+ * `.seed-hash` fingerprint. The shell forces the runtime home's profile to
+ * this seed at startup.
+ *
+ * The fingerprint covers what can change under a bundled application without
+ * a version bump: the whitelisted workspace content, the root lockfile (the
+ * resolved dependency graph), and the closure content of every local source
+ * package — `workspace:^` dependencies resolve to the workspace tree
+ * (`@morlay/*`, vendored `@deepseek-ai/*`), so their sources can change while
+ * every version string stays the same.
  *
  * The official `@deepseek-ai/*` dependency surface is maintained by the tool:
  * the official packages are injected into the workspace manifest before
@@ -16,9 +23,10 @@
  */
 
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import {
   cpSync,
+  type Dirent,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -114,23 +122,123 @@ function seedEntries(workspace: string, manifest: { files?: string[] }): string[
   return [...entries].sort();
 }
 
-/** Hash the whitelisted workspace content (files only, directories expanded). */
-function workspaceHash(workspace: string, entries: readonly string[]): string {
-  const hash = createHash("sha256");
-  const visit = (relativePath: string): void => {
-    const path = join(workspace, ...relativePath.split("/"));
-    const stat = statSync(path);
-    if (stat.isDirectory()) {
-      for (const entry of readdirSync(path).sort()) visit(`${relativePath}/${entry}`);
-      return;
+/** Directories never walked when hashing seed content (installs, caches, VCS). */
+const TREE_SKIP_DIRS = new Set([
+  ".bin",
+  ".cache",
+  ".git",
+  ".dsh-store",
+  ".pnpm-store",
+  ".turbo",
+  "node_modules",
+]);
+
+/** Depth limit for the local package scan (vendored trees nest a few levels). */
+const LOCAL_PACKAGE_SCAN_DEPTH = 6;
+
+/** Feed one path (file, or directory expanded recursively) into the hash. */
+function hashPath(hash: Hash, root: string, relativePath: string): void {
+  const path = join(root, ...relativePath.split("/"));
+  if (!existsSync(path)) return;
+  const stat = statSync(path);
+  if (stat.isDirectory()) {
+    for (const entry of readdirSync(path).sort()) {
+      if (TREE_SKIP_DIRS.has(entry)) continue;
+      hashPath(hash, root, `${relativePath}/${entry}`);
     }
-    if (!stat.isFile()) return;
-    hash.update(relativePath);
-    hash.update("\0");
-    hash.update(readFileSync(path));
-    hash.update("\0");
+    return;
+  }
+  if (!stat.isFile()) return;
+  hash.update(relativePath);
+  hash.update("\0");
+  hash.update(readFileSync(path));
+  hash.update("\0");
+}
+
+/** Read a package name, tolerating unreadable or nameless manifests. */
+function packageName(manifestPath: string): string | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: unknown };
+    return typeof manifest.name === "string" && manifest.name !== "" ? manifest.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Local source packages under the workspace root: package name → directory. */
+function localPackageDirs(root: string): Map<string, string> {
+  const found = new Map<string, string>();
+  const visit = (dir: string, depth: number): void => {
+    if (depth > LOCAL_PACKAGE_SCAN_DEPTH) return;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // Unreadable directory: skip.
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || TREE_SKIP_DIRS.has(entry.name))
+        continue;
+      const child = join(dir, entry.name);
+      const manifestPath = join(child, "package.json");
+      if (existsSync(manifestPath)) {
+        const name = packageName(manifestPath);
+        if (name !== undefined && !found.has(name)) found.set(name, child);
+        // 继续下钻：容器目录（如 vendor/<harness>）自身也带 package.json，
+        // 其下才是真正的包。
+      }
+      visit(child, depth + 1);
+    }
   };
-  for (const entry of entries) visit(entry);
+  visit(root, 0);
+  return found;
+}
+
+/** Top-level package names of a flattened (hoisted) closure. */
+function closurePackageNames(modulesDir: string): string[] {
+  const names: string[] = [];
+  for (const entry of readdirSync(modulesDir, { withFileTypes: true })) {
+    if (entry.name.startsWith(".") || TREE_SKIP_DIRS.has(entry.name)) continue;
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    if (entry.name.startsWith("@")) {
+      for (const scoped of readdirSync(join(modulesDir, entry.name)).sort()) {
+        if (!scoped.startsWith(".")) names.push(`${entry.name}/${scoped}`);
+      }
+      continue;
+    }
+    names.push(entry.name);
+  }
+  return names.sort();
+}
+
+/**
+ * Seed fingerprint: whitelisted workspace content, the root lockfile (the
+ * resolved dependency graph), and the closure content of every local source
+ * package — `workspace:^` dependencies keep their version while their content
+ * changes, so the closure itself is the only reliable signal.
+ */
+export function seedFingerprint(input: {
+  readonly workspace: string;
+  readonly workspaceRoot: string;
+  readonly entries: readonly string[];
+  readonly closureModulesDir: string;
+}): string {
+  const hash = createHash("sha256");
+  hash.update("workspace\0");
+  for (const entry of input.entries) hashPath(hash, input.workspace, entry);
+  hash.update("lockfile\0");
+  const lockfile = join(input.workspaceRoot, "pnpm-lock.yaml");
+  if (existsSync(lockfile)) {
+    hash.update(readFileSync(lockfile));
+    hash.update("\0");
+  }
+  hash.update("local-closure\0");
+  const local = localPackageDirs(input.workspaceRoot);
+  for (const name of closurePackageNames(input.closureModulesDir)) {
+    if (!local.has(name)) continue;
+    hash.update(`${name}\0`);
+    hashPath(hash, input.closureModulesDir, name);
+  }
   return hash.digest("hex");
 }
 
@@ -146,11 +254,18 @@ export async function runPrepareSeed(options: PrepareSeedOptions): Promise<void>
   const seedOutputRoot = join(buildRootDir, "seed");
   const deployRoot = join(buildRootDir, "deploy");
   const entries = seedEntries(workspace, manifest);
-  const fingerprint = workspaceHash(workspace, entries);
   console.log(`desktop seed: workspace ${workspace} (${manifest.name})`);
   console.log(`desktop seed: whitelist ${entries.join(", ")}`);
 
   await deployClosure(workspace, manifest.name, deployRoot);
+  // 指纹覆盖闭包内容：workspace:^ 依赖（morlay 包 / vendor 源码）版本号不变
+  // 也可能变化，必须对 deploy 产物本身取指纹。
+  const fingerprint = seedFingerprint({
+    workspace,
+    workspaceRoot: findWorkspaceRoot(workspace),
+    entries,
+    closureModulesDir: join(deployRoot, "node_modules"),
+  });
 
   rmSync(seedOutputRoot, { recursive: true, force: true });
   const profileDir = join(seedOutputRoot, "profiles", PROFILE_NAME);

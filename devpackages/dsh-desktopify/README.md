@@ -53,8 +53,10 @@ dsh-web-desktopify 方案），全面统一到 pnpm + node，保持静态打包�
   后启动 `dsh web`。
 - **bundle**：`pnpm deploy --prod` 导出工作区闭包 → 种子
   （`dsh-home/profiles/desktop` + `.seed-hash` 指纹）→ 下载校验 Node 二进制
-  （`prepare:runtime`）→ electron-builder 静态打包。闭包内 `@morlay/*` 的
-  exports 切到 publishConfig 的 dist 产物（打包环境没有 tsx）。
+  （`prepare:runtime`）→ electron-builder 静态打包。指纹覆盖 app 工作区白名单、
+  根 lockfile，以及闭包内每个本地源码包的产物内容（`workspace:^` 依赖的版本号
+  不变、内容也可能变），指纹变化时壳在启动时替换 profile。闭包内 `@morlay/*`
+  的 exports 切到 publishConfig 的 dist 产物（打包环境没有 tsx）。
 
 ## 运行时语义
 
