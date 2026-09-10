@@ -29,8 +29,9 @@ dsh-web-desktopify 方案），全面统一到 pnpm + node，保持静态打包�
   `publishConfig` 指 `dist/*`，对外只有 bin 一个入口。
 - **壳**：Electron 主进程（`dsh-app://` 自定义协议 + host 子进程守护），
   复用上游 `host-process.ts` / `host-protocol.ts`（纯 node 实现，协议版本
-  3）；窗口生命周期、后端守护、退出清理与官方一致。产物 `dist/index.mjs` +
-  `dist/preload*.cjs`（sandboxed preload 必须是 CJS）。
+  3）；无标题栏窗口（macOS 隐藏标题栏保留交通灯，其余平台无边框），退出
+  （红叉 / Cmd+Q / 菜单）先经确认框，确认后才停止后端并退出。产物
+  `dist/index.mjs` + `dist/preload*.cjs`（sandboxed preload 必须是 CJS）。
 - **打包**：electron-builder 经 Node API 在
   `src/cli/electron-builder.ts` 内配置（无独立配置文件）。壳以最小 app
   目录（`dist/` + 入口 manifest，版本取工作区版本）打包，工具自身的构建

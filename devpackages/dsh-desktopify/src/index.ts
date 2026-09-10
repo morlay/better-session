@@ -12,6 +12,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, protocol } from "electron";
+import type { BrowserWindowConstructorOptions } from "electron";
 import { loadAppConfig, PROFILE_NAME, type AppConfig } from "./appconfig.ts";
 import { resolveDshHome } from "./dshhome.ts";
 import { DesktopHostProcess } from "./host-process.ts";
@@ -74,6 +75,14 @@ function developmentProject(): string | undefined {
   return resolve(configured);
 }
 
+/**
+ * 无标题栏窗口框架：macOS 隐藏标题栏（保留交通灯，顶部区域仍可拖动），
+ * 其余平台去掉系统边框。
+ */
+function windowFrame(): Pick<BrowserWindowConstructorOptions, "titleBarStyle" | "frame"> {
+  return process.platform === "darwin" ? { titleBarStyle: "hidden" } : { frame: false };
+}
+
 function createWindow(
   preload: string,
   config: { width: number; height: number; minWidth: number; minHeight: number },
@@ -84,6 +93,7 @@ function createWindow(
     minWidth: config.minWidth,
     minHeight: config.minHeight,
     show: false,
+    ...windowFrame(),
     webPreferences: {
       preload,
       nodeIntegration: false,
@@ -153,7 +163,39 @@ async function main(): Promise<void> {
 
   let host: DesktopHostProcess | undefined;
   let mainWindow: BrowserWindow | undefined;
+  let quitConfirmed = false;
+  let quitPrompting = false;
   const appPreload = fileURLToPath(new URL("./preload-app.cjs", import.meta.url));
+
+  /**
+   * 退出确认：红叉 / Cmd+Q / 菜单退出都先问一次，避免误关把后台 host 与
+   * 运行中的会话一起强杀。确认后置 quitConfirmed 并重新走退出流程。
+   */
+  const confirmQuit = async (window?: BrowserWindow): Promise<void> => {
+    if (quitPrompting) return;
+    quitPrompting = true;
+    try {
+      const options = {
+        type: "question" as const,
+        buttons: ["Cancel", "Quit"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        message: `Quit ${config.name}?`,
+        detail: "The desktop backend and its running sessions will stop.",
+      };
+      const parent = window ?? mainWindow;
+      const { response } =
+        parent === undefined || parent.isDestroyed()
+          ? await dialog.showMessageBox(options)
+          : await dialog.showMessageBox(parent, options);
+      if (response !== 1) return;
+      quitConfirmed = true;
+      app.quit();
+    } finally {
+      quitPrompting = false;
+    }
+  };
 
   const startHost = async (projectDir = activeProject): Promise<DesktopHostProcess> => {
     const next = new DesktopHostProcess(resources.node, projectDir, hostInspectPort, {
@@ -185,6 +227,11 @@ async function main(): Promise<void> {
     mainWindow = window;
     window.once("ready-to-show", () => {
       if (!window.isDestroyed()) window.show();
+    });
+    window.on("close", (event) => {
+      if (quitConfirmed) return;
+      event.preventDefault();
+      void confirmQuit(window);
     });
     window.on("closed", () => {
       if (mainWindow === window) mainWindow = undefined;
@@ -219,6 +266,11 @@ async function main(): Promise<void> {
     app.quit();
   });
   app.on("before-quit", (event) => {
+    if (!quitConfirmed) {
+      event.preventDefault();
+      void confirmQuit();
+      return;
+    }
     if (host === undefined) return;
     event.preventDefault();
     const active = host;
