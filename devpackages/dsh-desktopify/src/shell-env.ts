@@ -8,7 +8,7 @@
  * output is discarded so it never pollutes the backend's stdout. The child is
  * detached into its own process group so the shell can terminate the whole
  * backend tree on exit. Windows spawns directly.
- * @module @morlay/dsh-custom-desktop
+ * @module @morlay/dsh-desktopify
  */
 
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";

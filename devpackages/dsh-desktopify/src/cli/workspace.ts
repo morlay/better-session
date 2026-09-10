@@ -45,20 +45,23 @@ export interface WorkspaceManifest {
   };
 }
 
+/** A manifest whose required fields have been validated. */
+export type ResolvedWorkspaceManifest = WorkspaceManifest & { readonly name: string };
+
 /** Resolve the app workspace directory (default: the current directory). */
 export function resolveWorkspace(): string {
   return resolve(process.cwd());
 }
 
 /** Read and validate the workspace manifest. */
-export function workspaceManifest(workspace: string): WorkspaceManifest {
+export function workspaceManifest(workspace: string): ResolvedWorkspaceManifest {
   const value = JSON.parse(
     readFileSync(join(workspace, "package.json"), "utf8"),
   ) as WorkspaceManifest;
   if (typeof value.name !== "string" || value.name === "") {
     throw new Error(`dsh-desktopify: workspace ${workspace} has no package name`);
   }
-  return value;
+  return { ...value, name: value.name };
 }
 
 /** The app's `dsh.desktop` configuration with tool defaults. */

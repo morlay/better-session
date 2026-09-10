@@ -5,7 +5,7 @@
  * Electron executable in node mode (development); requests from the renderer
  * are forwarded over framed byte pipes. On Unix the backend inherits the
  * user's shell environment through rc sourcing (see shell-env.ts).
- * @module @morlay/dsh-custom-desktop
+ * @module @morlay/dsh-desktopify
  */
 
 import { readFile } from "node:fs/promises";

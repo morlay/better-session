@@ -6,7 +6,7 @@
  * app shares the same data root as the reference implementation and never
  * touches the workspace. `env` inherits the environment; an absolute path pins
  * the home. `DSH_APP_DSH_HOME` overrides everything (development and tests).
- * @module @morlay/dsh-custom-desktop
+ * @module @morlay/dsh-desktopify
  */
 
 import { homedir } from "node:os";

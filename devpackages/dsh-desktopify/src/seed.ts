@@ -11,7 +11,7 @@
  * replaces the profile, a matching fingerprint skips the copy so the closure
  * is not re-copied on every launch. User data lives at the home root and is
  * never touched by profile replacement.
- * @module @morlay/dsh-custom-desktop
+ * @module @morlay/dsh-desktopify
  */
 
 import {

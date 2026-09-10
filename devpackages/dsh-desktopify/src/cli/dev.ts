@@ -32,6 +32,8 @@ import {
 import { createRequire } from "node:module";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeAppConfig } from "../appconfig.ts";
+import { buildShell, SHELL_ENTRY } from "./shell.ts";
 import {
   PROFILE_NAME,
   buildRoot,
@@ -87,10 +89,6 @@ async function run(
         );
     });
   });
-}
-
-async function runPackageScript(script: string, cwd: string): Promise<void> {
-  await run("pnpm", ["run", script], cwd);
 }
 
 function removeOwnedPath(path: string): void {
@@ -293,7 +291,7 @@ export async function runDev(options: DevOptions): Promise<void> {
   const manifest = workspaceManifest(workspace);
   const buildRootDir = buildRoot(workspace);
   if (!options.skipBuild) {
-    await runPackageScript("build", APP_ROOT);
+    await buildShell();
   }
   if (options.web) {
     // web 模式：DSH_HOME 用 {workspace}/.dsh-store，依赖经
@@ -316,7 +314,7 @@ export async function runDev(options: DevOptions): Promise<void> {
     return;
   }
   for (const path of [
-    join(APP_ROOT, "lib", "main.js"),
+    SHELL_ENTRY,
     join(dependencyDir("@deepseek-ai/dsh-desktop-host"), "lib", "index.js"),
   ]) {
     if (!existsSync(path)) throw new Error(`desktop development: missing built artifact ${path}`);
@@ -328,19 +326,15 @@ export async function runDev(options: DevOptions): Promise<void> {
   );
   // 开发模式也携带 appconfig.json（窗口几何来自工作区 dsh.desktop.window）；
   // dshHome 固定 env——host 继承本脚本显式设置的 DSH_HOME（buildRoot 内）。
+  const desktop = desktopConfig(manifest);
   mkdirSync(join(buildRootDir, "runtime"), { recursive: true });
-  writeFileSync(
-    join(buildRootDir, "runtime", "appconfig.json"),
-    `${JSON.stringify(
-      {
-        name: manifest.name,
-        ...desktopConfig(manifest),
-        dshHome: "env",
-        profile: PROFILE_NAME,
-      },
-      undefined,
-      2,
-    )}\n`,
-  );
+  writeAppConfig(join(buildRootDir, "runtime"), {
+    name: manifest.name,
+    id: desktop.id,
+    version: desktop.version,
+    dshHome: "env",
+    window: desktop.window,
+    profile: PROFILE_NAME,
+  });
   await launchElectron(projectDir, buildRootDir);
 }

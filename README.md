@@ -13,7 +13,8 @@ DeepSeek Harness 的**分支式会话编辑** monorepo：在不修改上游
 | `packages/session-rdb/`                     | 实现层：RDB 持久化（`PersistenceBackend`）+ 分支 provider（`SessionBranchProvider`）双服务 | [README](packages/session-rdb/README.md) · [design](packages/session-rdb/docs/design.md)             |
 | `packages/ui-conversation-message-actions/` | 编排层 + UI：edit / retry / fork 编排 + `conversation.chat.node` 渲染替换                  | [README](packages/ui-conversation-message-actions/README.md)                                         |
 | `packages/llm-openai-compatible/`           | LLM 适配层：OpenAI-compatible 多 provider 路由（可选组件）                                 | [README](packages/llm-openai-compatible/README.md)                                                   |
-| `apps/dsh-custom/`                          | 本地 GUI 应用壳（dsh-web-desktopify）                                                      | `just custom::dev` / `just custom::bundle`                                                           |
+| `apps/dsh-custom-next/`                     | 桌面化示例工作区（Electron 壳：`dev` / `bundle`）                                          | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · `just custom dev`                                     |
+| `devpackages/dsh-desktopify/`               | 桌面化打包工具（`dsh-desktopify` CLI：dev / bundle / prepare:*）                           | [README](devpackages/dsh-desktopify/README.md)                                                       |
 | `vendor/`                                   | 上游 deepseek-harness side workspace（同步 / 裁剪 / 构建）                                 | [dsh-side-workspace-plugin-develop skill](.agents/skills/dsh-side-workspace-plugin-develop/SKILL.md) |
 
 ## 文档

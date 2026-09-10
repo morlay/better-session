@@ -6,7 +6,7 @@
  *     macOS, `$XDG_DATA_HOME` on Linux) joined with the application name;
  *   - `env` — leave `DSH_HOME` unset and inherit the environment;
  *   - an absolute path — pin `DSH_HOME` to that directory.
- * @module @morlay/dsh-custom-desktop
+ * @module @morlay/dsh-desktopify
  */
 
 import { readFileSync, writeFileSync } from "node:fs";

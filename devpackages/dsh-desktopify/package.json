@@ -1,21 +1,42 @@
 {
   "name": "@morlay/dsh-desktopify",
   "version": "0.1.0",
-  "private": true,
   "description": "Desktop packaging tool for dsh workspaces: hosts the upstream dsh-desktop-host child over framed byte pipes, with dev (workspace-linked) and bundle (static, unsigned) modes.",
+  "keywords": [
+    "desktop",
+    "dsh",
+    "electron",
+    "electron-builder",
+    "packaging"
+  ],
   "license": "MIT",
+  "author": "morlay",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/morlay/better-session.git"
+  },
   "bin": {
-    "dsh-desktopify": "bin/dsh-desktopify.mjs"
+    "dsh-desktopify": "./src/cli/index.ts"
   },
   "files": [
-    "bin/dsh-desktopify.mjs",
-    "lib/*.js",
-    "lib/*.cjs",
-    "renderer/**/*",
-    "package.json"
+    "dist"
   ],
   "type": "module",
-  "main": "lib/main.js",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "bin": {
+      "dsh-desktopify": "./dist/cli/index.mjs"
+    },
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./package.json": "./package.json"
+    }
+  },
   "scripts": {
     "build": "pnpm exec tsdown",
     "prepublishOnly": "pnpm run build"
@@ -23,15 +44,18 @@
   "dependencies": {
     "@deepseek-ai/dsh": "workspace:^",
     "@deepseek-ai/dsh-desktop-host": "workspace:^",
-    "commander": "^15.0.0"
-  },
-  "devDependencies": {
-    "@deepseek-ai/dsh-home-paths": "workspace:^",
-    "@types/node": "^26.5.0",
+    "commander": "^15.0.0",
     "electron": "^44.3.0",
     "electron-builder": "^26.16.1",
     "extract-zip": "^2.0.1",
     "sharp": "^0.35.4",
-    "tar": "^7.5.0"
+    "tar": "^7.5.0",
+    "tsdown": "0.22.x"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0"
+  },
+  "engines": {
+    "node": ">=24.11.0"
   }
 }

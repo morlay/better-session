@@ -184,13 +184,6 @@ importers:
       commander:
         specifier: ^15.0.0
         version: 15.0.0
-    devDependencies:
-      '@deepseek-ai/dsh-home-paths':
-        specifier: workspace:^
-        version: link:../../vendor/deepseek-harness/packages/util/home-paths
-      '@types/node':
-        specifier: ^26.5.0
-        version: 26.5.1
       electron:
         specifier: ^44.3.0
         version: 44.3.0(supports-color@9.4.0)
@@ -206,6 +199,13 @@ importers:
       tar:
         specifier: ^7.5.0
         version: 7.5.22
+      tsdown:
+        specifier: 0.22.x
+        version: 0.22.14(tsx@4.23.13)(typescript@7.0.2)
+    devDependencies:
+      '@types/node':
+        specifier: ^26.5.0
+        version: 26.5.1
 
   packages/better-session:
     dependencies:

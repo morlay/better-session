@@ -150,7 +150,7 @@ export async function runPrepareSeed(options: PrepareSeedOptions): Promise<void>
   console.log(`desktop seed: workspace ${workspace} (${manifest.name})`);
   console.log(`desktop seed: whitelist ${entries.join(", ")}`);
 
-  await deployClosure(workspace, manifest.name ?? "", deployRoot);
+  await deployClosure(workspace, manifest.name, deployRoot);
 
   rmSync(seedOutputRoot, { recursive: true, force: true });
   const profileDir = join(seedOutputRoot, "profiles", PROFILE_NAME);

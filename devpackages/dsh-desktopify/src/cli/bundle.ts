@@ -10,17 +10,19 @@
  *
  * The workspace is read from `DSH_DESKTOP_WORKSPACE` (the CLI forwards its
  * positional argument there) and defaults to the current directory. The
- * shell configuration is written beside the executable as `appconfig.json`;
- * electron-builder reads the same workspace through the environment.
+ * shell configuration is written beside the executable as `appconfig.json`
+ * and passed to the in-process electron-builder run.
  */
 
-import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { writeAppConfig, type AppConfig } from "../appconfig.ts";
+import { buildDesktopApp } from "./electron-builder.ts";
 import { prepareIcons } from "./icon.ts";
 import { runPrepareRuntime } from "./prepare-runtime.ts";
 import { runPrepareSeed } from "./prepare-seed.ts";
+import { buildShell } from "./shell.ts";
 import {
   PROFILE_NAME,
   buildRoot,
@@ -30,20 +32,6 @@ import {
 } from "./workspace.ts";
 
 const APP_ROOT = resolve(import.meta.dirname, "..", "..");
-
-async function runPnpm(args: readonly string[], cwd: string): Promise<void> {
-  await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn("pnpm", args, { cwd, stdio: "inherit" });
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (code === 0) resolvePromise();
-      else
-        reject(
-          new Error(`desktop bundle: pnpm ${args.join(" ")} exited with ${String(code ?? signal)}`),
-        );
-    });
-  });
-}
 
 /** Options for the `bundle` command. */
 export interface BundleOptions {
@@ -106,37 +94,35 @@ export async function runBundle(options: BundleOptions): Promise<void> {
   const workspace = resolve(options.workspace ?? resolveWorkspace());
   const manifest = workspaceManifest(workspace);
   const buildRootDir = buildRoot(workspace);
-  const appConfig = {
+  const desktop = desktopConfig(manifest);
+  const appConfig: AppConfig = {
     name: manifest.name,
-    ...desktopConfig(manifest),
+    id: desktop.id,
+    version: desktop.version,
+    dshHome: desktop.dshHome,
+    window: desktop.window,
     profile: PROFILE_NAME,
   };
 
   console.log(`desktop bundle: workspace ${workspace} (${appConfig.name}@${appConfig.version})`);
-  await runPnpm(["exec", "tsdown"], APP_ROOT);
+  await buildShell();
   await runPrepareRuntime({ workspace });
   await runPrepareSeed({ workspace });
   // 桌面图标：workspace 的 dsh.desktop.icon（SVG）→ 平台图标（mac icns /
-  // linux png / win png），electron-builder 经 icon.json 读取。
-  await prepareIcons(workspace, buildRootDir, appConfig.icon);
+  // linux png / win png），产物直接交给 electron-builder。
+  const icons = await prepareIcons(workspace, buildRootDir, desktop.icon);
 
   // Shell runtime configuration carried as an extra resource (resourcesPath).
   mkdirSync(join(buildRootDir, "runtime"), { recursive: true });
-  writeFileSync(
-    join(buildRootDir, "runtime", "appconfig.json"),
-    `${JSON.stringify(appConfig, undefined, 2)}\n`,
-  );
+  writeAppConfig(join(buildRootDir, "runtime"), appConfig);
 
-  const args = [
-    "exec",
-    "electron-builder",
-    "--config",
-    "electron-builder.config.mjs",
-    "--publish",
-    "never",
-    ...(options.dir ? ["--dir"] : []),
-  ];
-  await runPnpm(args, APP_ROOT);
+  await buildDesktopApp({
+    appRoot: APP_ROOT,
+    buildRoot: buildRootDir,
+    appConfig,
+    icons,
+    dir: options.dir,
+  });
   console.log(`desktop bundle: artifacts in ${join(buildRootDir, "artifacts")}`);
-  if (options.install) installApp(workspace, appConfig.name ?? "dsh-desktop-app");
+  if (options.install) installApp(workspace, appConfig.name);
 }
