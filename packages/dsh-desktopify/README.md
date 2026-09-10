@@ -41,22 +41,45 @@
   道协议），不重复实现 boot 逻辑。
 - **官方依赖内部维护**：`@deepseek-ai/*` 依赖清单（dsh、dsh-desktop-host、
   cordis-plugin-group 及约 20 个 peer 包）由工具内部维护
-  （`src/official.ts`），app 只声明自己的 morlay 依赖；dev 项目与打包闭包
-  由工具装配，官方包经 `workspace:^` 从 vendor 源码解析。
+  （`src/official.ts`），app 只声明自己的依赖、`dsh.version` 与 bundles。
+  官方依赖 spec 由工具按 `dsh.version` + 已安装包解析
+  （`src/cli/official-deps.ts`）：app 工作区优先，工具自身安装兜底，不写死
+  `workspace:`，仓库外的独立项目同样可装配；`dsh-desktop-host` 未发布，
+  固定由工具引入（同一 workspace 用 `link:`，独立项目暂存后 `file:`）。
 - **bundles 自动合并**：官方 bundles（`@deepseek-ai/dsh-base`、
   `@deepseek-ai/dsh-web-app`）+ app 的 `dsh.profile.bundles` 自动合并进 dev
   项目与种子 profile。
 
+## 工作区契约（package.json）
+
+```jsonc
+{
+  "name": "dsh-custom",
+  "version": "0.1.5", // 应用版本（electron-builder product version）
+  "private": true,
+  "dependencies": { "@morlay/better-session": "^0.0.17" },
+  "dsh": {
+    "version": "0.1.5-rc.1", // @deepseek-ai/dsh 的依赖 spec：具体版本或 workspace:
+    "profile": { "bundles": ["@morlay/better-session"] },
+    "desktop": { "id": "ai.deepseek.dsh.custom", "icon": "icon.svg", "dshHome": "xdg" },
+  },
+}
+```
+
+`dsh.version` 是 `@deepseek-ai/dsh` 的依赖 spec：仓库内项目可配
+`workspace:^`（从 vendor 源码解析），仓库外项目配具体版本（从 registry 安装）；
+缺省时回退到工作区已解析的 dsh 版本。
+
 ## 运行流程
 
-- **dev**：链接工作区（vendor dsh CLI + desktop-host + hoisted 闭包）到
-  临时项目，host 用系统 node + `--import=tsx/esm` 直载 morlay TS 源码，
-  `--allow-linked-profile` 放行工作区链接；`--web` 则准备 `web` profile
-  后启动 `dsh web`。
+- **dev**：链接工作区（dsh CLI + desktop-host + 依赖闭包）到临时项目，
+  host 用系统 node 直载工作区 TS 源码——仅当工作区装有 tsx 时才加
+  `--import=tsx/esm`（否则不注入 loader），`--allow-linked-profile` 放行
+  工作区链接；`--web` 则准备 `web` profile 后启动 `dsh web`。
 - **bundle**：`pnpm deploy --prod` 导出工作区闭包 → 种子
   （`dsh-home/profiles/desktop` + `.seed-hash` 指纹）→ 下载校验 Node 二进制
   （`prepare:runtime`）→ electron-builder 静态打包。指纹覆盖 app 工作区白名单、
-  根 lockfile，以及闭包内每个本地源码包的产物内容（`workspace:^` 依赖的版本号
+  根 lockfile，以及闭包内每个本地源码包的产物内容（本地源码依赖的版本号
   不变、内容也可能变），指纹变化时壳在启动时替换 profile。闭包内 `@morlay/*`
   的 exports 切到 publishConfig 的 dist 产物（打包环境没有 tsx）。
 
@@ -81,6 +104,7 @@
 | `DSH_DESKTOP_APPCONFIG_DIR`       | 覆盖 `appconfig.json` 所在目录（dev / 测试）       |
 | `DSH_DESKTOP_SEED_DIR`            | 覆盖 profile 种子目录（dev / 测试）                |
 | `DSH_DESKTOP_DEV_PROJECT_DIR`     | 覆盖 dev 临时项目目录                              |
+| `DSH_DESKTOP_TSX_IMPORT`          | dev 启动器写入的 tsx loader spec（无 tsx 时为空）  |
 | `DSH_DESKTOP_OPEN_DEVTOOLS`       | dev 是否自动打开 DevTools（默认 `1`，置 `0` 关闭） |
 | `DSH_DESKTOP_HOST_INSPECT_PORT`   | host 调试端口（默认 9230）                         |
 | `DSH_DESKTOP_MAIN_INSPECT_PORT`   | 主进程调试端口（默认 9229）                        |

@@ -16,6 +16,7 @@
     "@morlay/dsh-llm-openai-compatible": "workspace:^"
   },
   "dsh": {
+    "version": "workspace:^",
     "profile": {
       "bundles": [
         "@morlay/better-session",

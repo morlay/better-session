@@ -35,6 +35,8 @@ export interface WorkspaceManifest {
   readonly files?: string[];
   readonly dependencies?: Record<string, string>;
   readonly dsh?: {
+    /** dsh runtime release the app targets (`dsh.version`). */
+    readonly version?: string;
     readonly profile?: { readonly bundles?: unknown };
     readonly desktop?: {
       readonly id?: string;
@@ -62,6 +64,23 @@ export function workspaceManifest(workspace: string): ResolvedWorkspaceManifest 
     throw new Error(`dsh-desktopify: workspace ${workspace} has no package name`);
   }
   return { ...value, name: value.name };
+}
+
+/**
+ * The `@deepseek-ai/dsh` dependency spec the app targets (`dsh.version`): a
+ * concrete release (`0.1.5-rc.1`), a range, or the `workspace:` protocol when
+ * the app lives in the same workspace as the vendored dsh.
+ */
+export function dshVersion(manifest: WorkspaceManifest): string | undefined {
+  const version = manifest.dsh?.version;
+  if (version === undefined) return undefined;
+  if (typeof version !== "string" || version === "") {
+    throw new Error(
+      `dsh-desktopify: workspace ${String(manifest.name)} has an invalid dsh.version ` +
+        `(expected a dependency spec such as "0.1.5-rc.1" or "workspace:^")`,
+    );
+  }
+  return version;
 }
 
 /** The app's `dsh.desktop` configuration with tool defaults. */

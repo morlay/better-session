@@ -29,13 +29,15 @@
   不写死 app 路径或名字。
 - **官方依赖内部维护**：`@deepseek-ai/*` 依赖清单（dsh、dsh-desktop-host、
   cordis-plugin-group 及约 20 个 peer 包）由工具内部维护，app 只声明自己
-  的 morlay 依赖；dev 项目与打包闭包由工具装配，官方包经 `workspace:^`
-  从 vendor 源码解析。
+  的依赖、`dsh.version` 与 bundles；dev 项目与打包闭包由工具装配，官方
+  依赖 spec 按 `dsh.version` + 已安装包解析（app 工作区优先，工具安装兜底），
+  不写死 `workspace:`——仓库外的独立项目同样可装配；未发布的 desktop-host
+  固定以 `link:` 从工具引入。
 - **bundles 自动合并**：官方 bundles（`@deepseek-ai/dsh-base`、
   `@deepseek-ai/dsh-web-app`）+ app 的 `dsh.profile.bundles` 自动合并进
   dev 项目与种子 profile。
-- **dev**：链接工作区（vendor dsh CLI + desktop-host + hoisted 闭包），
-  host 用系统 node + `--import=tsx/esm` 直载 morlay TS 源码；
+- **dev**：链接工作区（dsh CLI + desktop-host + 依赖闭包），host 用系统
+  node 直载工作区 TS 源码——仅当工作区装有 tsx 时才加 `--import=tsx/esm`；
   `--allow-linked-profile` 放行工作区链接。**不用 Electron 内置 node**
   （Node 24 的 tsx strip-only 模式不支持 parameter properties，morlay
   TS 源码转换失败导致 boot 卡死）。
@@ -66,8 +68,8 @@
   符号链接原样（相对链接指向闭包内副本），不解引用。
 - **peer 闭包**：`pnpm deploy --prod` 不装 peerDependencies，desktop-host
   boot 依赖的 `@deepseek-ai/*` peer 包（cordis-plugin-group 等 20 个）
-  由工具注入为 `workspace:^` 依赖（deploy 目标生成的 pnpm-workspace.yaml
-  已指向仓库成员，从 vendor 源码解析进闭包）。
+  由工具注入为具体版本依赖（`dsh.version` 锚定 dsh，其余取已解析版本；
+  desktop-host 以 `link:` 注入），随 deploy 复制进闭包。
 - **connection 服务时序**：`SessionEditor` 构造时 connection 可能已
   provide（事件已错过）——监听 `internal/service` 事件并立即检查一次。
 

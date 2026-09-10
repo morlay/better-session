@@ -36,16 +36,25 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { OFFICIAL_RUNTIME_PACKAGES } from "../official.ts";
 import { SEED_HASH_NAME } from "../seed.ts";
+import {
+  DESKTOP_HOST_PACKAGE,
+  officialDependencySpecs,
+  stageDesktopHost,
+  type OfficialResolutionInput,
+} from "./official-deps.ts";
 import {
   PROFILE_NAME,
   buildRoot,
+  dshVersion as readDshVersion,
   findWorkspaceRoot,
   mergedProfileBundles,
   resolveWorkspace,
   workspaceManifest,
 } from "./workspace.ts";
+
+/** 工具包根（源码形态 `src/cli` 与构建形态 `dist/cli` 同深度）。 */
+const APP_ROOT = resolve(import.meta.dirname, "..", "..");
 
 function runPnpm(args: readonly string[], cwd: string): Promise<void> {
   return new Promise((resolvePromise, reject) => {
@@ -63,22 +72,29 @@ function runPnpm(args: readonly string[], cwd: string): Promise<void> {
 
 /**
  * Export the workspace production closure into the deploy staging directory.
- * The official packages are injected into the workspace manifest and the
- * root lockfile is refreshed (`--lockfile-only`) so the deploy resolves them
- * from the vendor sources; both are restored afterwards. The deploy closure
- * is then flattened: `nodeLinker: hoisted` reinstalls it as a traditional
- * node_modules layout (every package at the top level, no virtual store, no
- * external links).
+ * The official packages are injected into the workspace manifest (specs
+ * derived from `dsh.version` and the installed packages, never a hardcoded
+ * `workspace:` protocol) and the root lockfile is refreshed
+ * (`--lockfile-only`) so the deploy resolves them; both are restored
+ * afterwards. The deploy closure is then flattened: `nodeLinker: hoisted`
+ * reinstalls it as a traditional node_modules layout (every package at the
+ * top level, no virtual store, no external links).
  */
-async function deployClosure(workspace: string, name: string, destination: string): Promise<void> {
+async function deployClosure(
+  workspace: string,
+  name: string,
+  destination: string,
+  input: OfficialResolutionInput,
+): Promise<void> {
   const root = findWorkspaceRoot(workspace);
   const manifestPath = join(workspace, "package.json");
   const lockfilePath = join(root, "pnpm-lock.yaml");
   const originalManifest = readFileSync(manifestPath, "utf8");
   const originalLockfile = readFileSync(lockfilePath, "utf8");
   const manifest = JSON.parse(originalManifest) as { dependencies?: Record<string, string> };
-  const dependencies = { ...manifest.dependencies };
-  for (const packageName of OFFICIAL_RUNTIME_PACKAGES) dependencies[packageName] = "workspace:^";
+  const specs = officialDependencySpecs(input);
+  specs[DESKTOP_HOST_PACKAGE] = stageDesktopHost(input, specs);
+  const dependencies = { ...manifest.dependencies, ...specs };
   writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, dependencies }, undefined, 2)}\n`);
   try {
     await runPnpm(["install", "--lockfile-only"], root);
@@ -107,6 +123,8 @@ async function deployClosure(workspace: string, name: string, destination: strin
   } finally {
     writeFileSync(manifestPath, originalManifest);
     writeFileSync(lockfilePath, originalLockfile);
+    // 工作区外的 desktop-host 副本只在 deploy 期间需要。
+    rmSync(join(workspace, ".dsh-desktopify-host"), { recursive: true, force: true });
   }
 }
 
@@ -250,6 +268,14 @@ export interface PrepareSeedOptions {
 export async function runPrepareSeed(options: PrepareSeedOptions): Promise<void> {
   const workspace = resolve(options.workspace ?? resolveWorkspace());
   const manifest = workspaceManifest(workspace);
+  const workspaceRoot = findWorkspaceRoot(workspace);
+  const dshVersion = readDshVersion(manifest);
+  const input: OfficialResolutionInput = {
+    workspace,
+    workspaceRoot,
+    toolRoot: APP_ROOT,
+    ...(dshVersion === undefined ? {} : { dshVersion }),
+  };
   const buildRootDir = buildRoot(workspace);
   const seedOutputRoot = join(buildRootDir, "seed");
   const deployRoot = join(buildRootDir, "deploy");
@@ -257,12 +283,12 @@ export async function runPrepareSeed(options: PrepareSeedOptions): Promise<void>
   console.log(`desktop seed: workspace ${workspace} (${manifest.name})`);
   console.log(`desktop seed: whitelist ${entries.join(", ")}`);
 
-  await deployClosure(workspace, manifest.name, deployRoot);
+  await deployClosure(workspace, manifest.name, deployRoot, input);
   // 指纹覆盖闭包内容：workspace:^ 依赖（morlay 包 / vendor 源码）版本号不变
   // 也可能变化，必须对 deploy 产物本身取指纹。
   const fingerprint = seedFingerprint({
     workspace,
-    workspaceRoot: findWorkspaceRoot(workspace),
+    workspaceRoot,
     entries,
     closureModulesDir: join(deployRoot, "node_modules"),
   });

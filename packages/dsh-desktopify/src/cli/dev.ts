@@ -1,19 +1,21 @@
 /**
  * Development launcher: build the shell, prepare a disposable project that
- * links the current workspace (dsh CLI, desktop host, and the hoisted
- * dependency closure), then launch the unpackaged Electron shell against it.
- * The backend runs under the current Node.js executable in node mode
- * (`ELECTRON_RUN_AS_NODE=1`) with `--import=tsx/esm`, so the workspace's
- * TypeScript plugin sources load directly.
+ * links the current workspace (dsh CLI, desktop host, and the dependency
+ * closure), then launch the unpackaged Electron shell against it. The backend
+ * runs under the current Node.js executable in node mode
+ * (`ELECTRON_RUN_AS_NODE=1`) and loads the workspace's TypeScript plugin
+ * sources through `--import=tsx/esm` — only when the workspace actually has
+ * tsx installed.
  *
  * `--web` runs the web mode instead: prepare the `web` profile (merged
- * bundles + mirrored dependency closure) and boot `dsh web` in the browser.
+ * bundles + linked dependency closure) and boot `dsh web` in the browser.
  *
  * The workspace is read from `DSH_DESKTOP_WORKSPACE` (the CLI forwards its
  * positional argument there) and defaults to the current directory. The
  * official `@deepseek-ai/*` dependency surface and the official profile
- * bundles are maintained by the tool; the app only declares its own
- * dependencies and bundles.
+ * bundles are maintained by the tool; the app declares its own dependencies,
+ * its `dsh.version`, and its bundles. Official packages are resolved from the
+ * app workspace first, so an app outside this repository works the same.
  */
 
 import { spawn } from "node:child_process";
@@ -21,7 +23,6 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -31,26 +32,30 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { writeAppConfig } from "../appconfig.ts";
+import {
+  DESKTOP_HOST_PACKAGE,
+  DSH_PACKAGE,
+  hasTsx,
+  officialDependencySpecs,
+  resolveOfficialPackage,
+  toolModulesDir,
+  type OfficialResolutionInput,
+} from "./official-deps.ts";
 import { buildShell, SHELL_ENTRY } from "./shell.ts";
 import {
   PROFILE_NAME,
   buildRoot,
   desktopConfig,
+  dshVersion as readDshVersion,
   findWorkspaceRoot,
   mergedProfileBundles,
-  packageVersion,
   resolveWorkspace,
   workspaceManifest,
+  type ResolvedWorkspaceManifest,
 } from "./workspace.ts";
 
 const APP_ROOT = resolve(import.meta.dirname, "..", "..");
-
-interface PackageManifest {
-  readonly name?: string;
-  readonly version?: string;
-}
 
 function debugPort(name: string, fallback: number): number {
   const value = process.env[name];
@@ -62,14 +67,28 @@ function debugPort(name: string, fallback: number): number {
   return port;
 }
 
-/** Resolve a tool dependency's package directory (workspace link or registry install). */
-function dependencyDir(packageName: string): string {
-  return dirname(fileURLToPath(import.meta.resolve(`${packageName}/package.json`)));
+/** Official resolution context for one workspace (app first, then the tool). */
+function officialInput(
+  workspace: string,
+  workspaceRoot: string,
+  manifest: ResolvedWorkspaceManifest,
+): OfficialResolutionInput {
+  const dshVersion = readDshVersion(manifest);
+  return {
+    workspace,
+    workspaceRoot,
+    toolRoot: APP_ROOT,
+    ...(dshVersion === undefined ? {} : { dshVersion }),
+  };
 }
 
 /** The dsh CLI entry the profile boot and web server run from. */
-function cliEntry(): string {
-  return join(dependencyDir("@deepseek-ai/dsh"), "lib", "bin.js");
+function cliEntry(input: OfficialResolutionInput): string {
+  const dsh = resolveOfficialPackage(DSH_PACKAGE, input);
+  if (dsh === undefined) {
+    throw new Error(`desktop development: cannot resolve ${DSH_PACKAGE}`);
+  }
+  return join(dsh.dir, "lib", "bin.js");
 }
 
 async function run(
@@ -110,61 +129,75 @@ function removeOwnedPath(path: string): void {
   unlinkSync(path);
 }
 
-function linkDirectory(source: string, destination: string): void {
+function linkDirectory(source: string, destination: string, skipExisting = false): void {
+  if (skipExisting) {
+    try {
+      lstatSync(destination);
+      return;
+    } catch {
+      // Missing: link it.
+    }
+  }
   mkdirSync(dirname(destination), { recursive: true });
   symlinkSync(realpathSync(source), destination, process.platform === "win32" ? "junction" : "dir");
 }
 
-/** Mirror the workspace virtual-hoist directory into the disposable project. */
-function mirrorDependencyLinks(sourceRoot: string, destinationRoot: string): void {
+/** Mirror one dependency directory (virtual store or hoisted node_modules). */
+function mirrorDependencyLinks(
+  sourceRoot: string,
+  destinationRoot: string,
+  skipExisting = false,
+): void {
   for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
-    if (entry.name === ".bin") continue;
+    // 跳过安装簿记（.bin / .pnpm / .modules.yaml 等）。
+    if (entry.name.startsWith(".")) continue;
     const source = join(sourceRoot, entry.name);
     if (entry.name.startsWith("@") && (entry.isDirectory() || entry.isSymbolicLink())) {
       mkdirSync(join(destinationRoot, entry.name), { recursive: true });
       for (const scoped of readdirSync(source, { withFileTypes: true })) {
         if (!scoped.isDirectory() && !scoped.isSymbolicLink()) continue;
-        linkDirectory(join(source, scoped.name), join(destinationRoot, entry.name, scoped.name));
+        linkDirectory(
+          join(source, scoped.name),
+          join(destinationRoot, entry.name, scoped.name),
+          skipExisting,
+        );
       }
       continue;
     }
     if (entry.isDirectory() || entry.isSymbolicLink())
-      linkDirectory(source, join(destinationRoot, entry.name));
+      linkDirectory(source, join(destinationRoot, entry.name), skipExisting);
   }
 }
 
 /** Replace the disposable project with links to the current built workspace. */
 function prepareDevelopmentProject(
   projectDir: string,
-  repositoryRoot: string,
   workspace: string,
+  input: OfficialResolutionInput,
 ): string {
-  const cliDir = dependencyDir("@deepseek-ai/dsh");
-  const hostDir = dependencyDir("@deepseek-ai/dsh-desktop-host");
-  const workspaceDependencyDir = join(repositoryRoot, "node_modules", ".pnpm", "node_modules");
   const manifest = workspaceManifest(workspace);
-  const cliManifest = JSON.parse(
-    readFileSync(join(cliDir, "package.json"), "utf8"),
-  ) as PackageManifest;
-  if (cliManifest.name !== "@deepseek-ai/dsh") {
-    throw new Error(
-      `desktop development: resolved @deepseek-ai/dsh must be the CLI package, found ${String(cliManifest.name)}`,
-    );
-  }
+  const dsh = resolveOfficialPackage(DSH_PACKAGE, input);
+  const host = resolveOfficialPackage(DESKTOP_HOST_PACKAGE, input);
+  if (dsh === undefined) throw new Error(`desktop development: cannot resolve ${DSH_PACKAGE}`);
+  if (host === undefined)
+    throw new Error(`desktop development: cannot resolve ${DESKTOP_HOST_PACKAGE}`);
+  // 工作区闭包：优先 pnpm 虚拟存储（isolated 布局），否则回退到工作区自己的
+  // node_modules（hoisted 布局，独立项目）。
+  const virtualStore = join(input.workspaceRoot, "node_modules", ".pnpm", "node_modules");
+  const workspaceDependencyDir = existsSync(virtualStore)
+    ? virtualStore
+    : join(workspace, "node_modules");
   if (!existsSync(workspaceDependencyDir)) {
     throw new Error(
-      "desktop development: workspace dependency links are missing; run pnpm install",
+      `desktop development: workspace dependency links are missing under ${workspaceDependencyDir}; run pnpm install`,
     );
   }
-  if (!existsSync(join(hostDir, "lib", "index.js"))) {
+  if (!existsSync(join(host.dir, "lib", "index.js"))) {
     throw new Error(
-      "desktop development: vendor apps/desktop-host/lib/index.js is missing; run the vendor build",
+      `desktop development: ${DESKTOP_HOST_PACKAGE} is not built (${join(host.dir, "lib", "index.js")} is missing)`,
     );
   }
-  const officialDependencies: Record<string, string> = {
-    "@deepseek-ai/dsh": cliManifest.version ?? "",
-    "@deepseek-ai/dsh-desktop-host": packageVersion(join(hostDir, "package.json"), "desktop host"),
-  };
+  const officialDependencies = officialDependencySpecs(input);
   removeOwnedPath(projectDir);
   mkdirSync(projectDir, { recursive: true });
   writeFileSync(
@@ -188,12 +221,17 @@ function prepareDevelopmentProject(
   const destinationModules = join(projectDir, "node_modules");
   mkdirSync(destinationModules, { recursive: true });
   mirrorDependencyLinks(workspaceDependencyDir, destinationModules);
+  // 独立项目可能只声明 dsh.version 而未装官方包：用工具自身的官方树补齐。
+  const toolStore = toolModulesDir(input);
+  if (toolStore !== undefined && resolve(toolStore) !== resolve(workspaceDependencyDir)) {
+    mirrorDependencyLinks(toolStore, destinationModules, true);
+  }
   const dshLink = join(destinationModules, "@deepseek-ai", "dsh");
   removeOwnedPath(dshLink);
-  linkDirectory(cliDir, dshLink);
+  linkDirectory(dsh.dir, dshLink);
   const hostLink = join(destinationModules, "@deepseek-ai", "dsh-desktop-host");
   removeOwnedPath(hostLink);
-  linkDirectory(hostDir, hostLink);
+  linkDirectory(host.dir, hostLink);
   return projectDir;
 }
 
@@ -204,10 +242,13 @@ function prepareDevelopmentProject(
  * initializes the profile with the official bundles and reconciles the
  * bundle list). Returns the profile directory.
  */
-async function prepareWebProfile(workspace: string): Promise<string> {
+async function prepareWebProfile(
+  workspace: string,
+  input: OfficialResolutionInput,
+): Promise<string> {
   const manifest = workspaceManifest(workspace);
   const home = join(workspace, ".dsh-store");
-  const entry = cliEntry();
+  const entry = cliEntry(input);
   if (!existsSync(entry)) {
     throw new Error(`desktop development: missing built artifact ${entry}`);
   }
@@ -236,7 +277,11 @@ function resolveLinkTarget(workspace: string, packageName: string): string {
   return boundary < 0 ? dirname(dirname(resolved)) : resolved.slice(0, boundary);
 }
 
-async function launchElectron(projectDir: string, buildRootDir: string): Promise<void> {
+async function launchElectron(
+  projectDir: string,
+  buildRootDir: string,
+  tsxImport: boolean,
+): Promise<void> {
   const require = createRequire(import.meta.url);
   const electron: unknown = require("electron");
   if (typeof electron !== "string")
@@ -258,6 +303,8 @@ async function launchElectron(projectDir: string, buildRootDir: string): Promise
     DSH_DESKTOP_DEV_PROJECT_DIR: projectDir,
     DSH_DESKTOP_HOST_INSPECT_PORT: String(hostPort),
     DSH_DESKTOP_NODE_BINARY: systemNode,
+    // 壳据此决定是否为 host 加 `--import=tsx/esm`：工作区没有 tsx 时留空。
+    DSH_DESKTOP_TSX_IMPORT: tsxImport ? "tsx/esm" : "",
     DSH_DESKTOP_OPEN_DEVTOOLS: process.env.DSH_DESKTOP_OPEN_DEVTOOLS ?? "1",
     ELECTRON_ENABLE_LOGGING: process.env.ELECTRON_ENABLE_LOGGING ?? "1",
   };
@@ -289,6 +336,7 @@ export async function runDev(options: DevOptions): Promise<void> {
   const workspace = resolve(options.workspace ?? resolveWorkspace());
   const repositoryRoot = findWorkspaceRoot(workspace);
   const manifest = workspaceManifest(workspace);
+  const input = officialInput(workspace, repositoryRoot, manifest);
   const buildRootDir = buildRoot(workspace);
   if (!options.skipBuild) {
     await buildShell();
@@ -297,32 +345,35 @@ export async function runDev(options: DevOptions): Promise<void> {
     // web 模式：DSH_HOME 用 {workspace}/.dsh-store，依赖经
     // `dsh plugin --profile web add <pkg>@link:<path>` 装入 profile。
     const home = join(workspace, ".dsh-store");
-    const profileDir = await prepareWebProfile(workspace);
+    const profileDir = await prepareWebProfile(workspace, input);
     const port = process.env.PORT ?? "3080";
-    const entry = cliEntry();
+    const entry = cliEntry(input);
     if (!existsSync(entry)) {
       throw new Error(`desktop development: missing built artifact ${entry}`);
     }
     console.log(
       `desktop development: web mode DSH_HOME=${home} profile=${profileDir} port=${port}`,
     );
+    // 工作区没有 tsx 时不注入 loader：morlay 插件已是 dist 产物，强制
+    // `--import=tsx/esm` 会因解析失败而直接崩。
+    const tsx = hasTsx(workspace, repositoryRoot);
+    const nodeOptions = tsx
+      ? [process.env.NODE_OPTIONS, "--import=tsx/esm"].filter(Boolean).join(" ")
+      : process.env.NODE_OPTIONS;
     await run(process.execPath, [entry, "web", "--port", port], repositoryRoot, {
       ...process.env,
       DSH_HOME: home,
-      NODE_OPTIONS: "--import=tsx/esm",
+      ...(nodeOptions === undefined ? {} : { NODE_OPTIONS: nodeOptions }),
     });
     return;
   }
-  for (const path of [
-    SHELL_ENTRY,
-    join(dependencyDir("@deepseek-ai/dsh-desktop-host"), "lib", "index.js"),
-  ]) {
-    if (!existsSync(path)) throw new Error(`desktop development: missing built artifact ${path}`);
+  if (!existsSync(SHELL_ENTRY)) {
+    throw new Error(`desktop development: missing built artifact ${SHELL_ENTRY}`);
   }
   const projectDir = prepareDevelopmentProject(
     join(buildRootDir, "development", "project"),
-    repositoryRoot,
     workspace,
+    input,
   );
   // 开发模式也携带 appconfig.json（窗口几何来自工作区 dsh.desktop.window）；
   // dshHome 固定 env——host 继承本脚本显式设置的 DSH_HOME（buildRoot 内）。
@@ -336,5 +387,6 @@ export async function runDev(options: DevOptions): Promise<void> {
     window: desktop.window,
     profile: PROFILE_NAME,
   });
-  await launchElectron(projectDir, buildRootDir);
+  // host 的 cwd 是 dev 项目；tsx 是否可用以项目内解析为准。
+  await launchElectron(projectDir, buildRootDir, hasTsx(projectDir, projectDir));
 }

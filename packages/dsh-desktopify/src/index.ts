@@ -155,6 +155,16 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
   return port;
 }
 
+/**
+ * Development host Node arguments. The launcher sets `DSH_DESKTOP_TSX_IMPORT`
+ * only when the workspace actually has tsx installed, so a workspace without
+ * it never receives a loader it cannot resolve.
+ */
+function developmentNodeArgs(): string[] {
+  const specifier = process.env.DSH_DESKTOP_TSX_IMPORT;
+  return specifier === undefined || specifier === "" ? [] : [`--import=${specifier}`];
+}
+
 async function main(): Promise<void> {
   const development = developmentProject();
   const config: AppConfig =
@@ -210,7 +220,7 @@ async function main(): Promise<void> {
 
   const startHost = async (projectDir = activeProject): Promise<DesktopHostProcess> => {
     const next = new DesktopHostProcess(resources.node, projectDir, hostInspectPort, {
-      nodeArgs: development === undefined ? [] : ["--import=tsx/esm"],
+      nodeArgs: development === undefined ? [] : developmentNodeArgs(),
       // 显式设置 DSH_HOME：用户 shell 环境可能残留旧应用的 DSH_HOME
       // export，host 经 shell 注入启动时会继承它，导致数据落到错误目录。
       extraEnv: {
