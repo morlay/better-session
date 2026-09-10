@@ -70,7 +70,9 @@ export function eventKind(event: { type: string; data?: unknown }): EventKind | 
       return "turn";
     case "tool/call":
     case "tool/result":
-    case "tool/code-dispatch-start":
+    case "tool/ptc-dispatch-start":
+    case "tool/ptc-dispatch":
+    case "tool/code-dispatch-start": // v2 旧名（读路径归一为 ptc）
     case "tool/code-dispatch":
       return "tool";
     case "request/header":
@@ -158,7 +160,9 @@ export function eventDimensions(event: SessionEvent): {
         name: typeof data["name"] === "string" ? data["name"] : "",
         actionId: typeof data["callId"] === "string" ? data["callId"] : "",
       };
-    case "tool/code-dispatch-start":
+    case "tool/ptc-dispatch-start":
+    case "tool/ptc-dispatch":
+    case "tool/code-dispatch-start": // v2 旧名（读路径归一为 ptc）
     case "tool/code-dispatch":
       return {
         kind,
