@@ -107,7 +107,7 @@ async function prepareNode(
   rmSync(extraction, { recursive: true, force: true });
 }
 
-/** Options for the `prepare:runtime` command. */
+/** Options for the bundled-runtime preparation step of `bundle`. */
 export interface PrepareRuntimeOptions {
   readonly workspace?: string;
 }

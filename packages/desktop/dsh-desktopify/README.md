@@ -9,15 +9,13 @@
 
 | 命令                                                    | 作用                                                           |
 | ------------------------------------------------------- | -------------------------------------------------------------- |
-| `dsh-desktopify dev [--web] [--skip-build] [workspace]` | 启动 Electron 壳（不打包）；`--web` 改为在浏览器里跑 `dsh web` |
+| `dsh-desktopify dev [--web] [workspace]`                | 启动 Electron 壳（不打包）；`--web` 改为在浏览器里跑 `dsh web` |
 | `dsh-desktopify bundle [--dir] [--install] [workspace]` | 构建当前平台的静态、无签名桌面应用                             |
-| `dsh-desktopify build`                                  | 壳产物检查（源码形态的壳构建由 `pnpm build` 负责）             |
-| `dsh-desktopify prepare:runtime [workspace]`            | 下载并校验随包 Node.js 运行时                                  |
-| `dsh-desktopify prepare:seed [workspace]`               | 生成打包用 profile 种子                                        |
 
 工作区取首个位置参数（缺省当前目录），CLI 会把它写进
 `DSH_DESKTOP_WORKSPACE`；工具内不写死任何 app 路径或名字。壳产物由
-`pnpm build` 生成，dev / bundle 不重建（`--skip-build` 因此无实际作用）。
+`pnpm build` 生成，dev / bundle 只校验它在，不重建。随包 Node.js 运行时的
+下载校验与 profile 种子生成是 `bundle` 的内部步骤，不单独暴露命令。
 本仓库示例工作区：`just custom desktop`（dev）/ `just custom bundle`（打包）。
 
 ## 结构
@@ -41,14 +39,16 @@
   boot 逻辑。上游 `@deepseek-ai/dsh-desktop-host` 是 `private` 包、不发布，
   所以 `tsdown.config.ts` 构建时把它的 `lib/index.js` +
   `config/desktop.cordis.patch.yml` + manifest `copy` 进 `dist/desktop-host`，
-  运行时从这里装配；`package.json` 不再依赖该私有包，可正常发布。
+  并以 `@morlay/dsh-desktopify/desktop-host` 子路径导出声明入口（来源位置经
+  `import.meta.resolve` 解析，产物位置经包解析定位，都不写死目录）；运行时
+  从这里装配，发布形态不依赖该私有包，可正常发布。
 - **官方依赖内部维护**：`@deepseek-ai/*` 依赖清单（dsh、dsh-desktop-host、
   cordis-plugin-group 及约 20 个 peer 包）由工具内部维护
   （`src/official.ts`），app 只声明自己的依赖、`dsh.version` 与 bundles。
-  官方依赖 spec 由工具按 `dsh.version` + 已安装包解析
-  （`src/cli/official-deps.ts`）：app 工作区优先，工具自身安装兜底，不写死
-  `workspace:`，仓库外的独立项目同样可装配；desktop-host 用工具自带的产物
-  （同一 workspace 用 `link:`，独立项目暂存后 `file:`）。
+  包位置一律由 node 解析（`src/cli/official-deps.ts`）：app 工作区优先、
+  工具自身安装兜底，不写死 `workspace:`；装配时从官方根（dsh、自带 host、
+  peer 白名单）遍历依赖图，把整棵官方闭包补进部署产物，工作区的清单与
+  lockfile 始终只读。
 - **bundles 自动合并**：官方 bundles（`@deepseek-ai/dsh-base`、
   `@deepseek-ai/dsh-web-app`）+ app 的 `dsh.profile.bundles` 自动合并进 dev
   项目与种子 profile。
@@ -82,7 +82,8 @@
 
 `dsh.version` 是 `@deepseek-ai/dsh` 的依赖 spec：仓库内项目可配
 `workspace:^`（从 vendor 源码解析），仓库外项目配具体版本（从 registry 安装）；
-缺省时回退到工作区已解析的 dsh 版本。
+缺省时回退到工作区已解析的 dsh 版本。配 `workspace:` 时工具不把它落成版本号
+（本地源码可能尚未发布），而是指向解析到的包目录。
 
 ## 运行流程
 
@@ -91,12 +92,13 @@
   工作区装有 tsx 时才加 `--import=tsx/esm`（否则不注入 loader），
   `--allow-linked-profile` 放行工作区链接；`--web` 则准备 `web` profile 后
   启动 `dsh web`。
-- **bundle**：`pnpm deploy --prod` 导出工作区闭包 → 种子
-  （`dsh-home/profiles/desktop` + `.seed-hash` 指纹）→ 下载校验 Node 二进制
-  （`prepare:runtime`）→ electron-builder 静态打包。指纹覆盖 app 工作区白名单、
-  根 lockfile，以及闭包内每个本地源码包的产物内容（本地源码依赖的版本号
-  不变、内容也可能变），指纹变化时壳在启动时替换 profile。闭包内 `@morlay/*`
-  的 exports 切到 publishConfig 的 dist 产物（打包环境没有 tsx）。
+- **bundle**：`pnpm deploy --prod` 导出 app 闭包（工作区清单与 lockfile 只读）
+  → 工具按 node 解析补入官方闭包 → 种子（`dsh-home/profiles/desktop` +
+  `.seed-hash` 指纹）→ 下载校验随包 Node 二进制 → electron-builder 静态打包。
+  指纹覆盖 app 工作区白名单、根 lockfile，以及闭包内每个本地源码包的产物内容
+  （本地源码依赖的版本号不变、内容也可能变），指纹变化时壳在启动时替换
+  profile。闭包内 `@morlay/*` 的 exports 切到 publishConfig 的 dist 产物
+  （打包环境没有 tsx）。
 
 ## 运行时语义
 
@@ -124,16 +126,16 @@
 | `DSH_DESKTOP_HOST_INSPECT_PORT`   | host 调试端口（默认 9230）                         |
 | `DSH_DESKTOP_MAIN_INSPECT_PORT`   | 主进程调试端口（默认 9229）                        |
 | `DSH_DESKTOP_RENDERER_DEBUG_PORT` | 渲染进程调试端口（默认 9222）                      |
-| `DSH_DESKTOP_TARGET_PLATFORM`     | `prepare:runtime` 目标平台（默认当前平台）         |
-| `DSH_DESKTOP_TARGET_ARCH`         | `prepare:runtime` 目标架构（默认当前架构）         |
+| `DSH_DESKTOP_TARGET_PLATFORM`     | bundle 随包 Node 的目标平台（默认当前平台）        |
+| `DSH_DESKTOP_TARGET_ARCH`         | bundle 随包 Node 的目标架构（默认当前架构）        |
 | `DSH_DESKTOP_DIAGNOSTIC_FILE`     | 壳启动失败时把错误栈写入该文件                     |
 | `DSH_APP_DSH_HOME`                | 覆盖运行时 `DSH_HOME`（优先于 `dshHome` 配置）     |
 
 ## 前置条件
 
 - pnpm workspace（dev 依赖 `findWorkspaceRoot` 装配临时项目；bundle 依赖
-  `pnpm deploy`）。
+  `pnpm deploy` 导出 app 闭包，工具不改写工作区清单 / lockfile）。
 - `vendor/deepseek-harness` 已构建（`just vendor prepare`：dev 需要 dsh CLI，
-  工具构建需要 desktop-host 的 `lib/` 产物来 stage 进 `dist/desktop-host`）。
+  工具构建需要 desktop-host 的 `lib/` 产物来打进 `dist/desktop-host`）。
 - 工具自身已构建（`pnpm build`）：dev / bundle 用 `dist/desktop-host` 里的
   后端产物。

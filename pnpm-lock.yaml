@@ -154,6 +154,12 @@ importers:
 
   apps/dsh-custom-next:
     dependencies:
+      '@deepseek-ai/dsh-experimental-agent-team-profile':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/experimental/agent-team-profile
+      '@deepseek-ai/dsh-experimental-agent-team-web-profile':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/packages/experimental/agent-team-web-profile
       '@morlay/better-session':
         specifier: workspace:^
         version: link:../../packages/session/better-session
@@ -203,6 +209,9 @@ importers:
         specifier: 0.22.x
         version: 0.22.14(tsx@4.23.13)(typescript@7.0.2)
     devDependencies:
+      '@deepseek-ai/dsh-desktop-host':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/apps/desktop-host
       '@types/node':
         specifier: ^26.5.0
         version: 26.5.1

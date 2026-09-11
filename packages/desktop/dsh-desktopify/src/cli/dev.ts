@@ -187,7 +187,7 @@ function prepareDevelopmentProject(
 ): string {
   const manifest = workspaceManifest(workspace);
   const dsh = resolveOfficialPackage(DSH_PACKAGE, input);
-  const host = desktopHost(input);
+  const host = desktopHost();
   if (dsh === undefined) throw new Error(`desktop development: cannot resolve ${DSH_PACKAGE}`);
   if (host === undefined) {
     throw new Error(
@@ -363,7 +363,6 @@ async function launchElectron(
 export interface DevOptions {
   readonly workspace?: string;
   readonly web: boolean;
-  readonly skipBuild: boolean;
 }
 
 export async function runDev(options: DevOptions): Promise<void> {
@@ -372,9 +371,7 @@ export async function runDev(options: DevOptions): Promise<void> {
   const manifest = workspaceManifest(workspace);
   const input = officialInput(workspace, repositoryRoot, manifest);
   const buildRootDir = buildRoot(workspace);
-  if (!options.skipBuild) {
-    await buildShell();
-  }
+  await buildShell();
   if (options.web) {
     // web 模式：DSH_HOME 用 {workspace}/.dsh-store，依赖经
     // `dsh plugin --profile web add <pkg>@link:<path>` 装入 profile。

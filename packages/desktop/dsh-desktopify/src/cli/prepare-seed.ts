@@ -13,13 +13,14 @@
  * (`@morlay/*`, vendored `@deepseek-ai/*`), so their sources can change while
  * every version string stays the same.
  *
- * The official `@deepseek-ai/*` dependency surface is maintained by the tool:
- * the official packages are injected into the workspace manifest before
- * deploy (and removed afterwards), so the deploy closure carries the
- * complete official tree (dsh, dsh-base, dsh-web-app, the peer packages).
- * The closure is then flattened with pnpm's `nodeLinker: hoisted` — a
- * traditional node_modules layout with every package at the top level, no
- * virtual store, no external links — so the seed is fully self-contained.
+ * The app's manifest and the root lockfile are never rewritten: `pnpm deploy`
+ * runs against the workspace as declared, and the official `@deepseek-ai/*`
+ * surface (dsh, the bundled desktop host, the peer whitelist, and everything
+ * they reach) is located by node resolution and copied into the deployed
+ * closure afterwards. The closure is then flattened with pnpm's
+ * `nodeLinker: hoisted` — a traditional node_modules layout with every package
+ * at the top level, no virtual store, no external links — so the seed is fully
+ * self-contained.
  */
 
 import { spawn } from "node:child_process";
@@ -39,10 +40,9 @@ import { dirname, join, resolve } from "node:path";
 import { SEED_HASH_NAME } from "../seed.ts";
 import { materializeAgentPresets } from "./agent-presets.ts";
 import {
-  DESKTOP_HOST_PACKAGE,
+  closurePackageDirs,
+  materializeOfficialClosure,
   missingOfficialPackages,
-  officialDependencySpecs,
-  stageDesktopHost,
   type OfficialResolutionInput,
 } from "./official-deps.ts";
 import {
@@ -75,13 +75,13 @@ function runPnpm(args: readonly string[], cwd: string): Promise<void> {
 
 /**
  * Export the workspace production closure into the deploy staging directory.
- * The official packages are injected into the workspace manifest (specs
- * derived from `dsh.version` and the installed packages, never a hardcoded
- * `workspace:` protocol) and the root lockfile is refreshed
- * (`--lockfile-only`) so the deploy resolves them; both are restored
- * afterwards. The deploy closure is then flattened: `nodeLinker: hoisted`
- * reinstalls it as a traditional node_modules layout (every package at the
- * top level, no virtual store, no external links).
+ * The workspace manifest and the root lockfile are read, never written: the
+ * deploy runs against the app as declared, and the official packages are
+ * materialized into the deployed closure afterwards (`materializeOfficialClosure`),
+ * located by node resolution instead of a rewritten dependency list. The
+ * closure is then flattened: `nodeLinker: hoisted` reinstalls it as a
+ * traditional node_modules layout (every package at the top level, no virtual
+ * store, no external links).
  */
 async function deployClosure(
   workspace: string,
@@ -90,56 +90,43 @@ async function deployClosure(
   input: OfficialResolutionInput,
 ): Promise<void> {
   const root = findWorkspaceRoot(workspace);
-  const manifestPath = join(workspace, "package.json");
-  const lockfilePath = join(root, "pnpm-lock.yaml");
-  const originalManifest = readFileSync(manifestPath, "utf8");
-  const originalLockfile = readFileSync(lockfilePath, "utf8");
-  const manifest = JSON.parse(originalManifest) as { dependencies?: Record<string, string> };
-  const specs = officialDependencySpecs(input);
-  specs[DESKTOP_HOST_PACKAGE] = stageDesktopHost(input, specs);
-  const dependencies = { ...manifest.dependencies, ...specs };
-  writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, dependencies }, undefined, 2)}\n`);
-  try {
-    await runPnpm(["install", "--lockfile-only"], root);
-    rmSync(destination, { recursive: true, force: true });
-    mkdirSync(destination, { recursive: true });
-    const args = root !== resolve(workspace) ? ["--filter", name] : [];
-    await runPnpm([...args, "deploy", "--prod", "--ignore-scripts", destination], root);
-    if (!existsSync(join(destination, "node_modules"))) {
-      throw new Error(
-        `desktop seed: pnpm deploy did not produce ${join(destination, "node_modules")}`,
-      );
-    }
-    // 拍平：deploy 产物是 pnpm isolated 布局（.pnpm 虚拟存储 + 链接），
-    // 目标内以 hoisted 布局重装成传统 node_modules——每个包一个顶层真实
-    // 目录、无虚拟存储、无外部链接，种子完全自包含。
-    const workspaceFile = join(destination, "pnpm-workspace.yaml");
-    if (existsSync(workspaceFile)) {
-      const raw = readFileSync(workspaceFile, "utf8");
-      let content = raw.replaceAll(": set this to true or false", ": true");
-      if (!content.includes("minimumReleaseAge"))
-        content = `${content.trimEnd()}\nminimumReleaseAge: 0\n`;
-      if (!content.includes("nodeLinker")) content = `${content.trimEnd()}\nnodeLinker: hoisted\n`;
-      writeFileSync(workspaceFile, content);
-    }
-    await runPnpm(["install", "--no-frozen-lockfile", "--ignore-scripts"], destination);
-    // deploy 不装 peerDependencies：上游新增 peer 包只会在运行期炸开，
-    // 这里提前失败并指名要补的白名单项。
-    const missing = missingOfficialPackages(join(destination, "node_modules"));
-    if (missing.size > 0) {
-      const detail = [...missing]
-        .map(([name, requiredBy]) => `${name} (required by ${requiredBy.join(", ")})`)
-        .join("; ");
-      throw new Error(
-        `desktop seed: deployed closure is missing official packages: ${detail}; ` +
-          "add them to OFFICIAL_PEER_PACKAGES (packages/desktop/dsh-desktopify/src/official.ts)",
-      );
-    }
-  } finally {
-    writeFileSync(manifestPath, originalManifest);
-    writeFileSync(lockfilePath, originalLockfile);
-    // 工作区外的 desktop-host 副本只在 deploy 期间需要。
-    rmSync(join(workspace, ".dsh-desktopify-host"), { recursive: true, force: true });
+  rmSync(destination, { recursive: true, force: true });
+  mkdirSync(destination, { recursive: true });
+  const args = root !== resolve(workspace) ? ["--filter", name] : [];
+  await runPnpm([...args, "deploy", "--prod", "--ignore-scripts", destination], root);
+  const modulesDir = join(destination, "node_modules");
+  if (!existsSync(modulesDir)) {
+    throw new Error(`desktop seed: pnpm deploy did not produce ${modulesDir}`);
+  }
+  // 拍平：deploy 产物是 pnpm isolated 布局（.pnpm 虚拟存储 + 链接），
+  // 目标内以 hoisted 布局重装成传统 node_modules——每个包一个顶层真实
+  // 目录、无虚拟存储、无外部链接，种子完全自包含。
+  const workspaceFile = join(destination, "pnpm-workspace.yaml");
+  if (existsSync(workspaceFile)) {
+    const raw = readFileSync(workspaceFile, "utf8");
+    let content = raw.replaceAll(": set this to true or false", ": true");
+    if (!content.includes("minimumReleaseAge"))
+      content = `${content.trimEnd()}\nminimumReleaseAge: 0\n`;
+    if (!content.includes("nodeLinker")) content = `${content.trimEnd()}\nnodeLinker: hoisted\n`;
+    writeFileSync(workspaceFile, content);
+  }
+  await runPnpm(["install", "--no-frozen-lockfile", "--ignore-scripts"], destination);
+  // 官方闭包：deploy 只带 app 声明的依赖，官方包（dsh、自带 host、peer
+  // 白名单及其依赖树）由工具按包解析补进闭包顶层；已装的（app 自己的依赖
+  // 树）优先，冲突时保留 pnpm 的解析结果。
+  const copied = materializeOfficialClosure(modulesDir, input);
+  console.log(`desktop seed: materialized ${String(copied.length)} official packages`);
+  // deploy 不装 peerDependencies：上游新增 peer 包只会在运行期炸开，
+  // 这里提前失败并指名要补的白名单项。
+  const missing = missingOfficialPackages(modulesDir);
+  if (missing.size > 0) {
+    const detail = [...missing]
+      .map(([packageName, requiredBy]) => `${packageName} (required by ${requiredBy.join(", ")})`)
+      .join("; ");
+    throw new Error(
+      `desktop seed: deployed closure is missing official packages: ${detail}; ` +
+        "add them to OFFICIAL_PEER_PACKAGES (packages/desktop/dsh-desktopify/src/official.ts)",
+    );
   }
 }
 
@@ -227,23 +214,6 @@ function localPackageDirs(root: string): Map<string, string> {
   return found;
 }
 
-/** Top-level package names of a flattened (hoisted) closure. */
-function closurePackageNames(modulesDir: string): string[] {
-  const names: string[] = [];
-  for (const entry of readdirSync(modulesDir, { withFileTypes: true })) {
-    if (entry.name.startsWith(".") || TREE_SKIP_DIRS.has(entry.name)) continue;
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-    if (entry.name.startsWith("@")) {
-      for (const scoped of readdirSync(join(modulesDir, entry.name)).sort()) {
-        if (!scoped.startsWith(".")) names.push(`${entry.name}/${scoped}`);
-      }
-      continue;
-    }
-    names.push(entry.name);
-  }
-  return names.sort();
-}
-
 /**
  * Seed fingerprint: whitelisted workspace content, the root lockfile (the
  * resolved dependency graph), and the closure content of every local source
@@ -267,7 +237,7 @@ export function seedFingerprint(input: {
   }
   hash.update("local-closure\0");
   const local = localPackageDirs(input.workspaceRoot);
-  for (const name of closurePackageNames(input.closureModulesDir)) {
+  for (const name of closurePackageDirs(input.closureModulesDir).keys()) {
     if (!local.has(name)) continue;
     hash.update(`${name}\0`);
     hashPath(hash, input.closureModulesDir, name);
@@ -275,7 +245,7 @@ export function seedFingerprint(input: {
   return hash.digest("hex");
 }
 
-/** Options for the `prepare:seed` command. */
+/** Options for the profile-seed preparation step of `bundle`. */
 export interface PrepareSeedOptions {
   readonly workspace?: string;
 }
@@ -351,14 +321,13 @@ export async function runPrepareSeed(options: PrepareSeedOptions): Promise<void>
 
 /**
  * Rewrite `@morlay/*` package exports to their published dist form. The
- * flattened closure has every package at the top level.
+ * flattened closure has every package at the top level; a package that only
+ * lives in the virtual store is rewritten in place.
  */
 function switchToPublishedExports(modulesDir: string): void {
-  const scoped = join(modulesDir, "@morlay");
-  if (!existsSync(scoped)) return;
-  for (const entry of readdirSync(scoped, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const manifestPath = join(scoped, entry.name, "package.json");
+  for (const [name, dir] of closurePackageDirs(modulesDir)) {
+    if (!name.startsWith("@morlay/")) continue;
+    const manifestPath = join(dir, "package.json");
     if (!existsSync(manifestPath)) continue;
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
       publishConfig?: { exports?: Record<string, string> };

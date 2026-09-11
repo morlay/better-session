@@ -10,7 +10,7 @@ dev: preset-build
     pnpm exec dsh-desktopify dev --web
 
 # desktop 模式：Electron 壳 + 链接工作区（TS 源码直载，无需构建 morlay 包）。
-desktop *args="--skip-build": preset-build
+desktop *args: preset-build
     pnpm exec dsh-desktopify dev {{ args }}
 
 # 打包为静态桌面应用（--dir 产物，无签名）。

@@ -26,7 +26,8 @@
   "module": "./dist/index.mjs",
   "exports": {
     ".": "./src/index.ts",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./desktop-host": "./dist/desktop-host/lib/index.js"
   },
   "publishConfig": {
     "bin": {
@@ -34,7 +35,8 @@
     },
     "exports": {
       ".": "./dist/index.mjs",
-      "./package.json": "./package.json"
+      "./package.json": "./package.json",
+      "./desktop-host": "./dist/desktop-host/lib/index.js"
     }
   },
   "scripts": {
@@ -52,6 +54,7 @@
     "tsdown": "0.22.x"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-desktop-host": "workspace:^",
     "@types/node": "^26.5.0"
   },
   "engines": {

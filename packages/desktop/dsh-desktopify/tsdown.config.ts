@@ -1,10 +1,15 @@
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "tsdown";
 
 const BIN_NAME = "dsh-desktopify";
 const CLI_ENTRY = "./src/cli/index.ts";
 // 上游 desktop-host 是 private 包、不发布：构建时把它的产物一起打进 dist，
-// 工具运行时用自带副本，package.json 不再依赖该私有包。
-const VENDOR_HOST = "../../../vendor/deepseek-harness/apps/desktop-host";
+// 工具运行时用自带副本，发布形态不依赖该私有包。位置由 node 解析（包名 →
+// devDependency 指向的 workspace 源码目录），不写死仓库目录布局。
+const HOST_DIR = dirname(
+  fileURLToPath(import.meta.resolve("@deepseek-ai/dsh-desktop-host/package.json")),
+);
 
 export default defineConfig([
   {
@@ -18,12 +23,12 @@ export default defineConfig([
     clean: true,
     deps: { neverBundle: ["electron"] },
     copy: [
-      { from: `${VENDOR_HOST}/lib/index.js`, to: "dist/desktop-host/lib" },
+      { from: `${HOST_DIR}/lib/index.js`, to: "dist/desktop-host/lib" },
       {
-        from: `${VENDOR_HOST}/config/desktop.cordis.patch.yml`,
+        from: `${HOST_DIR}/config/desktop.cordis.patch.yml`,
         to: "dist/desktop-host/config",
       },
-      { from: `${VENDOR_HOST}/package.json`, to: "dist/desktop-host" },
+      { from: `${HOST_DIR}/package.json`, to: "dist/desktop-host" },
     ],
     exports: {
       packageJson: true,
@@ -31,6 +36,11 @@ export default defineConfig([
       legacy: true,
       exclude: ["cli/index"],
       bin: { [BIN_NAME]: CLI_ENTRY },
+      // 上游 desktop-host 是 private 包，产物随工具发布：用子路径导出声明它的
+      // 入口，运行期按包名解析定位（见 official-deps.ts），不写死 dist 内部路径。
+      customExports: {
+        "./desktop-host": "./dist/desktop-host/lib/index.js",
+      },
     },
   },
   {
