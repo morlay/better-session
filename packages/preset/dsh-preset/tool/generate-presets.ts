@@ -95,6 +95,7 @@ export function renderComposition(source: string, upstream: string): string {
         "upstream changed — re-check how this preset declares its persona",
     );
   }
+
   persona.config.prefix = PERSONA_PREFIX;
   // `quotingType: '"'` 是刻意选择：yaml.dump 默认用单引号，而仓库的 oxfmt 会把
   // YAML 单引号改成双引号——不显式指定就会 fmt 与生成器来回改。指定后产物与

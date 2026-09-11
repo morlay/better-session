@@ -160,7 +160,7 @@ function mirrorDependencyLinks(
       mkdirSync(join(destinationRoot, entry.name), { recursive: true });
       for (const scoped of readdirSync(source, { withFileTypes: true })) {
         if (!scoped.isDirectory() && !scoped.isSymbolicLink()) continue;
-        linkDirectory(
+        mirrorOneLink(
           join(source, scoped.name),
           join(destinationRoot, entry.name, scoped.name),
           skipExisting,
@@ -169,8 +169,14 @@ function mirrorDependencyLinks(
       continue;
     }
     if (entry.isDirectory() || entry.isSymbolicLink())
-      linkDirectory(source, join(destinationRoot, entry.name), skipExisting);
+      mirrorOneLink(source, join(destinationRoot, entry.name), skipExisting);
   }
+}
+
+/** 跳过断链：pnpm 虚拟存储会留下已改名/已删包的失效链接。 */
+function mirrorOneLink(source: string, destination: string, skipExisting: boolean): void {
+  if (!existsSync(source)) return;
+  linkDirectory(source, destination, skipExisting);
 }
 
 /** Replace the disposable project with links to the current built workspace. */

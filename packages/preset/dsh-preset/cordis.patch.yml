@@ -14,15 +14,19 @@
 #   config（patch 是整份 config 替换，不是合并），声明个人用的 provider route。
 #   两条 route 都不在 pi-ai 内置 catalog 里，因此必须显式给 `api` + `baseURL`
 #   + 非空 `models`。
-# - `instructions-as-prompt`：把工作区 AGENTS.md 额外挂为 system-prompt section
-#   （只注入一次、内容冻结，以免打断 KV cache）。与官方 `agent-instructions`
-#   **并存**：后者继续提供 user 消息形态的 baseline 与后续变更提醒，两者分工
-#   不冲突。
+# - `agent-instructions`：改用本仓库的 fork
+#   `@morlay/dsh-agent-instructions-as-prompt`（源码复制上游，见其 src/index.ts
+#   头注释）。该 fork 把 baseline 作为 system-prompt section 追加在最后（每个
+#   文件一个 section，文本按会话冻结，以免打断 KV cache），中途的变更提醒仍走
+#   上游通道；官方那一行必须禁用，否则同一份指令会在 user 消息里再出现一次。
 # - 默认模型选择留给 settings（`agent-default-model` namespace），不在此固化。
 
+- id: agent-instructions
+  disabled: true
+
 - insert:
-    - id: instructions-as-prompt
-      name: "@morlay/dsh-instructions-as-prompt"
+    - id: agent-instructions-as-prompt
+      name: "@morlay/dsh-agent-instructions-as-prompt"
       config:
         maxBytes: 65536
 

@@ -1,0 +1,18 @@
+# 单独安装本插件时的装配：baseline 走 system-prompt，增量提醒仍走上游通道。
+#
+# 本包是上游 `@deepseek-ai/dsh-agent-instructions` 的 fork（源码复制，改动点见
+# src/index.ts 头注释）：同一个插件实例既做发现与增量协调（上游行为不变），又把
+# baseline 作为 system-prompt section 追加在最后。因此上游那一行必须禁用——否则
+# 同一份指令会在 user 消息里再出现一次。
+#
+# 注意 `fs` provider 是必需的（发现/读取经 `ctx.fs`，无 provider 时插件是 no-op）；
+# base bundle 已带 `fs-local`，故此处不再声明。
+
+- id: agent-instructions
+  disabled: true
+
+- insert:
+    - id: agent-instructions-as-prompt
+      name: "@morlay/dsh-agent-instructions-as-prompt"
+      config:
+        maxBytes: 65536

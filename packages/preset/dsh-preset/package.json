@@ -37,7 +37,7 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "@morlay/dsh-instructions-as-prompt": "workspace:^"
+    "@morlay/dsh-agent-instructions-as-prompt": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/cordis-plugin-include": "workspace:^",

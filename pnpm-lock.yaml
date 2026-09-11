@@ -249,21 +249,36 @@ importers:
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/vendor/schemastery
 
-  packages/preset/dsh-instructions-as-prompt:
+  packages/preset/dsh-agent-instructions-as-prompt:
     dependencies:
-      '@deepseek-ai/cordis':
+      '@deepseek-ai/dsh-home-paths':
         specifier: workspace:^
-        version: link:../../../vendor/deepseek-harness/vendor/cordis
-      '@deepseek-ai/dsh-agent-instructions':
+        version: link:../../../vendor/deepseek-harness/packages/util/home-paths
+      '@deepseek-ai/dsh-tools':
         specifier: workspace:^
-        version: link:../../../vendor/deepseek-harness/packages/context/agent-instructions
+        version: link:../../../vendor/deepseek-harness/packages/core/tools
+      '@deepseek-ai/dsh-util-values':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/util/values
       '@deepseek-ai/schemastery':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/vendor/schemastery
     devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/vendor/cordis
       '@deepseek-ai/dsh-agent':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/core/agent
+      '@deepseek-ai/dsh-agent-loop':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/core/agent-loop
+      '@deepseek-ai/dsh-agent-loop-testkit':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/test-support/agent-loop-testkit
+      '@deepseek-ai/dsh-fs':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/fs/fs
       '@deepseek-ai/dsh-fs-local':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/fs/fs-local
@@ -273,6 +288,9 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/core/session
+      '@deepseek-ai/dsh-session-projection':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/session/session-projection
       '@deepseek-ai/dsh-system-prompt':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/core/system-prompt
@@ -282,9 +300,9 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/vendor/cordis
-      '@morlay/dsh-instructions-as-prompt':
+      '@morlay/dsh-agent-instructions-as-prompt':
         specifier: workspace:^
-        version: link:../dsh-instructions-as-prompt
+        version: link:../dsh-agent-instructions-as-prompt
     devDependencies:
       '@deepseek-ai/cordis-plugin-include':
         specifier: workspace:^
