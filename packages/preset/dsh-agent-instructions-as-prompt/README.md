@@ -48,6 +48,12 @@
 `maxSourceBytes`、`instructionFileCandidates`、`localInstructionFileCandidates`
 缺省即上游默认，例如默认候选含 `CLAUDE.md`）。
 
+**preset 里也要替换**：preset 的 `agent.cordis.yml` 是**会话级** composition，
+profile 级的 `disabled` 管不到它——只要 preset 里还写着上游包名，每个会话仍会由
+上游插件把 baseline 作为 user 消息注入一次。`@morlay/dsh-preset` 的生成器
+（`tool/generate-presets.ts`）因此在生成产物时把 `agent-instructions` 行的 `name`
+换成 `@morlay/dsh-agent-instructions-as-prompt`。
+
 `fs` provider 是必需的（发现/读取经 `ctx.fs`，无 provider 时插件是 no-op）；
 base bundle 已带 `fs-local`。
 
@@ -84,8 +90,11 @@ base bundle 已带 `fs-local`。
 
 - **挂载点是 `system-prompt/assemble` waterfall**：section 的 `text` provider 是同步
   的，而文件加载是异步的；`assemble` 是唯一的异步装配点，且其返回值权威。
-- **`inject = ["sessionProjections", "systemPrompt"]`**：前者是上游增量协调所需
-  （`turnBoundary` 投影），后者是本包的注入点。
+- **`inject = ["sessionProjections"]`**：增量协调所需的 `turnBoundary` 投影。
+  `systemPrompt` 刻意不声明——注入是事件监听器，而本插件也会挂在 preset 的会话级
+  composition 里，对 host 级服务做严格注入会让整个插件（含增量协调）加载不上。
+- **注入幂等**：assembly 里已有本插件的 section 就让位，profile 级与 preset 级各挂
+  一个实例时不会重复注入。
 - **本地改动集中在两处**（其余为上游源码原样）：
   - `src/index.ts`：`visibleBaselineSource` 改读 system prompt 标记；compose 不再
     把 baseline 放进 user 消息（只保留 excludedScopes / 版本记账，且只把「进

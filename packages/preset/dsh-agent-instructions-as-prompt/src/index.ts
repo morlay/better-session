@@ -42,8 +42,15 @@ import {
 import type { AgentInstructionChange } from "./render.ts";
 
 export { Config, name };
-/** Services required by workspace instruction projection. */
-export const inject = ["sessionProjections", "systemPrompt"];
+/**
+ * Services required by workspace instruction projection.
+ *
+ * `systemPrompt` is deliberately not declared: the section injection is an event
+ * listener, and this plugin also mounts inside a preset's per-session agent
+ * composition, where a strict injection on a host-level service would keep the
+ * whole plugin (including mid-session reconciliation) from loading.
+ */
+export const inject = ["sessionProjections"];
 export { discoverBaselineInstructionFiles, loadBaselineInstructions } from "./files.ts";
 export type { InstructionFile, LoadedInstructionFile } from "./files.ts";
 export { renderWorkspaceContext } from "./render.ts";

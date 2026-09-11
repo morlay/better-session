@@ -108,6 +108,11 @@ async function baselineIdentity(
 export function applyPromptSections(ctx: Context, resolved: ResolvedConfig): void {
   ctx.on("system-prompt/assemble", async (assembly, context, next) => {
     const resolvedAssembly = await next();
+    // 同一 assembly 里已经有人注入过（profile 级与 preset 级可能各挂一个实例）：
+    // 后到的实例让位，避免同一份指令出现两次。
+    if (resolvedAssembly.sections.some((section) => section.name.startsWith(SECTION_NAME_PREFIX))) {
+      return resolvedAssembly;
+    }
     const agent = (context as AssembleContext & { agent?: Agent }).agent;
     const session = agent?.session;
     const fileSystem = ctx.get("fs");

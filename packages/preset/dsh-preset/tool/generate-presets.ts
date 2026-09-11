@@ -71,15 +71,28 @@ function generatedHeader(): string {
 `;
 }
 
-/** 上游 composition 的一行；只用到 id 与 config.prefix。 */
+/** 上游 composition 的一行；只用到 id、name 与 config.prefix。 */
 interface CompositionRow {
   id?: string;
+  name?: string;
   config?: { prefix?: string } & Record<string, unknown>;
   [key: string]: unknown;
 }
 
+/** 上游 preset 里承载工作区指令的行 id。 */
+export const INSTRUCTIONS_ROW_ID = "agent-instructions";
+
 /**
- * 把上游 composition 文本渲染成产物文本：解析 → map persona → dump。
+ * 承载工作区指令的插件：本仓库的 fork（baseline 走 system prompt）。
+ *
+ * preset 是**会话级** composition，profile 级的 patch（禁用上游行 + 挂 fork）
+ * 管不到它——不在这里替换，每个会话仍会由上游插件把 baseline 作为 user 消息
+ * 注入一次。
+ */
+export const INSTRUCTIONS_PLUGIN = "@morlay/dsh-agent-instructions-as-prompt";
+
+/**
+ * 把上游 composition 文本渲染成产物文本：解析 → map persona 与 instructions → dump。
  * @param source - 上游 preset id，用于 header 与诊断。
  * @param upstream - 上游 composition 文本。
  * @returns 带 header 的产物文本。
@@ -95,8 +108,16 @@ export function renderComposition(source: string, upstream: string): string {
         "upstream changed — re-check how this preset declares its persona",
     );
   }
+  const instructions = rows.find((row) => row.id === INSTRUCTIONS_ROW_ID);
+  if (instructions === undefined) {
+    throw new Error(
+      `generate-presets: upstream \`${source}\` has no \`${INSTRUCTIONS_ROW_ID}\` row; ` +
+        "upstream changed — re-check which plugin loads the workspace instructions",
+    );
+  }
 
   persona.config.prefix = PERSONA_PREFIX;
+  instructions.name = INSTRUCTIONS_PLUGIN;
   // `quotingType: '"'` 是刻意选择：yaml.dump 默认用单引号，而仓库的 oxfmt 会把
   // YAML 单引号改成双引号——不显式指定就会 fmt 与生成器来回改。指定后产物与
   // `oxfmt --check` 零差异（实测），故 `presets/**` 无需 fmt 忽略。
