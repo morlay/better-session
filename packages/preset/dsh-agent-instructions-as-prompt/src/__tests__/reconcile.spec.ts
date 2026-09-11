@@ -8,16 +8,13 @@
 import { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import LocalFileSystem from "@deepseek-ai/dsh-fs-local";
-import { createSystemMessage } from "@deepseek-ai/dsh-llm";
 import SessionStore, { SessionId, type Session } from "@deepseek-ai/dsh-session";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveConfig } from "../config.ts";
-import { instructionContentSha1 } from "../digest.ts";
-import { instructionScopeKey } from "../render.ts";
-import { encodeBaselineSection } from "../section-marker.ts";
+import { promptBaselines } from "../prompt.ts";
 import { reconcileInstructionContext, type InstructionVersionCache } from "../state.ts";
 
 const roots: string[] = [];
@@ -42,27 +39,18 @@ async function mount(content: string): Promise<{ root: string; session: Session;
   return { root, session, fs: ctx.get("fs") };
 }
 
-/** 把一次 baseline 注入的结果作为 system prompt 节点落库。 */
+/** 记下一次 system prompt 注入：本进程的快照（等价于上一轮装配的结果）。 */
 function commitPrompt(session: Session, content: string): void {
-  const path = "AGENTS.md";
-  const encoded = encodeBaselineSection(
-    {
-      identity: "identity-1",
-      scope: instructionScopeKey(path),
-      path,
-      digest: instructionContentSha1(content),
-    },
-    content,
-  );
-  session.append(
-    "system/message",
-    {
-      turn: 1,
-      step: 1,
-      message: createSystemMessage(encoded, "@deepseek-ai/dsh-system-prompt"),
-    },
-    { surfaceOp: "append" },
-  );
+  promptBaselines.set(session, {
+    identity: "identity-1",
+    files: [
+      {
+        absolutePath: join(session.header.cwd ?? "", "AGENTS.md"),
+        displayPath: "AGENTS.md",
+        content,
+      },
+    ],
+  });
 }
 
 async function reconcile(

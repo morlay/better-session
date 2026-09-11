@@ -263,6 +263,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/vendor/schemastery
+      zod:
+        specifier: ^4.4.3
+        version: 4.6.2
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
@@ -291,6 +294,12 @@ importers:
       '@deepseek-ai/dsh-session-projection':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/session/session-projection
+      '@deepseek-ai/dsh-storage':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/storage/storage
+      '@deepseek-ai/dsh-storage-domain':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/storage/storage-domain
       '@deepseek-ai/dsh-system-prompt':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/core/system-prompt

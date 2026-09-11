@@ -57,34 +57,32 @@ profile 级的 `disabled` 管不到它——只要 preset 里还写着上游包�
 `fs` provider 是必需的（发现/读取经 `ctx.fs`，无 provider 时插件是 no-op）；
 base bundle 已带 `fs-local`。
 
-## section 标记
+## 正文与快照
 
-每个 section 的首行是一条 JSON 注释，携带重建与增量对比所需的元数据：
+section 正文就是文件内容：没有 `<system-reminder>` 信封、intro 文案或
+`Instructions from:` 标题，**也没有任何元数据行**——那些都是 user 消息的呈现约定。
+正文里的 `{{` 会被插入一个零宽字符：`renderPrompt` 对 `{{name}}` 做严格插值，未注册
+的名字会直接抛错，指令正文里的模板片段不该让整轮请求失败。
 
-```
-<!-- workspace-instructions {"identity":"…","scope":".\u0000AGENTS.md","path":"AGENTS.md","digest":"…"} -->
-…文件内容原样…
-```
+注入过什么由**两份快照**记住，都不进模型可见文本：
 
-正文就是文件内容：没有 `<system-reminder>` 信封、intro 文案或 `Instructions from:`
-标题——那些是 user 消息的呈现约定。标记行是唯一的附加内容。
+| 快照   | 位置                                                                         | 作用                                                                         |
+| ------ | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| 进程内 | `promptBaselines`（WeakMap，按 session）                                     | 本轮装配复用，文件改了也不动 system prompt                                   |
+| 持久   | `ctx.storageDomain` 的 `agent_instructions_as_prompt` 域（按 session id 键） | 重启 / resume 后重建同样的 section，并让增量协调继续看得见 baseline 的 scope |
 
-标记随 system prompt 的 `system/message` 节点一起持久化（surface node 0），因此：
+于是：**渲染结果与上次逐字相同** → `SystemPromptProjection` 判定无变化 → 不替换
+surface node 0、不打断 KV cache 前缀；文件在会话关闭期间被改过也不影响，变更照旧由
+user 消息提醒送达。
 
-- **resume / fork 后重建冻结文本**：从存活的 `system/message` 节点解析标记，
-  不重读文件——渲染结果与上次逐字相同，`SystemPromptProjection` 判定无变化，
-  不替换 node 0、不打断 KV cache。
-- **增量协调看得见 baseline**：`visibleInstructionChanges` 从标记重建 baseline 的
-  scope 状态，后续 pre-step 因此不会把 baseline 当成新变更重复注入；文件真的变了
-  仍会产出 user 消息提醒。
+**为什么不用会话事件**：上游 `Session.append()` 不写 `ignorable` 标记，而持久化读路径
+会拒绝未识别的事件类型——外部插件写不了（也无法注册）这种类型，一条自定义事件会让
+整条会话在重启后读不回来。
 
-标记用 HTML 注释而非 XML 标签：它同时是模型可见文本，需低调且不易与正文冲突。
-正文里的 `{{` 会被插入一个零宽字符——`renderPrompt` 对 `{{name}}` 做严格插值，
-未注册的名字会直接抛错，指令正文里的模板片段不该让整轮请求失败。
-
-**为什么不用自定义日志事件**：上游 `Session.append()` 不写 `ignorable` 标记，持久化
-读路径会拒绝未知事件类型（`unknown to this harness and not marked ignorable`）。
-复用 system prompt 节点则完全避开这个问题。
+**为什么不用会话投影**：投影状态必须由 `apply(state, event)` 从会话事件 fold 出来，
+且上游明确「缓存行永不权威，只是 fold 快捷方式」；没有承载数据的事件，投影恢复不出
+快照。`storage-domain` 正是为这类 host 侧状态准备的（其文档把 session sidecar
+metadata 列为首选用途），且写入在 resolve 前已落盘。
 
 ## 实现要点
 
@@ -95,14 +93,17 @@ base bundle 已带 `fs-local`。
   composition 里，对 host 级服务做严格注入会让整个插件（含增量协调）加载不上。
 - **注入幂等**：assembly 里已有本插件的 section 就让位，profile 级与 preset 级各挂
   一个实例时不会重复注入。
+- **存储域可选**：首次装配时经 `ctx.get("storageDomain")` 打开一次；未挂载或路由不到
+  支持 kv 的后端时只降级为「每进程重读文件」（重启后若文件已改，system prompt 会更新
+  一次），不影响注入本身。
 - **本地改动集中在两处**（其余为上游源码原样）：
-  - `src/index.ts`：`visibleBaselineSource` 改读 system prompt 标记；compose 不再
+  - `src/index.ts`：`visibleBaselineSource` 改读会话快照；compose 不再
     把 baseline 放进 user 消息（只保留 excludedScopes / 版本记账，且只把「进
     system prompt 的那两个 scope」算作已提供）；末尾挂 `applyPromptSections`。
-  - `src/state.ts`：`visibleInstructionChanges` 增加标记来源；插件名改为
+  - `src/state.ts`：`visibleInstructionChanges` 增加快照来源；插件名改为
     `agent-instructions-as-prompt`。
-  - 新增 `src/prompt.ts`（注入范围过滤 + section 注入）与 `src/section-marker.ts`
-    （标记编解码）。
+  - 新增 `src/prompt.ts`（注入范围过滤 + section 注入 + 快照）与
+    `src/baseline-domain.ts`（存储域声明与打开）。
 
 ## 上游同步
 
@@ -113,8 +114,8 @@ base bundle 已带 `fs-local`。
    `section-marker.ts`。
 2. 重新应用上面的本地改动（文件头注释里有逐项说明）。
 3. `pnpm exec vitest run packages/preset/dsh-agent-instructions-as-prompt`：测试覆盖
-   section 注入范围与位置、正文即文件内容、冻结重建、baseline 不重复注入、变更仍
-   产出提醒。
+   section 注入范围与位置、正文即文件内容、跨进程快照重建、baseline 不重复注入、
+   变更仍产出提醒。
 
 ## 已知限制
 

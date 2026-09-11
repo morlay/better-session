@@ -5,7 +5,7 @@
  *
  * Copied unchanged from `@deepseek-ai/dsh-agent-instructions@0.1.5-rc.2`
  * (upstream `packages/context/agent-instructions/src/render.ts`); local changes
- * live in `./index.ts`, `./state.ts`, `./prompt.ts`, `./section-marker.ts`.
+ * live in `./index.ts`, `./state.ts`, `./prompt.ts`.
  */
 
 import { basename, dirname } from "node:path";

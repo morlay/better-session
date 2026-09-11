@@ -1,66 +1,36 @@
 /**
- * system-prompt section 标记的编解码：baseline 的元数据随渲染文本一起进
- * surface node 0，resume 后靠它重建冻结文本与可见指令状态。
- * @module @morlay/dsh-agent-instructions-as-prompt/__tests__/section-marker
+ * 纯函数行为：哪些 scope 进 system prompt，以及指令正文里的 `{{` 如何转义。
+ * @module @morlay/dsh-agent-instructions-as-prompt/__tests__/prompt-scopes
  */
 
 import { describe, expect, it } from "vitest";
-import { escapeVariableReferences } from "../prompt.ts";
-import {
-  decodeBaselineSections,
-  encodeBaselineSection,
-  type BaselineSectionMeta,
-} from "../section-marker.ts";
+import type { LoadedInstructionFile } from "../files.ts";
+import { escapeVariableReferences, isPromptScope, promptInstructionFiles } from "../prompt.ts";
+import { instructionScopeKey } from "../render.ts";
 
-function meta(overrides: Partial<BaselineSectionMeta> = {}): BaselineSectionMeta {
-  return {
-    identity: "identity-1",
-    scope: ".\u0000AGENTS.md",
-    path: "./AGENTS.md",
-    digest: "sha1-1",
-    ...overrides,
-  };
+function file(displayPath: string): LoadedInstructionFile {
+  return { absolutePath: `/abs/${displayPath}`, displayPath, content: `# ${displayPath}` };
 }
 
-describe("baseline section markers", () => {
-  it("round-trips one section", () => {
-    const text = "Instructions from: ./AGENTS.md\n\n# 规则\n\nYAGNI。";
-    const encoded = encodeBaselineSection(meta(), text);
-
-    expect(decodeBaselineSections(encoded)).toEqual([{ ...meta(), text }]);
+describe("prompt scopes", () => {
+  it("accepts the user-global and project-root scopes", () => {
+    expect(isPromptScope(instructionScopeKey("AGENTS.md"))).toBe(true);
+    expect(isPromptScope(instructionScopeKey("$DSH_HOME/AGENTS.md"))).toBe(true);
+    expect(isPromptScope(instructionScopeKey("~/.dsh/AGENTS.md"))).toBe(true);
   });
 
-  it("decodes every section in prompt order", () => {
-    const prompt = [
-      "deployment:persona-prefix text",
-      encodeBaselineSection(meta({ path: "./AGENTS.md", digest: "a" }), "第一份"),
-      encodeBaselineSection(meta({ path: "./sub/AGENTS.md", digest: "b" }), "第二份"),
-    ].join("\n\n");
+  it("rejects nested directories", () => {
+    expect(isPromptScope(instructionScopeKey("sub/AGENTS.md"))).toBe(false);
+    expect(isPromptScope(instructionScopeKey("a/b/AGENTS.md"))).toBe(false);
+  });
 
-    expect(decodeBaselineSections(prompt).map((section) => [section.path, section.text])).toEqual([
-      ["./AGENTS.md", "第一份"],
-      ["./sub/AGENTS.md", "第二份"],
+  it("keeps only prompt-scope files, in discovery order", () => {
+    const files = [file("$DSH_HOME/AGENTS.md"), file("AGENTS.md"), file("sub/AGENTS.md")];
+
+    expect(promptInstructionFiles(files).map((entry) => entry.displayPath)).toEqual([
+      "$DSH_HOME/AGENTS.md",
+      "AGENTS.md",
     ]);
-  });
-
-  it("keeps NUL-separated scope keys intact", () => {
-    const scope = "sub\u0000AGENTS.md";
-    const decoded = decodeBaselineSections(encodeBaselineSection(meta({ scope }), "正文"));
-
-    expect(decoded[0]?.scope).toBe(scope);
-  });
-
-  it("ignores comments that are not its own marker", () => {
-    const prompt = [
-      "<!-- workspace-instructions -->",
-      "<!-- workspace-instructions not json -->",
-    ].join("\n");
-
-    expect(decodeBaselineSections(prompt)).toEqual([]);
-  });
-
-  it("returns nothing for a prompt without markers", () => {
-    expect(decodeBaselineSections("plain persona text")).toEqual([]);
   });
 });
 

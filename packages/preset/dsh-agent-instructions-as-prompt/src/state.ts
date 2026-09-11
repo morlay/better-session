@@ -3,8 +3,8 @@
  *
  * Copied from `@deepseek-ai/dsh-agent-instructions@0.1.5-rc.2` (upstream
  * `packages/context/agent-instructions/src/state.ts`). Local change: the
- * baseline scope state is read from the system-prompt section markers
- * (`./section-marker.ts`) instead of from a user-role baseline message.
+ * baseline scope state is read from the session's prompt snapshot
+ * (`./prompt.ts`) instead of from a user-role baseline message.
  *
  * @module @morlay/dsh-agent-instructions-as-prompt/state
  */
@@ -35,7 +35,7 @@ import {
   type ChangeRenderItem,
   type AgentInstructionChange,
 } from "./render.ts";
-import { decodeBaselineSections, systemPromptText } from "./section-marker.ts";
+import { promptBaselines } from "./prompt.ts";
 
 export const name = "agent-instructions-as-prompt";
 
@@ -146,15 +146,15 @@ function visibleInstructionChanges(
   authorityMessages: readonly UserMessage[],
 ): Map<string, AgentInstructionChange> {
   const visible = new Map<string, AgentInstructionChange>();
-  // Baseline scopes live in the system prompt (see ./prompt.ts), so they are
-  // read back from its markers; later user-role deltas overwrite the same scope.
-  for (const section of decodeBaselineSections(systemPromptText(agent.session))) {
-    visible.set(section.scope, {
-      action: "set",
-      scope: section.scope,
-      path: section.path,
-      digest: section.digest,
-    });
+  // Baseline scopes live in the system prompt (see ./prompt.ts), so they are read
+  // back from that session's snapshot; later user-role deltas overwrite the same
+  // scope. A session this process has not loaded yet contributes nothing here,
+  // which is the same state the first assembly starts from.
+  const snapshot = promptBaselines.get(agent.session);
+  if (snapshot !== undefined) {
+    for (const [scope, change] of baselineInstructionState(snapshot.files).changes) {
+      visible.set(scope, change);
+    }
   }
   for (const seq of agent.session.surface.nodes) {
     const event = agent.session.eventAt(seq);

@@ -29,8 +29,7 @@ import type {
 } from "@deepseek-ai/dsh-tools";
 import { Config, resolveConfig, workspaceBaselineIdentity, type ResolvedConfig } from "./config.ts";
 import { findProjectRoot, loadBaselineInstructionSet } from "./files.ts";
-import { applyPromptSections, promptInstructionFiles } from "./prompt.ts";
-import { decodeBaselineSections, systemPromptText } from "./section-marker.ts";
+import { applyPromptSections, promptBaselines, promptInstructionFiles } from "./prompt.ts";
 import {
   applyInstructionVersionUpdates,
   baselineInstructionState,
@@ -57,26 +56,20 @@ export { renderWorkspaceContext } from "./render.ts";
 export type { RenderedWorkspaceContext, TruncatedInstruction } from "./render.ts";
 
 /**
- * The baseline this session already carries: the sections this plugin wrote
- * into the system prompt, read back from its markers.
+ * The baseline this session already carries: the snapshot this plugin injected
+ * into the system prompt.
  * @param agent - session owner.
- * @returns the baseline source, or undefined when the prompt carries none.
+ * @returns the baseline source, or undefined when nothing was injected.
  */
 function visibleBaselineSource(agent: Agent): AgentInstructionSource | undefined {
-  const sections = decodeBaselineSections(systemPromptText(agent.session));
-  const first = sections[0];
-  if (first === undefined) return undefined;
+  const snapshot = promptBaselines.get(agent.session);
+  if (snapshot === undefined) return undefined;
   return {
     kind: "agent-instructions",
     form: "instructions",
     baseline: true,
-    baselineIdentity: first.identity,
-    changes: sections.map((section) => ({
-      action: "set" as const,
-      scope: section.scope,
-      path: section.path,
-      digest: section.digest,
-    })),
+    baselineIdentity: snapshot.identity,
+    changes: [...baselineInstructionState(snapshot.files).changes.values()],
   };
 }
 
@@ -175,9 +168,10 @@ export function apply(ctx: Context, config: Config): void {
       );
       // 只有进 system prompt 的那两个 scope 算「已提供」；其余候选（嵌套目录、
       // 被预算裁掉的）落进 excludedScopes，等工具触达时再走提醒通道。
-      const baseline = baselineInstructionState(
-        promptInstructionFiles(instructions?.included ?? []),
-      );
+      const promptFiles = promptInstructionFiles(instructions?.included ?? []);
+      const baseline = baselineInstructionState(promptFiles);
+      // 与 system prompt 注入共用同一份快照：谁先加载谁写入，后到者复用。
+      promptBaselines.set(agent.session, { identity, files: promptFiles });
       const observedBaseline = baselineInstructionState(instructions?.observed ?? []);
       const excludedScopes = new Set(observedBaseline.changes.keys());
       for (const scope of baseline.changes.keys()) excludedScopes.delete(scope);

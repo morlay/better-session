@@ -10,6 +10,7 @@
 import { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { createSystemMessage } from "@deepseek-ai/dsh-llm";
+import type { DomainFacility } from "@deepseek-ai/dsh-storage-domain";
 import LocalFileSystem from "@deepseek-ai/dsh-fs-local";
 import SessionStore, { SessionId, type Session } from "@deepseek-ai/dsh-session";
 import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
@@ -21,12 +22,38 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import * as plugin from "../index.ts";
 import { SECTION_NAME_PREFIX } from "../prompt.ts";
-import { decodeBaselineSections, type BaselineSection } from "../section-marker.ts";
 
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+/**
+ * 存储域替身：只实现本插件用到的一面（open → table.get/put）。表按域名单例，
+ * 因此两次挂载（模拟进程重启）共享同一份介质。上游 storage-domain 的 KV 语义由
+ * 它自己的测试覆盖，这里只验证本插件的调用与恢复约定。
+ */
+function memoryStorageDomain(): DomainFacility {
+  const tables = new Map<string, Map<string, unknown>>();
+  return {
+    open: async (spec: { name: string }) => {
+      const rows = tables.get(spec.name) ?? new Map<string, unknown>();
+      tables.set(spec.name, rows);
+      return {
+        table: () => ({
+          get: (key: string) => rows.get(key),
+          put: async (key: string, value: unknown) => {
+            rows.set(key, value);
+          },
+        }),
+        close: async () => {},
+      };
+    },
+  } as unknown as DomainFacility;
+}
+
+/** 共享替身：模拟「介质跨进程仍在」，因此 resume 的第二次挂载能读到快照。 */
+const storageDomain = memoryStorageDomain();
 
 /** 建一个含 `.git` 的临时项目根。 */
 function project(): string {
@@ -48,22 +75,28 @@ async function mount(
   cwd: string = root,
   overrides: Partial<Parameters<typeof plugin.apply>[1]> = {},
   seed: readonly unknown[] = [],
+  /** 复用同一 id 即模拟同一会话在新进程里 resume（快照按会话 id 落盘）。 */
+  id?: SessionId,
 ): Promise<{ ctx: Context; agent: Agent; session: Session }> {
   const ctx = new Context();
   await ctx.plugin(SessionStore);
   await ctx.plugin(SessionProjectionRegistry);
   await ctx.plugin(LocalFileSystem, { cwd: "/" });
   await ctx.plugin(SystemPrompt, { personaPrefix: "你是专家。" });
+  ctx.provide("storageDomain", storageDomain);
   await ctx.plugin(plugin, {
     maxBytes: 65536,
     dshHome: join(root, "no-home"),
     projectRootMarkers: [".git"],
     ...overrides,
   });
-  const session = ctx.sessions.create(SessionId(`prompt-sections-${Date.now()}-${Math.random()}`), {
-    meta: { cwd },
-    ...(seed.length === 0 ? {} : { seed: seed as never }),
-  });
+  const session = ctx.sessions.create(
+    id ?? SessionId(`prompt-sections-${Date.now()}-${Math.random()}`),
+    {
+      meta: { cwd },
+      ...(seed.length === 0 ? {} : { seed: seed as never }),
+    },
+  );
   return { ctx, agent: { session } as unknown as Agent, session };
 }
 
@@ -87,10 +120,8 @@ async function assembleAndCommit(
 }
 
 /** 本次 assembly 里的 baseline section（按 prompt 顺序）。 */
-function baselineSections(assembly: PromptAssembly): BaselineSection[] {
-  return assembly.sections
-    .filter((section) => section.name.startsWith(SECTION_NAME_PREFIX))
-    .flatMap((section) => decodeBaselineSections(section.text));
+function baselineSections(assembly: PromptAssembly): { name: string; text: string }[] {
+  return assembly.sections.filter((section) => section.name.startsWith(SECTION_NAME_PREFIX));
 }
 
 describe("workspace instruction sections", () => {
@@ -111,7 +142,7 @@ describe("workspace instruction sections", () => {
       "# 根规则\n\nYAGNI。",
     ]);
     // 子目录那份不进 system prompt（只走中途提醒通道）。
-    expect(sections.map((section) => section.path)).not.toContain("sub/AGENTS.md");
+    expect(sections.map((section) => section.text).join("\n")).not.toContain("子目录规则");
     // 指令读在最后：本插件的 section 就是 assembly 的尾部。
     const names = assembly.sections.map((section) => section.name);
     expect(names.slice(-2)).toEqual([`${SECTION_NAME_PREFIX}:0`, `${SECTION_NAME_PREFIX}:1`]);
@@ -140,7 +171,13 @@ describe("workspace instruction sections", () => {
     );
 
     write(root, "AGENTS.md", "# 新规则");
-    const resumed = await mount(root, root, {}, [...first.session.snapshotEvents()]);
+    const resumed = await mount(
+      root,
+      root,
+      {},
+      [...first.session.snapshotEvents()],
+      first.session.id,
+    );
     const resumedText = baselineSections(
       await resumed.ctx.systemPrompt.assemble({ agent: resumed.agent }),
     );

@@ -19,7 +19,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import * as plugin from "../index.ts";
 import { SECTION_NAME_PREFIX } from "../prompt.ts";
-import { decodeBaselineSections } from "../section-marker.ts";
 
 const contexts: Context[] = [];
 const roots: string[] = [];
@@ -87,11 +86,11 @@ describe("pre-step", () => {
     await runPreStep(ctx, agent);
 
     const assembly = await ctx.systemPrompt.assemble({ agent });
-    const sections = assembly.sections
-      .filter((section) => section.name.startsWith(SECTION_NAME_PREFIX))
-      .flatMap((section) => decodeBaselineSections(section.text));
+    const sections = assembly.sections.filter((section) =>
+      section.name.startsWith(SECTION_NAME_PREFIX),
+    );
 
-    expect(sections.map((section) => section.path)).toEqual(["AGENTS.md"]);
+    expect(sections).toHaveLength(1);
     expect(sections[0]?.text).toContain("YAGNI");
   });
 });
