@@ -33,6 +33,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  symlinkSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -108,11 +109,19 @@ async function deployClosure(
   // workspace（`packages: []`）让目标自成一界，再用 `nodeLinker: hoisted`
   // 在目标内重排成传统 node_modules：每个包一个顶层真实目录、无虚拟存储、
   // 无外部链接，种子完全自包含。
-  stageLocalWorkspace(destination, input);
+  const members = stageLocalWorkspace(destination, input);
   // deploy 的 isolated 布局（.pnpm + 链接）会被下面的安装整体重排；先删掉它，
   // 否则 pnpm 认为 node_modules 已是最新，不会按 nodeLinker 重建。
   rmSync(join(destination, "node_modules"), { recursive: true, force: true });
   await runPnpm(["install", "--prod", "--no-frozen-lockfile", "--ignore-scripts"], destination);
+  // pnpm 只把「被直接依赖」的成员链接到顶层；运行期 loader 从 profile 根按包名
+  // 解析，所以每个成员都要在顶层可达（传递成员如 better-session 的三个依赖）。
+  for (const name of members.keys()) {
+    const link = join(modulesDir, ...name.split("/"));
+    if (existsSync(link)) continue;
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(join("..", "..", LOCAL_MEMBERS_DIR, name.replace("/", "__")), link, "dir");
+  }
   // 官方闭包：deploy 只带 app 声明的依赖，官方包（dsh、自带 host、peer
   // 白名单及其依赖树）由工具按包解析补进闭包顶层；已装的（app 自己的依赖
   // 树）优先，冲突时保留 pnpm 的解析结果。
@@ -165,7 +174,10 @@ function localMemberClosure(input: OfficialResolutionInput): Map<string, string>
   return members;
 }
 
-function stageLocalWorkspace(destination: string, input: OfficialResolutionInput): void {
+function stageLocalWorkspace(
+  destination: string,
+  input: OfficialResolutionInput,
+): Map<string, string> {
   const members = localMemberClosure(input);
   const membersRoot = join(destination, LOCAL_MEMBERS_DIR);
   rmSync(membersRoot, { recursive: true, force: true });
@@ -196,6 +208,7 @@ function stageLocalWorkspace(destination: string, input: OfficialResolutionInput
     `packages:\n  - "${LOCAL_MEMBERS_DIR}/*"\nnodeLinker: hoisted\nminimumReleaseAge: 0\n`,
   );
   console.log(`desktop seed: staged ${String(members.size)} local workspace members`);
+  return members;
 }
 
 /** Whitelisted workspace files that enter the seed and the fingerprint. */
