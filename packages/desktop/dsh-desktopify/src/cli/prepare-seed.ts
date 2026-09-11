@@ -32,7 +32,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   symlinkSync,
   rmSync,
   statSync,
@@ -41,8 +40,6 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { SEED_HASH_NAME } from "../seed.ts";
 
-/** 目标 workspace 里承载本地源码包副本的目录。 */
-const LOCAL_MEMBERS_DIR = "local";
 import { materializeAgentPresets } from "./agent-presets.ts";
 import {
   closurePackageDirs,
@@ -103,28 +100,16 @@ async function deployClosure(
   if (!existsSync(modulesDir)) {
     throw new Error(`desktop seed: pnpm deploy did not produce ${modulesDir}`);
   }
-  // 拍平：deploy 产物是 pnpm isolated 布局（.pnpm 虚拟存储 + 链接）。目标目录
-  // **没有自己的 `pnpm-workspace.yaml`**，直接 install 会向上找到仓库根的
-  // workspace，把依赖装进根、目标里什么都不生成——所以先写一个独立的空
-  // workspace（`packages: []`）让目标自成一界，再用 `nodeLinker: hoisted`
-  // 在目标内重排成传统 node_modules：每个包一个顶层真实目录、无虚拟存储、
-  // 无外部链接，种子完全自包含。
-  const members = stageLocalWorkspace(destination, input);
-  // deploy 的 isolated 布局（.pnpm + 链接）会被下面的安装整体重排；先删掉它，
-  // 否则 pnpm 认为 node_modules 已是最新，不会按 nodeLinker 重建。
-  rmSync(join(destination, "node_modules"), { recursive: true, force: true });
-  await runPnpm(["install", "--prod", "--no-frozen-lockfile", "--ignore-scripts"], destination);
-  // pnpm 只把「被直接依赖」的成员链接到顶层；运行期 loader 从 profile 根按包名
-  // 解析，所以每个成员都要在顶层可达（传递成员如 better-session 的三个依赖）。
-  for (const name of members.keys()) {
-    const link = join(modulesDir, ...name.split("/"));
-    if (existsSync(link)) continue;
-    mkdirSync(dirname(link), { recursive: true });
-    symlinkSync(join("..", "..", LOCAL_MEMBERS_DIR, name.replace("/", "__")), link, "dir");
-  }
+  // 种子保持 `pnpm deploy` 的 isolated 布局：`.pnpm` 里是真实副本、其余是相对
+  // 链接，闭包自包含，顶层按包名可达。曾经试过在目标目录里重排成 hoisted——
+  // 那要求把本地 workspace 包 staging 成成员，随之而来的嵌套 node_modules 与
+  // 中间目录链接会让运行期解析错位（加载到 `src/*.ts`），已移除。
   // 官方闭包：deploy 只带 app 声明的依赖，官方包（dsh、自带 host、peer
   // 白名单及其依赖树）由工具按包解析补进闭包顶层；已装的（app 自己的依赖
   // 树）优先，冲突时保留 pnpm 的解析结果。
+  // 顶层按包名可达：isolated 布局里传递依赖只在 `.pnpm` 虚拟存储内，而运行期
+  // loader 从 profile 根解析包名（如 @morlay/session-branch），缺链接就找不到。
+  linkClosureTopLevel(modulesDir);
   const copied = materializeOfficialClosure(modulesDir, input);
   console.log(`desktop seed: materialized ${String(copied.length)} official packages`);
   // deploy 不装 peerDependencies：上游新增 peer 包只会在运行期炸开，
@@ -147,68 +132,21 @@ async function deployClosure(
  * 解析，不需要改任何源码清单，也不需要为它们去 registry 解析。根清单的本地依赖
  * 一并改写成 `workspace:^`（deploy 把它落成了绝对 `file://` 路径）。
  */
-/** 根清单出发的本地包闭包：`workspace:` 依赖（含 peer）递归展开。 */
-function localMemberClosure(input: OfficialResolutionInput): Map<string, string> {
-  const local = localPackageDirs(input.workspaceRoot);
-  const manifest = JSON.parse(readFileSync(join(input.workspace, "package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-  };
-  const members = new Map<string, string>();
-  const queue = Object.keys(manifest.dependencies ?? {});
-  while (queue.length > 0) {
-    const name = queue.pop();
-    if (name === undefined || members.has(name)) continue;
-    const dir = local.get(name);
-    if (dir === undefined) continue; // registry 包：不在 workspace 内。
-    members.set(name, dir);
-    const member = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as Record<
-      string,
-      Record<string, string> | undefined
-    >;
-    for (const field of ["dependencies", "peerDependencies", "optionalDependencies"]) {
-      for (const [dep, spec] of Object.entries(member[field] ?? {})) {
-        if (spec.startsWith("workspace:")) queue.push(dep);
-      }
+/** 为 `.pnpm` 里的每个包补一条顶层相对链接（已存在的顶层条目不动）。 */
+function linkClosureTopLevel(modulesDir: string): void {
+  const store = join(modulesDir, ".pnpm");
+  if (!existsSync(store)) return;
+  for (const entry of readdirSync(store, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const inner = join(store, entry.name, "node_modules");
+    if (!existsSync(inner)) continue;
+    for (const [name, dir] of closurePackageDirs(inner)) {
+      const link = join(modulesDir, ...name.split("/"));
+      if (existsSync(link)) continue;
+      mkdirSync(dirname(link), { recursive: true });
+      symlinkSync(relative(dirname(link), dir), link, "dir");
     }
   }
-  return members;
-}
-
-function stageLocalWorkspace(
-  destination: string,
-  input: OfficialResolutionInput,
-): Map<string, string> {
-  const members = localMemberClosure(input);
-  const membersRoot = join(destination, LOCAL_MEMBERS_DIR);
-  rmSync(membersRoot, { recursive: true, force: true });
-  for (const [name, dir] of members) {
-    cpSync(dir, join(membersRoot, name.replace("/", "__")), {
-      recursive: true,
-      dereference: true,
-      filter: (source) => !relative(dir, source).split(/[\\/]/u).includes("node_modules"),
-    });
-  }
-  const manifestPath = join(destination, "package.json");
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
-    dependencies?: Record<string, string>;
-  };
-  const dependencies = manifest.dependencies ?? {};
-  // 按**工作区原清单**回写 spec：`workspace:` 落成 `workspace:^`（成员在目标内
-  // 解析），本来写着明确版本/范围的照原样保留。
-  const source = JSON.parse(readFileSync(join(input.workspace, "package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-  };
-  for (const [name, original] of Object.entries(source.dependencies ?? {})) {
-    if (!members.has(name)) continue;
-    dependencies[name] = original.startsWith("workspace:") ? "workspace:^" : original;
-  }
-  writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, dependencies }, undefined, 2)}\n`);
-  writeFileSync(
-    join(destination, "pnpm-workspace.yaml"),
-    `packages:\n  - "${LOCAL_MEMBERS_DIR}/*"\nnodeLinker: hoisted\nminimumReleaseAge: 0\n`,
-  );
-  console.log(`desktop seed: staged ${String(members.size)} local workspace members`);
-  return members;
 }
 
 /** Whitelisted workspace files that enter the seed and the fingerprint. */
@@ -395,11 +333,6 @@ export async function runPrepareSeed(options: PrepareSeedOptions): Promise<void>
   cpSync(join(deployRoot, "node_modules"), join(profileDir, "node_modules"), {
     recursive: true,
     verbatimSymlinks: true,
-  });
-  // 本地 workspace 成员副本：node_modules 里指向它们的符号链接是相对的
-  // （`../../local/<name>`），必须一起进种子，否则链接全部断掉。
-  cpSync(join(deployRoot, LOCAL_MEMBERS_DIR), join(profileDir, LOCAL_MEMBERS_DIR), {
-    recursive: true,
   });
   // 工作区包（@morlay/*）的 exports 指向 src（dev 友好），打包闭包没有
   // tsx 加载器——把闭包内这些包的 exports 切到 publishConfig 的 dist 产物。

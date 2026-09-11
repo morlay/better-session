@@ -94,31 +94,6 @@ function windowFrame(): Pick<
   return { frame: false };
 }
 
-/**
- * 无边框窗口的拖拽区域：**整个 sidebar 可拖**，其中的交互元素挖回可点击。
- *
- * 无边框窗口默认没有任何区域可拖（`app-region: drag` 显式标记的矩形才行），且
- * 可拖区域会吞掉区域内所有指针事件——所以交互元素必须逐个 `no-drag` 挖回来。
- * 上游 sidebar 容器没有稳定的 `data-*` 标记、类名又是 CSS Modules 哈希，因此用
- * 结构定位：composition root 是唯一带 `data-shell-overlay` 的 grid，它的第一个
- * 子元素就是 sidebar（`DocumentTitle` 渲染 null，不产生元素）。
- *
- * 选择器不匹配时只是拖不动，不影响其它功能；上游若改结构，改这里即可。
- */
-const DRAG_REGION_CSS = `
-:has(> [data-shell-overlay]) > div:first-child {
-  app-region: drag;
-  -webkit-app-region: drag;
-  user-select: none;
-}
-:has(> [data-shell-overlay]) > div:first-child
-  :is(button, a, input, textarea, select, [role="button"], [role="menuitem"],
-      [role="option"], [role="tab"], [contenteditable]:not([contenteditable="false"])) {
-  app-region: no-drag;
-  -webkit-app-region: no-drag;
-}
-`;
-
 function createWindow(
   preload: string,
   config: { width: number; height: number; minWidth: number; minHeight: number },
@@ -137,10 +112,6 @@ function createWindow(
       sandbox: true,
       webSecurity: true,
     },
-  });
-  // 每次加载后重插：SPA 只在启动与 HMR 重载时触发 did-finish-load。
-  window.webContents.on("did-finish-load", () => {
-    void window.webContents.insertCSS(DRAG_REGION_CSS);
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {
