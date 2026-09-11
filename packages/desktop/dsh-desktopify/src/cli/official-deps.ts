@@ -17,9 +17,13 @@
  *
  * `officialClosure` walks the official dependency graph from those roots (the
  * dsh CLI, the bundled host, and the peer whitelist) and
- * `materializeOfficialClosure` copies it into an assembled closure, so the
- * packaged profile carries the complete official tree without ever rewriting
- * the target workspace's manifest or lockfile.
+ * `materializeOfficialClosure` copies the part of it pnpm cannot install in the
+ * deploy project — local source packages and the bundled host — so the packaged
+ * profile carries the complete official tree without ever rewriting the target
+ * workspace's manifest or lockfile. The registry part of the surface goes into
+ * the deploy project's own manifest (`officialDeploySpecs`) and is installed by
+ * pnpm, which owns npm's file-set semantics: `files` never excludes `main`,
+ * `bin`, README or LICENSE.
  *
  * `hasTsx` reports whether the workspace can load TypeScript sources directly;
  * the tool only injects `--import=tsx/esm` when it can.
@@ -69,6 +73,13 @@ export interface OfficialResolutionInput {
   readonly toolRoot: string;
   /** `dsh.version` declared by the app, when present. */
   readonly dshVersion?: string;
+  /**
+   * `node_modules` of the closure being assembled (the deploy project, then the
+   * seed), only set while that closure already exists: it is also a resolution
+   * root, so an official package the tool installed into the deploy project
+   * counts as resolved instead of failing the walk.
+   */
+  readonly closureModulesDir?: string;
 }
 
 /** The subset of a package manifest the resolution walks. */
@@ -92,15 +103,16 @@ function readManifest(dir: string): PackageManifest {
 
 /**
  * `node_modules` roots searched for the official surface, in priority order:
- * the app's own install, its pnpm virtual store, the tool's install, and the
- * tool's surrounding install (the repository store in-tree, the app's
- * `node_modules` when the tool is installed as a dependency).
+ * the app's own install, its pnpm virtual store, the closure under assembly,
+ * the tool's install, and the tool's surrounding install (the repository store
+ * in-tree, the app's `node_modules` when the tool is installed as a dependency).
  */
 export function officialSearchDirs(input: OfficialResolutionInput): string[] {
   return [
     ...new Set([
       join(input.workspace, "node_modules"),
       join(input.workspaceRoot, "node_modules", ".pnpm", "node_modules"),
+      ...(input.closureModulesDir === undefined ? [] : [input.closureModulesDir]),
       join(input.toolRoot, "node_modules"),
       resolve(input.toolRoot, "..", ".."),
       resolve(input.toolRoot, "..", "..", "node_modules", ".pnpm", "node_modules"),
@@ -206,9 +218,10 @@ function manifestDependencies(manifest: PackageManifest): ManifestDependency[] {
  * The complete official dependency closure: the official roots
  * (`../official.ts`) plus everything they reach through `dependencies`,
  * `optionalDependencies`, and resolvable `peerDependencies`. Package name →
- * package directory. Throws when an official root or an official dependency
- * cannot be located; an unresolvable peer (tsx, electron, …) is provided by
- * the consumer and is skipped.
+ * package directory. Throws when an official root, or a hard `dependencies`
+ * entry of an official package, cannot be located: an unresolvable peer (tsx,
+ * electron, …) is provided by the consumer, and a platform-specific optional
+ * dependency only exists for its own platform, so both are skipped.
  */
 export function officialClosure(input: OfficialResolutionInput): Map<string, string> {
   const found = new Map<string, string>();
@@ -245,9 +258,10 @@ export function officialClosure(input: OfficialResolutionInput): Map<string, str
       if (found.has(dependency.name)) continue;
       const dependencyDir = resolveDependencyDir(dependency.name, dir, input);
       if (dependencyDir === undefined) {
-        // peer / optional 依赖由消费方或平台提供（tsx、electron、平台二进制）。
-        if (dependency.field === "peerDependencies") continue;
-        if (dependency.name.startsWith("@deepseek-ai/")) {
+        // peer 依赖由消费方提供（tsx、electron），optional 依赖按平台/架构只装得上
+        // 当前那一个（node-addon-system 声明四个平台包，本机只有其中一个）：两者缺了
+        // 都正常，只有硬依赖缺失才说明官方闭包真的不完整。
+        if (dependency.field === "dependencies" && dependency.name.startsWith("@deepseek-ai/")) {
           throw new Error(
             `dsh-desktopify: official package ${name} needs ${dependency.name}, which cannot be resolved`,
           );
@@ -275,9 +289,10 @@ function expandPackageFiles(dir: string, pattern: string): string[] {
 }
 
 /**
- * The payload entries of a package directory: its manifest `files` whitelist
- * when declared (so a vendored source package ships its built output, not its
- * sources), the whole directory otherwise.
+ * The payload entries of a **source** package directory: its manifest `files`
+ * whitelist when declared (so a vendored source package ships its built output,
+ * not its sources), the whole directory otherwise. Never applies to a registry
+ * installation — see `copyPackageTree`.
  */
 function packagePayload(dir: string): string[] | undefined {
   const files = readManifest(dir).files;
@@ -295,9 +310,24 @@ function packagePayload(dir: string): string[] | undefined {
   return [...included].filter((entry) => !excluded.has(entry)).sort();
 }
 
-/** Copy one package directory into the closure, honouring its `files` whitelist. */
-function copyPackageTree(source: string, target: string): void {
-  const payload = packagePayload(source);
+/** Whether a package directory is an installation (`…/node_modules/<pkg>`). */
+function isInstalledPackage(dir: string): boolean {
+  return dir.split(/[\\/]/u).includes("node_modules");
+}
+
+/**
+ * Copy one package directory into the closure, skipping nested `node_modules`.
+ *
+ * An installation is copied whole: npm's `files` is not the tarball's file list
+ * — `main`, `bin`, README and LICENSE are packed whether or not `files` names
+ * them (`@img/colour` declares `files: ["color.cjs","index.d.ts"]` while its
+ * `main` is `index.cjs`), so filtering one would cut files the runtime loads.
+ * A local source package keeps its `files` whitelist: it lives in the
+ * repository as sources, and only its declared built output belongs in the
+ * seed.
+ */
+export function copyPackageTree(source: string, target: string): void {
+  const payload = isInstalledPackage(source) ? undefined : packagePayload(source);
   const copy = (from: string, to: string): void => {
     mkdirSync(dirname(to), { recursive: true });
     cpSync(from, to, {
@@ -317,16 +347,20 @@ function copyPackageTree(source: string, target: string): void {
 }
 
 /**
- * Copy the official closure into an assembled closure, keeping whatever pnpm
- * already installed there (the app's own dependency tree wins on conflicts).
- * Returns the copied package names.
+ * Copy into an assembled closure what pnpm did not install: the official
+ * packages living in source trees (their `workspace:` dependencies cannot be
+ * resolved inside the deploy project) and the tool's bundled desktop host.
+ * Whatever pnpm already installed there wins on conflicts. The closure itself
+ * joins the resolution roots, so an official package the tool installed into
+ * the deploy project is part of the walk instead of being reported as
+ * unresolvable. Returns the copied package names.
  */
 export function materializeOfficialClosure(
   modulesDir: string,
   input: OfficialResolutionInput,
 ): string[] {
   const copied: string[] = [];
-  for (const [name, dir] of officialClosure(input)) {
+  for (const [name, dir] of officialClosure({ ...input, closureModulesDir: modulesDir })) {
     const target = join(modulesDir, ...name.split("/"));
     if (existsSync(target)) continue;
     copyPackageTree(dir, target);
@@ -457,6 +491,47 @@ export function officialDependencySpecs(input: OfficialResolutionInput): Record<
       `dsh-desktopify: cannot resolve official packages ${missing.join(", ")}; ` +
         "install them in the workspace or run from the tool's own install",
     );
+  }
+  return specs;
+}
+
+/**
+ * Dependency specs pnpm itself materializes inside the deploy project: the part
+ * of the official surface that resolves to registry packages. A package the app
+ * targets by version keeps that version, a package the workspace installed
+ * keeps a range on its resolved version, and one the workspace cannot resolve at
+ * all takes `fallbackVersion` (the version the app targets).
+ *
+ * Two kinds of official packages stay out of it, because a deploy-project
+ * install cannot resolve them: a local source package and the bundled desktop
+ * host both declare `workspace:` dependencies of the app's own workspace, and
+ * the deploy project is not that workspace root (pnpm then fails with "no
+ * package named … is present in the workspace"). The closure walk copies those
+ * into the closure afterwards.
+ */
+export function officialDeploySpecs(
+  input: OfficialResolutionInput,
+  fallbackVersion?: string,
+): Record<string, string> {
+  const specs: Record<string, string> = {};
+  // `dsh.version: workspace:*` means the app targets local sources: none of the
+  // official surface is installable, and the closure walk owns all of it.
+  if (input.dshVersion?.startsWith("workspace:") === true) return specs;
+  for (const packageName of OFFICIAL_RUNTIME_PACKAGES) {
+    if (packageName === DSH_PACKAGE && input.dshVersion !== undefined) {
+      specs[packageName] = input.dshVersion;
+      continue;
+    }
+    if (packageName === DESKTOP_HOST_PACKAGE) continue;
+    const resolved = resolveOfficialPackage(packageName, input);
+    if (resolved === undefined) {
+      // 工作区没有这个包（如仓库外 app 缺的实验包）：按 app 的目标版本补装。
+      if (fallbackVersion !== undefined && fallbackVersion !== "")
+        specs[packageName] = fallbackVersion;
+      continue;
+    }
+    if (!isInstalledPackage(resolved.dir)) continue;
+    specs[packageName] = `^${resolved.version}`;
   }
   return specs;
 }

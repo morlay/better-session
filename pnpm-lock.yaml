@@ -105,9 +105,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-patchedDependencies:
-  '@img/colour@1.1.0': cc28922bf0f7ccd1e880fe2c191086fb78267a0205dbb9243e462ad742b4c619
-
 importers:
 
   .:
@@ -17224,7 +17221,7 @@ snapshots:
     dependencies:
       hono: 4.13.7
 
-  '@img/colour@1.1.0(patch_hash=cc28922bf0f7ccd1e880fe2c191086fb78267a0205dbb9243e462ad742b4c619)': {}
+  '@img/colour@1.1.0': {}
 
   '@img/sharp-darwin-arm64@0.35.4':
     optionalDependencies:
@@ -21301,7 +21298,7 @@ snapshots:
 
   sharp@0.35.4(@types/node@26.5.1):
     dependencies:
-      '@img/colour': 1.1.0(patch_hash=cc28922bf0f7ccd1e880fe2c191086fb78267a0205dbb9243e462ad742b4c619)
+      '@img/colour': 1.1.0
       detect-libc: 2.1.2
       semver: 7.8.5
     optionalDependencies:

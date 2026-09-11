@@ -152,6 +152,94 @@ export function buildRoot(workspace: string): string {
   return join(workspace, "node_modules", ".dsh-desktopify");
 }
 
+/**
+ * Top-level `pnpm-workspace.yaml` keys the deployed project inherits from the
+ * workspace. `pnpm deploy` only carries the settings that shape the closure
+ * assembly (`allowBuilds`, `patchedDependencies`, `overrides`); the resolution
+ * and supply-chain settings stay behind, so an install inside the deployed
+ * project silently falls back to pnpm's defaults — under pnpm 12's
+ * `minimumReleaseAge=1440` (strict) a freshly published dependency then fails
+ * the lockfile supply-chain check. Whitelisted only: member globs (`packages`)
+ * and workspace-topology settings stay with the workspace.
+ */
+const DEPLOY_SETTINGS_KEYS = new Set([
+  "minimumReleaseAge",
+  "minimumReleaseAgeExclude",
+  "minimumReleaseAgeIgnoreMissingTime",
+  "minimumReleaseAgeStrict",
+  "nodeLinker",
+  "autoInstallPeers",
+]);
+
+/** 顶层键行：行首无空白且以 `key:` 开头（不会把 `minimumReleaseAgeExclude` 认成 `minimumReleaseAge`）。 */
+const TOP_LEVEL_KEY = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]|$)/u;
+
+/** 文本行切分（CRLF 归一化；尾随换行留下一个空行，由输出端裁掉）。 */
+function splitLines(text: string): string[] {
+  return text.replaceAll("\r\n", "\n").split("\n");
+}
+
+/**
+ * 顶层键块：键行 + 紧随其后的缩进行（列表/映射都是缩进行）。空行不属于任何
+ * 块，块内空行因此不会被搬走。
+ */
+function topLevelBlocks(lines: readonly string[]): { key: string; start: number; end: number }[] {
+  const blocks: { key: string; start: number; end: number }[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = TOP_LEVEL_KEY.exec(lines[index] ?? "");
+    if (match === null) continue;
+    let end = index;
+    while (/^[ \t]/u.test(lines[end + 1] ?? "")) end += 1;
+    blocks.push({ key: match[1] ?? "", start: index, end });
+    index = end;
+  }
+  return blocks;
+}
+
+/**
+ * Merge the workspace settings the deployed project must keep into the
+ * manifest `pnpm deploy` generated for it: every whitelisted top-level key
+ * declared in `source` (the key line plus its indented block — scalar, list or
+ * mapping) replaces the same key in `destination`, or is appended at the end
+ * when absent. Everything else in `destination` is preserved verbatim and no
+ * duplicate key is ever produced. Returns the merged manifest with a single
+ * trailing newline.
+ */
+export function mergedDeploySettings(source: string, destination: string): string {
+  const sourceLines = splitLines(source);
+  const inherited = new Map<string, string[]>();
+  for (const block of topLevelBlocks(sourceLines)) {
+    if (!DEPLOY_SETTINGS_KEYS.has(block.key)) continue;
+    inherited.set(block.key, sourceLines.slice(block.start, block.end + 1));
+  }
+
+  const destinationLines = splitLines(destination);
+  const starts = new Map(topLevelBlocks(destinationLines).map((block) => [block.start, block]));
+  const merged: string[] = [];
+  const replaced = new Set<string>();
+  for (let index = 0; index < destinationLines.length; index += 1) {
+    const block = starts.get(index);
+    if (block === undefined) {
+      merged.push(destinationLines[index] ?? "");
+      continue;
+    }
+    const replacement = inherited.get(block.key);
+    if (replacement === undefined) {
+      merged.push(...destinationLines.slice(index, block.end + 1));
+    } else if (!replaced.has(block.key)) {
+      merged.push(...replacement);
+      replaced.add(block.key);
+    }
+    // 重复出现的同名键：整块丢掉，保证输出里最多一个键。
+    index = block.end;
+  }
+  while (merged.length > 0 && (merged[merged.length - 1] ?? "").trim() === "") merged.pop();
+  for (const [key, lines] of inherited) {
+    if (!replaced.has(key)) merged.push(...lines);
+  }
+  return merged.length === 0 ? "" : `${merged.join("\n")}\n`;
+}
+
 /** Read a package's version from its manifest. */
 export function packageVersion(path: string, subject: string): string {
   const manifest = JSON.parse(readFileSync(path, "utf8")) as { version?: string };

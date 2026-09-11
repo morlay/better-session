@@ -31,7 +31,7 @@
       ]
     },
     "desktop": {
-      "id": "ai.deepseek.dsh.custom",
+      "id": "ai.deepseek.dsh.custom-next",
       "agentPresets": [
         "@morlay/dsh-preset/dist/presets"
       ],

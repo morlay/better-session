@@ -8,19 +8,25 @@
  *
  * The fingerprint covers what can change under a bundled application without
  * a version bump: the whitelisted workspace content, the root lockfile (the
- * resolved dependency graph), and the closure content of every local source
- * package — `workspace:^` dependencies resolve to the workspace tree
- * (`@morlay/*`, vendored `@deepseek-ai/*`), so their sources can change while
- * every version string stays the same.
+ * resolved dependency graph), the closure structure, the content of every local
+ * source package, and the file listing of every installed package. Local
+ * sources matter because `workspace:^` dependencies resolve to the workspace
+ * tree (`@morlay/*`, vendored `@deepseek-ai/*`), so their content can change
+ * while every version string stays the same; installed packages keep their
+ * version but which of their files the tool copies into the closure is the
+ * tool's own decision.
  *
  * The app's manifest and the root lockfile are never rewritten: `pnpm deploy`
  * runs against the workspace as declared, and the official `@deepseek-ai/*`
  * surface (dsh, the bundled desktop host, the peer whitelist, and everything
- * they reach) is located by node resolution and copied into the deployed
- * closure afterwards. The closure is then flattened with pnpm's
- * `nodeLinker: hoisted` — a traditional node_modules layout with every package
- * at the top level, no virtual store, no external links — so the seed is fully
- * self-contained.
+ * they reach) enters the deployed closure afterwards in two ways: pnpm installs
+ * its registry part from the deploy project's own manifest, and the closure
+ * walk copies what pnpm cannot install there (local source packages and the
+ * bundled host, both carrying `workspace:` dependencies of the app's workspace).
+ * The deploy project is the tool's own artifact — the one manifest it writes:
+ * it inherits the workspace settings `pnpm deploy` leaves behind, so the closure
+ * is complete while the workspace stays read-only. The seed then carries that
+ * closure as `node_modules`.
  */
 
 import { spawn } from "node:child_process";
@@ -42,9 +48,12 @@ import { SEED_HASH_NAME } from "../seed.ts";
 
 import { materializeAgentPresets } from "./agent-presets.ts";
 import {
+  DSH_PACKAGE,
   closurePackageDirs,
   materializeOfficialClosure,
   missingOfficialPackages,
+  officialDeploySpecs,
+  resolveOfficialPackage,
   type OfficialResolutionInput,
 } from "./official-deps.ts";
 import {
@@ -53,6 +62,7 @@ import {
   desktopAgentPresets,
   dshVersion as readDshVersion,
   findWorkspaceRoot,
+  mergedDeploySettings,
   mergedProfileBundles,
   resolveWorkspace,
   workspaceManifest,
@@ -76,14 +86,84 @@ function runPnpm(args: readonly string[], cwd: string): Promise<void> {
 }
 
 /**
+ * Carry the workspace settings `pnpm deploy` leaves out of the deploy project's
+ * manifest over to it. The deploy project is its own workspace (`pnpm deploy`
+ * writes the manifest holding the settings an install must honour), and pnpm
+ * resolves settings there from that workspace alone: a workspace-wide
+ * `minimumReleaseAge: 0` missing there falls back to pnpm's default and makes
+ * the next install refuse official versions published minutes ago. Missing
+ * either side means there is nothing to merge.
+ */
+function inheritDeploySettings(root: string, destination: string): void {
+  const sourcePath = join(root, "pnpm-workspace.yaml");
+  const targetPath = join(destination, "pnpm-workspace.yaml");
+  if (!existsSync(sourcePath) || !existsSync(targetPath)) return;
+  const target = readFileSync(targetPath, "utf8");
+  const merged = mergedDeploySettings(readFileSync(sourcePath, "utf8"), target);
+  if (merged !== target) writeFileSync(targetPath, merged);
+}
+
+/**
+ * Materialize the official registry surface inside the deploy project: write
+ * the specs pnpm can resolve there into the deployed manifest (the deploy
+ * project is the tool's artifact, the only manifest the tool may write — the
+ * app workspace stays read-only) and install once, so pnpm owns the file-set
+ * semantics: npm always packs `main`, `bin`, README and LICENSE, whatever
+ * `files` declares.
+ *
+ * `pnpm deploy` can leave peer-shaped specs in the deployed manifest
+ * (`"@morlay/dsh-preset": "0.0.1(faf77f80…)"`); no registry accepts that shape,
+ * so strip it before re-resolving. An app targeting `workspace:` sources has
+ * nothing installable here and is materialized by the closure walk instead.
+ */
+async function installOfficialSurface(
+  destination: string,
+  input: OfficialResolutionInput,
+): Promise<void> {
+  const pin = resolveOfficialPackage(DSH_PACKAGE, input)?.version ?? input.dshVersion;
+  const specs = officialDeploySpecs(
+    input,
+    pin === undefined || pin.startsWith("workspace:") ? undefined : pin,
+  );
+  const names = Object.keys(specs);
+  if (names.length === 0) return;
+  const manifestPath = join(destination, "package.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  const dependencies = new Map(
+    Object.entries(manifest.dependencies ?? {}).map(([name, spec]) => [
+      name,
+      spec.replace(/\([^()]*\)$/u, ""),
+    ]),
+  );
+  for (const [name, spec] of Object.entries(specs)) dependencies.set(name, spec);
+  writeFileSync(
+    manifestPath,
+    `${JSON.stringify(
+      {
+        ...manifest,
+        dependencies: Object.fromEntries([...dependencies].sort(([a], [b]) => (a < b ? -1 : 1))),
+      },
+      undefined,
+      2,
+    )}\n`,
+  );
+  await runPnpm(["install", "--prod", "--ignore-scripts"], destination);
+  console.log(
+    `desktop seed: installed ${String(names.length)} official registry packages into the deploy project`,
+  );
+}
+
+/**
  * Export the workspace production closure into the deploy staging directory.
- * The workspace manifest and the root lockfile are read, never written: the
- * deploy runs against the app as declared, and the official packages are
- * materialized into the deployed closure afterwards (`materializeOfficialClosure`),
- * located by node resolution instead of a rewritten dependency list. The
- * closure is then flattened: `nodeLinker: hoisted` reinstalls it as a
- * traditional node_modules layout (every package at the top level, no virtual
- * store, no external links).
+ * The app's manifest and the root lockfile are read, never written: the deploy
+ * runs against the app as declared, and the official surface enters the closure
+ * afterwards — pnpm installs its registry part from the deploy project's own
+ * manifest (`installOfficialSurface`), and the closure walk copies what pnpm
+ * cannot install there (local source packages, the bundled desktop host). The
+ * deploy project itself is the tool's own artifact: it inherits the workspace
+ * settings before anything installs in it (`inheritDeploySettings`).
  */
 async function deployClosure(
   workspace: string,
@@ -100,18 +180,22 @@ async function deployClosure(
   if (!existsSync(modulesDir)) {
     throw new Error(`desktop seed: pnpm deploy did not produce ${modulesDir}`);
   }
-  // 种子保持 `pnpm deploy` 的 isolated 布局：`.pnpm` 里是真实副本、其余是相对
-  // 链接，闭包自包含，顶层按包名可达。曾经试过在目标目录里重排成 hoisted——
-  // 那要求把本地 workspace 包 staging 成成员，随之而来的嵌套 node_modules 与
-  // 中间目录链接会让运行期解析错位（加载到 `src/*.ts`），已移除。
-  // 官方闭包：deploy 只带 app 声明的依赖，官方包（dsh、自带 host、peer
-  // 白名单及其依赖树）由工具按包解析补进闭包顶层；已装的（app 自己的依赖
-  // 树）优先，冲突时保留 pnpm 的解析结果。
+  // 部署项目是它自己的 workspace：先继承工作区设置（minimumReleaseAge 等），
+  // 再让 pnpm 装官方 registry 面（否则默认供应链策略会拒掉刚发布的版本）。
+  inheritDeploySettings(root, destination);
+  await installOfficialSurface(destination, input);
+  // 闭包按部署项目的 nodeLinker 落地（继承工作区的设置，pnpm 默认 isolated）：
+  // pnpm 装好的（app 自己的依赖树 + 官方 registry 面）不动，剩余官方包由工具按包
+  // 解析补进闭包；冲突时保留 pnpm 的解析结果。
   // 顶层按包名可达：isolated 布局里传递依赖只在 `.pnpm` 虚拟存储内，而运行期
-  // loader 从 profile 根解析包名（如 @morlay/session-branch），缺链接就找不到。
+  // loader 从 profile 根解析包名（如 @morlay/session-branch），缺链接就找不到
+  // —— linkClosureTopLevel 给每个 `.pnpm` 包补一条顶层相对链接。
+  // 曾经试过把目标目录重排成 hoisted：那要求把本地 workspace 包 staging 成成员，
+  // 随之而来的嵌套 node_modules 与中间目录链接会让运行期解析错位（加载到
+  // `src/*.ts`），已移除。
   linkClosureTopLevel(modulesDir);
   const copied = materializeOfficialClosure(modulesDir, input);
-  console.log(`desktop seed: materialized ${String(copied.length)} official packages`);
+  console.log(`desktop seed: copied ${String(copied.length)} official source packages`);
   // deploy 不装 peerDependencies：上游新增 peer 包只会在运行期炸开，
   // 这里提前失败并指名要补的白名单项。
   const missing = missingOfficialPackages(modulesDir);
@@ -126,12 +210,6 @@ async function deployClosure(
   }
 }
 
-/**
- * 目标目录自成一个 workspace：闭包里的**本地源码包**（workspace: 依赖解析到的
- * 仓库内目录）先复制成它的成员，于是那些包自带的 `workspace:` 依赖在目标内照样
- * 解析，不需要改任何源码清单，也不需要为它们去 registry 解析。根清单的本地依赖
- * 一并改写成 `workspace:^`（deploy 把它落成了绝对 `file://` 路径）。
- */
 /** 为 `.pnpm` 里的每个包补一条顶层相对链接（已存在的顶层条目不动）。 */
 function linkClosureTopLevel(modulesDir: string): void {
   const store = join(modulesDir, ".pnpm");
@@ -234,10 +312,39 @@ function localPackageDirs(root: string): Map<string, string> {
 }
 
 /**
+ * Sorted relative paths of every directory and file below one package
+ * directory (names only, no contents; nested `node_modules` skipped, as they
+ * never enter a closure).
+ */
+function packageEntries(dir: string): string[] {
+  const found: string[] = [];
+  const visit = (current: string, prefix: string): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return; // Unreadable directory: skip.
+    }
+    for (const entry of entries) {
+      if (entry.name === "node_modules") continue;
+      const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      found.push(path);
+      if (entry.isDirectory()) visit(join(current, entry.name), path);
+    }
+  };
+  visit(dir, "");
+  return found.sort();
+}
+
+/**
  * Seed fingerprint: whitelisted workspace content, the root lockfile (the
- * resolved dependency graph), and the closure content of every local source
- * package — `workspace:^` dependencies keep their version while their content
- * changes, so the closure itself is the only reliable signal.
+ * resolved dependency graph), the closure structure, the content of every local
+ * source package, and the file listing of every installed package. A local
+ * source package (`workspace:^` dependencies) keeps its version while its
+ * content changes, so its content is the only reliable signal; an installed
+ * package's content is pinned by its version, but which of its files the tool
+ * copies into the closure is the tool's own decision, so the listing has to
+ * count as well.
  */
 export function seedFingerprint(input: {
   readonly workspace: string;
@@ -256,16 +363,25 @@ export function seedFingerprint(input: {
   }
   // 闭包结构（顶层包名集合）也算指纹：布局/链接变化不改变任何包的源码内容，
   // 但会改变运行期解析结果，指纹必须跟着变，否则壳会跳过 profile 替换。
+  const closure = closurePackageDirs(input.closureModulesDir);
   hash.update("closure\0");
-  for (const name of closurePackageDirs(input.closureModulesDir).keys()) {
+  for (const name of closure.keys()) {
     hash.update(`${name}\0`);
   }
   hash.update("local-closure\0");
   const local = localPackageDirs(input.workspaceRoot);
-  for (const name of closurePackageDirs(input.closureModulesDir).keys()) {
+  for (const name of closure.keys()) {
     if (!local.has(name)) continue;
     hash.update(`${name}\0`);
     hashPath(hash, input.closureModulesDir, name);
+  }
+  // 安装产物：内容由版本唯一确定，但**工具选哪些文件进闭包**会变（白名单误伤过
+  // registry 包，闭包少了运行期入口），所以只喂路径清单（readdir，不读内容）。
+  hash.update("installed-closure\0");
+  for (const [name, dir] of closure) {
+    if (local.has(name)) continue;
+    hash.update(`${name}\0`);
+    for (const entry of packageEntries(dir)) hash.update(`${entry}\0`);
   }
   return hash.digest("hex");
 }

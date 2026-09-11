@@ -26,5 +26,3 @@ allowBuilds:
   protobufjs: true
 
 minimumReleaseAge: 0
-patchedDependencies:
-  "@img/colour@1.1.0": patches/@img__colour@1.1.0.patch

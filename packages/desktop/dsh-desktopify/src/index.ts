@@ -8,6 +8,7 @@
  * @module @morlay/dsh-desktopify
  */
 
+import { mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -300,6 +301,23 @@ async function main(): Promise<void> {
       app.quit();
     });
   });
+}
+
+/**
+ * Electron 的 userData 默认取 asar 里的包名——本工具包名，于是所有用它打出来的 app
+ * 共用同一个 profile 和同一把单实例锁：锁在前一个实例手上时
+ * `requestSingleInstanceLock()` 失败、进程静默退出（表现成「装完启动不了」）。打包
+ * 产物按 app id 隔离；dev 模式由启动器传 `--user-data-dir`，这里不动。
+ */
+if (app.isPackaged) {
+  try {
+    const profile = join(app.getPath("appData"), loadAppConfig(process.resourcesPath).id);
+    mkdirSync(profile, { recursive: true });
+    app.setPath("userData", profile);
+  } catch (error) {
+    // 配置缺失/损坏交给 main() 的启动失败路径（诊断文件 + 错误对话框）。
+    console.error(error);
+  }
 }
 
 const ownsDesktopInstance = ((): boolean => {

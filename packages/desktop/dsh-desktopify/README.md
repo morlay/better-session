@@ -14,8 +14,9 @@
 
 工作区取首个位置参数（缺省当前目录），CLI 会把它写进
 `DSH_DESKTOP_WORKSPACE`；工具内不写死任何 app 路径或名字。壳产物由
-`pnpm build` 生成，dev / bundle 只校验它在，不重建。随包 Node.js 运行时的
-下载校验与 profile 种子生成是 `bundle` 的内部步骤，不单独暴露命令。
+`pnpm build` 生成，dev / bundle 只校验它在，不重建——源码形态下产物比源码旧
+会打印警告（改了壳没重建的话，打包出来的 app 跑的还是旧壳）。随包 Node.js
+运行时的下载校验与 profile 种子生成是 `bundle` 的内部步骤，不单独暴露命令。
 本仓库示例工作区：`just custom desktop`（dev）/ `just custom bundle`（打包）。
 
 ## 结构
@@ -48,7 +49,11 @@
   包位置一律由 node 解析（`src/cli/official-deps.ts`）：app 工作区优先、
   工具自身安装兜底，不写死 `workspace:`；装配时从官方根（dsh、自带 host、
   peer 白名单）遍历依赖图，把整棵官方闭包补进部署产物，工作区的清单与
-  lockfile 始终只读。
+  lockfile 始终只读。工作区（含工具自身安装）解析不到的官方包——仓库外 app
+  的依赖图里没有实验包这类 peer——按已解析的 dsh 版本钉住装进部署项目
+  （`deploy/package.json`），装之前部署项目先继承工作区的安装设置
+  （`minimumReleaseAge` 等，`pnpm deploy` 只带走 `allowBuilds` /
+  `patchedDependencies` / `overrides`）。
 - **bundles 自动合并**：官方 bundles（`@deepseek-ai/dsh-base`、
   `@deepseek-ai/dsh-web-app`）+ app 的 `dsh.profile.bundles` 自动合并进 dev
   项目与种子 profile。
@@ -83,7 +88,9 @@
 `dsh.version` 是 `@deepseek-ai/dsh` 的依赖 spec：仓库内项目可配
 `workspace:^`（从 vendor 源码解析），仓库外项目配具体版本（从 registry 安装）；
 缺省时回退到工作区已解析的 dsh 版本。配 `workspace:` 时工具不把它落成版本号
-（本地源码可能尚未发布），而是指向解析到的包目录。
+（本地源码可能尚未发布），而是指向解析到的包目录。打包时工作区没有的官方包
+（实验包这类）按这个版本钉住装进部署项目；`workspace:` 与缺省 dsh.version 都
+不行时，只能靠工作区自己装齐官方包。
 
 ## 运行流程
 
@@ -93,6 +100,7 @@
   `--allow-linked-profile` 放行工作区链接；`--web` 则准备 `web` profile 后
   启动 `dsh web`。
 - **bundle**：`pnpm deploy --prod` 导出 app 闭包（工作区清单与 lockfile 只读）
+  → 部署项目继承工作区的安装设置、补装工作区没有的官方包（按 dsh 版本钉住）
   → 工具按 node 解析补入官方闭包 → 种子（`dsh-home/profiles/desktop` +
   `.seed-hash` 指纹）→ 下载校验随包 Node 二进制 → electron-builder 静态打包。
   指纹覆盖 app 工作区白名单、根 lockfile，以及闭包内每个本地源码包的产物内容
