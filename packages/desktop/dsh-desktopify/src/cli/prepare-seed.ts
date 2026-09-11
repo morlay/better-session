@@ -181,8 +181,14 @@ function stageLocalWorkspace(destination: string, input: OfficialResolutionInput
     dependencies?: Record<string, string>;
   };
   const dependencies = manifest.dependencies ?? {};
-  for (const name of Object.keys(dependencies)) {
-    if (members.has(name)) dependencies[name] = "workspace:^";
+  // 按**工作区原清单**回写 spec：`workspace:` 落成 `workspace:^`（成员在目标内
+  // 解析），本来写着明确版本/范围的照原样保留。
+  const source = JSON.parse(readFileSync(join(input.workspace, "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  for (const [name, original] of Object.entries(source.dependencies ?? {})) {
+    if (!members.has(name)) continue;
+    dependencies[name] = original.startsWith("workspace:") ? "workspace:^" : original;
   }
   writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, dependencies }, undefined, 2)}\n`);
   writeFileSync(
