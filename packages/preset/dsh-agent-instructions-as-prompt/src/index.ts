@@ -29,7 +29,7 @@ import type {
 } from "@deepseek-ai/dsh-tools";
 import { Config, resolveConfig, workspaceBaselineIdentity, type ResolvedConfig } from "./config.ts";
 import { findProjectRoot, loadBaselineInstructionSet } from "./files.ts";
-import { applyPromptSections } from "./prompt.ts";
+import { applyPromptSections, promptInstructionFiles } from "./prompt.ts";
 import { decodeBaselineSections, systemPromptText } from "./section-marker.ts";
 import {
   applyInstructionVersionUpdates,
@@ -166,7 +166,11 @@ export function apply(ctx: Context, config: Config): void {
         },
         fileSystem,
       );
-      const baseline = baselineInstructionState(instructions?.included ?? []);
+      // 只有进 system prompt 的那两个 scope 算「已提供」；其余候选（嵌套目录、
+      // 被预算裁掉的）落进 excludedScopes，等工具触达时再走提醒通道。
+      const baseline = baselineInstructionState(
+        promptInstructionFiles(instructions?.included ?? []),
+      );
       const observedBaseline = baselineInstructionState(instructions?.observed ?? []);
       const excludedScopes = new Set(observedBaseline.changes.keys());
       for (const scope of baseline.changes.keys()) excludedScopes.delete(scope);

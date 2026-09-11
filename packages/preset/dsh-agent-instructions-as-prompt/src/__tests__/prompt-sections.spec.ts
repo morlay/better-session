@@ -94,19 +94,24 @@ function baselineSections(assembly: PromptAssembly): BaselineSection[] {
 }
 
 describe("workspace instruction sections", () => {
-  it("injects one section per instruction file, after every other section", async () => {
+  it("injects the user-global and project-root files only, after every other section", async () => {
     const root = project();
     write(root, "AGENTS.md", "# 根规则\n\nYAGNI。");
     write(root, "sub/AGENTS.md", "# 子目录规则\n\nPDCA。");
-    const { ctx, agent } = await mount(root, join(root, "sub"));
+    const home = join(root, "home");
+    write(home, "AGENTS.md", "# 全局规则\n\nKISS。");
+    const { ctx, agent } = await mount(root, join(root, "sub"), { dshHome: home });
 
     const assembly = await ctx.systemPrompt.assemble({ agent });
     const sections = baselineSections(assembly);
 
+    // 正文就是文件内容：没有 system-reminder 信封、intro 或 "Instructions from:" 标题。
     expect(sections.map((section) => section.text)).toEqual([
-      "Instructions from: AGENTS.md\n\n# 根规则\n\nYAGNI。",
-      "Instructions from: sub/AGENTS.md\n\n# 子目录规则\n\nPDCA。",
+      "# 全局规则\n\nKISS。",
+      "# 根规则\n\nYAGNI。",
     ]);
+    // 子目录那份不进 system prompt（只走中途提醒通道）。
+    expect(sections.map((section) => section.path)).not.toContain("sub/AGENTS.md");
     // 指令读在最后：本插件的 section 就是 assembly 的尾部。
     const names = assembly.sections.map((section) => section.name);
     expect(names.slice(-2)).toEqual([`${SECTION_NAME_PREFIX}:0`, `${SECTION_NAME_PREFIX}:1`]);

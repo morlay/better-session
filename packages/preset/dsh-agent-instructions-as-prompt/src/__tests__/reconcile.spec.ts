@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveConfig } from "../config.ts";
 import { instructionContentSha1 } from "../digest.ts";
-import { instructionScopeKey, sectionText } from "../render.ts";
+import { instructionScopeKey } from "../render.ts";
 import { encodeBaselineSection } from "../section-marker.ts";
 import { reconcileInstructionContext, type InstructionVersionCache } from "../state.ts";
 
@@ -45,11 +45,6 @@ async function mount(content: string): Promise<{ root: string; session: Session;
 /** 把一次 baseline 注入的结果作为 system prompt 节点落库。 */
 function commitPrompt(session: Session, content: string): void {
   const path = "AGENTS.md";
-  const text = sectionText({
-    absolutePath: join(session.header.cwd ?? "", path),
-    displayPath: path,
-    content,
-  });
   const encoded = encodeBaselineSection(
     {
       identity: "identity-1",
@@ -57,7 +52,7 @@ function commitPrompt(session: Session, content: string): void {
       path,
       digest: instructionContentSha1(content),
     },
-    text,
+    content,
   );
   session.append(
     "system/message",

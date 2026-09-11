@@ -1,13 +1,14 @@
 /**
  * Workspace instruction sections for the system prompt.
  *
- * Every retained baseline file becomes one section appended after the sections
- * the assembly already carries, so instructions read last. The section head is
- * a metadata comment (see `./section-marker.ts`); the text is frozen per
- * session — once the prompt carries the marker, later assemblies rebuild the
- * same sections from it instead of re-reading files, which keeps surface node 0
- * (and the provider's KV-cache prefix) stable while mid-session changes keep
- * travelling through the upstream user-message reminder path.
+ * Only the user-global and project-root instruction files become sections — the
+ * two scopes that describe the workspace as a whole; nested files keep reaching
+ * the model through the upstream mid-session reminder path. Each section is the
+ * file content verbatim behind a metadata comment (see `./section-marker.ts`),
+ * appended after the sections the assembly already carries so instructions read
+ * last. The text is frozen per session: once the prompt carries the marker,
+ * later assemblies rebuild the same sections from it instead of re-reading
+ * files, which keeps surface node 0 (and the provider's KV-cache prefix) stable.
  * @module @morlay/dsh-agent-instructions-as-prompt/prompt
  */
 
@@ -17,8 +18,12 @@ import type { FileSystem } from "@deepseek-ai/dsh-fs";
 import type { AssembleContext, PromptAssembly } from "@deepseek-ai/dsh-system-prompt";
 import { workspaceBaselineIdentity, type ResolvedConfig } from "./config.ts";
 import { instructionContentSha1 } from "./digest.ts";
-import { findProjectRoot, loadBaselineInstructionSet } from "./files.ts";
-import { instructionScopeKey, sectionText } from "./render.ts";
+import {
+  findProjectRoot,
+  loadBaselineInstructionSet,
+  type LoadedInstructionFile,
+} from "./files.ts";
+import { decodeScopeKey, instructionScopeKey, USER_GLOBAL_DIRECTORY } from "./render.ts";
 import {
   decodeBaselineSections,
   encodeBaselineSection,
@@ -26,10 +31,31 @@ import {
   type BaselineSectionMeta,
 } from "./section-marker.ts";
 
-/** Section name prefix; one section per retained instruction file. */
+/** Section name prefix; one section per prompt-scope instruction file. */
 export const SECTION_NAME_PREFIX = "workspace:instructions";
 
+/** The project-root scope key directory (`relativeScope(root, root)`). */
+const PROJECT_ROOT_DIRECTORY = ".";
+
 const ZERO_WIDTH_SPACE = "\u200b";
+
+/**
+ * Whether one instruction scope belongs in the system prompt: the user-global
+ * file and the project root's, never a nested directory's.
+ * @param scope - per-candidate scope key.
+ * @returns whether the scope is a prompt scope.
+ */
+export function isPromptScope(scope: string): boolean {
+  const { directory } = decodeScopeKey(scope);
+  return directory === USER_GLOBAL_DIRECTORY || directory === PROJECT_ROOT_DIRECTORY;
+}
+
+/** The baseline files that become sections, in discovery order. */
+export function promptInstructionFiles(
+  files: readonly LoadedInstructionFile[],
+): LoadedInstructionFile[] {
+  return files.filter((file) => isPromptScope(instructionScopeKey(file.displayPath)));
+}
 
 /**
  * Break `{{` apart in instruction prose: `renderPrompt` interpolates every
@@ -115,10 +141,12 @@ export function applyPromptSections(ctx: Context, resolved: ResolvedConfig): voi
         },
         fileSystem,
       );
-      if (loaded === undefined || loaded.included.length === 0) return resolvedAssembly;
+      if (loaded === undefined) return resolvedAssembly;
+      const files = promptInstructionFiles(loaded.included);
+      if (files.length === 0) return resolvedAssembly;
       return appendSections(
         resolvedAssembly,
-        loaded.included.map((file, index) =>
+        files.map((file, index) =>
           sectionEntry(
             {
               identity,
@@ -126,7 +154,7 @@ export function applyPromptSections(ctx: Context, resolved: ResolvedConfig): voi
               path: file.displayPath,
               digest: instructionContentSha1(file.content),
             },
-            sectionText(file),
+            file.content,
             index,
           ),
         ),

@@ -3,9 +3,9 @@
  *
  * @module @deepseek-ai/dsh-agent-instructions/render
  *
- * Copied from `@deepseek-ai/dsh-agent-instructions@0.1.5-rc.2` (upstream
- * `packages/context/agent-instructions/src/render.ts`); local change: `sectionText`
- * is exported for the system-prompt section builder.
+ * Copied unchanged from `@deepseek-ai/dsh-agent-instructions@0.1.5-rc.2`
+ * (upstream `packages/context/agent-instructions/src/render.ts`); local changes
+ * live in `./index.ts`, `./state.ts`, `./prompt.ts`, `./section-marker.ts`.
  */
 
 import { basename, dirname } from "node:path";
@@ -90,14 +90,7 @@ function escapeInstructionFrameBody(body: string): string {
   return body.replaceAll(SYSTEM_REMINDER_CLOSE, "<\\/system-reminder>");
 }
 
-/**
- * One retained file's model-facing section text: heading plus content.
- * Exported for the system-prompt section builder, which renders each baseline
- * file as its own section instead of one user-role reminder batch.
- * @param file - retained instruction file.
- * @returns the section text.
- */
-export function sectionText(file: LoadedInstructionFile): string {
+function sectionText(file: LoadedInstructionFile): string {
   return `Instructions from: ${file.displayPath}\n\n${file.content}`;
 }
 
