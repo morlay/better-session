@@ -13,14 +13,14 @@
   },
   "dependencies": {
     "@morlay/better-session": "workspace:^",
-    "@morlay/dsh-llm-openai-compatible": "workspace:^"
+    "@morlay/dsh-preset": "workspace:^"
   },
   "dsh": {
     "version": "workspace:^",
     "profile": {
       "bundles": [
         "@morlay/better-session",
-        "@morlay/dsh-llm-openai-compatible"
+        "@morlay/dsh-preset"
       ]
     },
     "desktop": {

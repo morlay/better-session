@@ -1,13 +1,18 @@
 # dsh-custom-next 示例工作区：web 模式（浏览器）与 desktop 模式（Electron 壳）。
 
+# 构建 @morlay/dsh-preset：它的 dist/presets 是运行期被 profile 读取的 preset
+# 来源（由 tsdown build:done 生成），源码树里没有；dev 直载源码也必须有它。
+preset-build:
+    pnpm --filter @morlay/dsh-preset run build
+
 # web 模式：起 dsh web 并打开浏览器（工作区依赖以 link: 装入 profile）。
-dev:
+dev: preset-build
     pnpm exec dsh-desktopify dev --web
 
 # desktop 模式：Electron 壳 + 链接工作区（TS 源码直载，无需构建 morlay 包）。
-desktop *args="--skip-build":
+desktop *args="--skip-build": preset-build
     pnpm exec dsh-desktopify dev {{ args }}
 
 # 打包为静态桌面应用（--dir 产物，无签名）。
-bundle *args:
+bundle *args: preset-build
     pnpm exec dsh-desktopify bundle --dir {{ args }}

@@ -1,0 +1,62 @@
+# @morlay/dsh-preset bundle patch：个人用装配层，覆盖官方 bundle 已插入的行。
+#
+# - `agent-presets`：禁用全部官方 shipped preset（`includeShippedRoot: false`），
+#   把本包 `dist/presets/` 注册为 system root 并设为默认 preset。目录随包分发，
+#   位置只能在运行期解析：`ctx.baseUrl` 是 profile 根（root include 所在目录），
+#   从它起 createRequire 解析本包。preset 由 `tool/generate-presets.ts` 在
+#   tsdown `build:done` 时从上游 standard / ptc 生成（故在 dist，不占源码树）。
+# - `system-prompt`：web-app bundle 已 patch 过这个 host 行（persona 文案出自那里，
+#   不是 preset 行）；此处按 id 覆盖其 config，把个人提示词作为部署级 persona。
+#   patch 是整份 config 替换，故一并保留 personaSuffix。官方 preset 自带 `persona`
+#   行会按 scope 遮蔽部署级值，故这条只对无 persona 行的 agent 生效；两个自定义
+#   preset 各自也带同一份 persona，不依赖这条。
+# - `llm-pi-ai`：官方 base 以 dormant（零 route）姿态挂载；此处按 id 覆盖其
+#   config（patch 是整份 config 替换，不是合并），声明个人用的 provider route。
+#   两条 route 都不在 pi-ai 内置 catalog 里，因此必须显式给 `api` + `baseURL`
+#   + 非空 `models`。
+# - 默认模型选择留给 settings（`agent-default-model` namespace），不在此固化。
+
+- id: agent-presets
+  config:
+    default: standard
+    includeShippedRoot: false
+    roots:
+      - path: !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(ctx.baseUrl).resolve('@morlay/dsh-preset/package.json')), 'dist/presets')
+        trust: system
+
+- id: llm-pi-ai
+  config:
+    providers:
+      ollama:
+        apiKeyEnv: OLLAMA_API_KEY
+        displayName: Ollama Cloud
+        api: openai-completions
+        baseURL: https://ollama.com/v1
+        reasoning: high
+        models:
+          - id: deepseek-v4.1-flash
+            name: "DeepSeek V4.1 Flash @ Ollama Cloud"
+            contextWindow: 1000000
+            input: [text, image]
+            reasoningEfforts:
+              off:
+              low: low
+              high: high
+              max: max
+
+      commandcode:
+        apiKeyEnv: COMMANDCODE_API_KEY
+        displayName: Command Code
+        api: openai-completions
+        baseURL: https://api.commandcode.ai/provider/v1
+        reasoning: high
+        models:
+          - id: deepseek/deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash @ Command Code
+            contextWindow: 1000000
+            input: [text, image]
+            reasoningEfforts:
+              off:
+              low: low
+              high: high
+              max: max

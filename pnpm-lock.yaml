@@ -157,9 +157,9 @@ importers:
       '@morlay/better-session':
         specifier: workspace:^
         version: link:../../packages/better-session
-      '@morlay/dsh-llm-openai-compatible':
+      '@morlay/dsh-preset':
         specifier: workspace:^
-        version: link:../../packages/llm-openai-compatible
+        version: link:../../packages/dsh-preset
 
   devpackages/devkit:
     dependencies:
@@ -218,6 +218,22 @@ importers:
       '@types/node':
         specifier: ^26.5.0
         version: 26.5.1
+
+  packages/dsh-preset:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/vendor/cordis
+    devDependencies:
+      '@deepseek-ai/cordis-plugin-include':
+        specifier: workspace:^
+        version: link:../../vendor/deepseek-harness/vendor/include
+      '@types/js-yaml':
+        specifier: ^4.0.9
+        version: 4.0.9
+      js-yaml:
+        specifier: ^4.1.0
+        version: 4.3.2
 
   packages/llm-openai-compatible:
     dependencies:
