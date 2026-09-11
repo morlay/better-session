@@ -20,6 +20,7 @@
 
 import { spawn } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -31,8 +32,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { writeAppConfig } from "../appconfig.ts";
+import { materializeAgentPresets } from "./agent-presets.ts";
 import {
   DESKTOP_HOST_PACKAGE,
   DSH_PACKAGE,
@@ -47,6 +49,7 @@ import { buildShell, SHELL_ENTRY } from "./shell.ts";
 import {
   PROFILE_NAME,
   buildRoot,
+  desktopAgentPresets,
   desktopConfig,
   dshVersion as readDshVersion,
   findWorkspaceRoot,
@@ -232,11 +235,32 @@ function prepareDevelopmentProject(
   }
   const dshLink = join(destinationModules, "@deepseek-ai", "dsh");
   removeOwnedPath(dshLink);
-  linkDirectory(dsh.dir, dshLink);
+  copyPackage(dsh.dir, dshLink);
   const hostLink = join(destinationModules, "@deepseek-ai", "dsh-desktop-host");
   removeOwnedPath(hostLink);
-  linkDirectory(host.dir, hostLink);
+  copyPackage(host.dir, hostLink);
+  materializeAgentPresets(projectDir, desktopAgentPresets(manifest));
   return projectDir;
+}
+
+/**
+ * Copy a package into the disposable project as real content. The dsh package
+ * must be writable here (the desktop host reads agent presets from a mount
+ * inside it), and the host must resolve its own dependencies from the project
+ * — a link back to the tool's build tree resolves them against the tool
+ * instead. Both origins are workspace-external: the read-only upstream tree
+ * and the tool's own `dist`.
+ */
+function copyPackage(source: string, destination: string): void {
+  cpSync(source, destination, {
+    recursive: true,
+    dereference: true,
+    // 只跳过包内嵌套的 node_modules；包根自身可能就在 node_modules 下。
+    filter: (entry) => {
+      const rel = relative(source, entry);
+      return rel === "" || !rel.split(/[\\/]/u).includes("node_modules");
+    },
+  });
 }
 
 /**

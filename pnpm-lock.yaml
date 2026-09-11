@@ -160,6 +160,9 @@ importers:
       '@morlay/dsh-preset':
         specifier: workspace:^
         version: link:../../packages/preset/dsh-preset
+      tsx:
+        specifier: '*'
+        version: 4.23.13
 
   devpackages/devkit:
     dependencies:
@@ -286,6 +289,9 @@ importers:
       '@deepseek-ai/cordis-plugin-include':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/vendor/include
+      '@deepseek-ai/dsh-agent-presets':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/preset/agent-presets
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9

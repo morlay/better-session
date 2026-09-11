@@ -59,7 +59,7 @@ just custom bundle # 示例工作区桌面打包（静态 --dir 产物）
 
 ## 测试约定
 
-- 测试位于各包 `src/__tests__/`（vitest 配置 `packages/*/src/__tests__/**/*.spec.ts`）。
+- 测试位于各包 `src/__tests__/`（vitest 配置 `packages/**/src/__tests__/**/*.spec.ts`）。
 - RDB 测试用 SQLite `:memory:`；PostgreSQL 契约测试（`pg.spec.ts`）需要
   `TEST_PG_URL`，本地未设置时自动跳过（CI 提供 postgres service）。
 - 测试装配辅助见 `packages/session-rdb/src/testing/`（经包内

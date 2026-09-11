@@ -17,18 +17,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   PRESET_SOURCES,
   PERSONA_PREFIX,
+  UPSTREAM_PRESETS,
   generatePresets,
   renderComposition,
   renderMetadata,
 } from "../../tool/generate-presets.ts";
-
-const PACKAGE_ROOT = join(import.meta.dirname, "..", "..");
-const UPSTREAM_PRESETS = join(
-  PACKAGE_ROOT,
-  "..",
-  "..",
-  "vendor/deepseek-harness/packages/preset/agent-presets/presets",
-);
 
 const OUT_DIR = mkdtempSync(join(tmpdir(), "dsh-preset-"));
 afterAll(() => {

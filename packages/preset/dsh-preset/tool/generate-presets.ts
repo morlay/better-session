@@ -28,10 +28,12 @@ import { entryListSchema } from "@deepseek-ai/cordis-plugin-include";
 import yaml from "js-yaml";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const REPO_ROOT = resolve(PACKAGE_ROOT, "..", "..", "..");
-const UPSTREAM_PRESETS = join(
-  REPO_ROOT,
-  "vendor/deepseek-harness/packages/preset/agent-presets/presets",
+
+// 上游 shipped preset 根目录：经上游包（devDependency）解析，不依赖仓库布局。
+// 子目录不在上游 exports 内，故从 `package.json`（exports 显式导出）起拼。
+export const UPSTREAM_PRESETS = join(
+  dirname(fileURLToPath(import.meta.resolve("@deepseek-ai/dsh-agent-presets/package.json"))),
+  "presets",
 );
 
 /** 个人 persona：替换上游 preset 的部署级默认。 */
@@ -118,18 +120,13 @@ export const PRESETS_OUT_DIR = "dist/presets";
  * @param outDir - 输出目录绝对路径；缺省为包根下的 {@link PRESETS_OUT_DIR}。
  * @returns 产物文件路径列表。
  */
-export function generatePresets(
-  outDir: string = join(PACKAGE_ROOT, PRESETS_OUT_DIR),
-): string[] {
+export function generatePresets(outDir: string = join(PACKAGE_ROOT, PRESETS_OUT_DIR)): string[] {
   // 先整目录清空：产物完全派生自本脚本，残留目录（改过 source、旧命名）不该留下
   // ——否则 discovery 会把它们当有效 preset 扫出来。
   rmSync(outDir, { recursive: true, force: true });
   const written: string[] = [];
   for (const entry of PRESET_SOURCES) {
-    const upstream = readFileSync(
-      join(UPSTREAM_PRESETS, entry.source, "agent.cordis.yml"),
-      "utf8",
-    );
+    const upstream = readFileSync(join(UPSTREAM_PRESETS, entry.source, "agent.cordis.yml"), "utf8");
     // 产物目录名 = 上游 preset id：canonical id 让展示名走客户端语言字典
     // （`presetDisplayText` 对 trust=system 且 id 命中的行做本地化）。
     const dir = join(outDir, entry.source);
@@ -163,10 +160,7 @@ export function presetHooks(): {
   };
 }
 
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === `file://${process.argv[1]}`
-) {
+if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
   const outDir = process.argv[2];
   for (const path of generatePresets(outDir)) {
     process.stdout.write(`generated ${path}\n`);

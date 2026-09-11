@@ -18,7 +18,15 @@
  * @module @morlay/dsh-desktopify
  */
 
-import { cpSync, existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { join, relative, resolve } from "node:path";
 import { OFFICIAL_RUNTIME_PACKAGES } from "../official.ts";
@@ -166,6 +174,56 @@ export function officialDependencySpecs(input: OfficialResolutionInput): Record<
     );
   }
   return specs;
+}
+
+/**
+ * Official packages referenced by a flattened (hoisted) closure but absent
+ * from it: package name → the packages requiring it. `pnpm deploy --prod`
+ * installs no peerDependencies, so a peer added by a newer upstream release
+ * only surfaces here; optional peers are legitimately absent.
+ */
+export function missingOfficialPackages(modulesDir: string): Map<string, string[]> {
+  const present = new Set<string>();
+  for (const entry of readdirSync(modulesDir, { withFileTypes: true })) {
+    if (entry.name.startsWith(".")) continue;
+    if (!entry.name.startsWith("@")) {
+      present.add(entry.name);
+      continue;
+    }
+    for (const scoped of readdirSync(join(modulesDir, entry.name))) {
+      if (!scoped.startsWith(".")) present.add(`${entry.name}/${scoped}`);
+    }
+  }
+  const missing = new Map<string, string[]>();
+  for (const name of present) {
+    if (!name.startsWith("@deepseek-ai/")) continue;
+    const manifestPath = join(modulesDir, ...name.split("/"), "package.json");
+    if (!existsSync(manifestPath)) continue;
+    let manifest: {
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as typeof manifest;
+    } catch {
+      continue; // Unreadable manifest: nothing to check.
+    }
+    for (const field of ["dependencies", "peerDependencies"] as const) {
+      for (const dependency of Object.keys(manifest[field] ?? {})) {
+        if (!dependency.startsWith("@deepseek-ai/") || present.has(dependency)) continue;
+        if (
+          field === "peerDependencies" &&
+          manifest.peerDependenciesMeta?.[dependency]?.optional === true
+        )
+          continue;
+        const requiredBy = missing.get(dependency) ?? [];
+        if (!requiredBy.includes(name)) requiredBy.push(name);
+        missing.set(dependency, requiredBy);
+      }
+    }
+  }
+  return missing;
 }
 
 /**

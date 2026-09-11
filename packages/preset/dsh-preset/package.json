@@ -41,6 +41,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis-plugin-include": "workspace:^",
+    "@deepseek-ai/dsh-agent-presets": "workspace:^",
     "@types/js-yaml": "^4.0.9",
     "js-yaml": "^4.1.0"
   },

@@ -68,7 +68,7 @@ pnpm --filter @morlay/dsh-preset run generate-presets [outDir]
 
 1. 升级 `DEEPSEEK_HARNESS_VERSION` 并 sync/patch/build。
 2. `pnpm --filter @morlay/dsh-preset run build`（build:done 会重新生成）
-3. `pnpm exec vitest run packages/dsh-preset` 确认无 drift。
+3. `pnpm exec vitest run packages/preset/dsh-preset` 确认无 drift。
 
 ## 装配
 
@@ -96,6 +96,15 @@ pnpm --filter @morlay/dsh-preset run generate-presets [outDir]
 
 `trust: system` 与 shipped root 同级：preset 是一份完整 composition，授予的
 能力等价于 shell 访问，只应来自受控的安装包。
+
+### 桌面形态
+
+桌面宿主把 `agent-presets.roots` 固定为 dsh 包内的
+`node_modules/@deepseek-ai/dsh/config/agent-presets`（`system` root），上面的
+`!!js` roots 在桌面 profile 里会被覆盖，preset 列表因此为空。app 工作区改用
+`dsh.desktop.agentPresets` 声明本包的 `dist/presets`，由
+[dsh-desktopify](../../desktop/dsh-desktopify/README.md) 在 dev 项目与种子
+profile 里把内容物化到该挂载点；`includeShippedRoot: false` 两种形态共用。
 
 ## 维护注意
 

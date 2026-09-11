@@ -52,6 +52,12 @@
 - **bundles 自动合并**：官方 bundles（`@deepseek-ai/dsh-base`、
   `@deepseek-ai/dsh-web-app`）+ app 的 `dsh.profile.bundles` 自动合并进 dev
   项目与种子 profile。
+- **桌面 preset 物化**：桌面宿主把 `agent-presets.roots` 固定为 dsh 包内的
+  `config/agent-presets`（`system` root），bundle patch 里配的 roots 在桌面
+  形态下不生效。app 用 `dsh.desktop.agentPresets` 声明随应用分发的 preset
+  目录（包名 + 子路径，如 `@scope/pkg/presets`），工具把其内容复制到该挂载
+  点；dev 项目里 dsh 包因此以真实副本装入——工作区链接指向只读的上游树，
+  挂载点写不进去。
 
 ## 工作区契约（package.json）
 
@@ -64,7 +70,12 @@
   "dsh": {
     "version": "0.1.5-rc.1", // @deepseek-ai/dsh 的依赖 spec：具体版本或 workspace:
     "profile": { "bundles": ["@morlay/better-session"] },
-    "desktop": { "id": "ai.deepseek.dsh.custom", "icon": "icon.svg", "dshHome": "xdg" },
+    "desktop": {
+      "id": "ai.deepseek.dsh.custom",
+      "icon": "icon.svg",
+      "dshHome": "xdg",
+      "agentPresets": ["@morlay/dsh-preset/dist/presets"], // 随桌面分发的 preset 目录
+    },
   },
 }
 ```
@@ -75,10 +86,11 @@
 
 ## 运行流程
 
-- **dev**：链接工作区（dsh CLI + desktop-host + 依赖闭包）到临时项目，
-  host 用系统 node 直载工作区 TS 源码——仅当工作区装有 tsx 时才加
-  `--import=tsx/esm`（否则不注入 loader），`--allow-linked-profile` 放行
-  工作区链接；`--web` 则准备 `web` profile 后启动 `dsh web`。
+- **dev**：链接工作区依赖闭包 + desktop-host 到临时项目（dsh 包以真实副本
+  装入，见「桌面 preset 物化」），host 用系统 node 直载工作区 TS 源码——仅当
+  工作区装有 tsx 时才加 `--import=tsx/esm`（否则不注入 loader），
+  `--allow-linked-profile` 放行工作区链接；`--web` 则准备 `web` profile 后
+  启动 `dsh web`。
 - **bundle**：`pnpm deploy --prod` 导出工作区闭包 → 种子
   （`dsh-home/profiles/desktop` + `.seed-hash` 指纹）→ 下载校验 Node 二进制
   （`prepare:runtime`）→ electron-builder 静态打包。指纹覆盖 app 工作区白名单、

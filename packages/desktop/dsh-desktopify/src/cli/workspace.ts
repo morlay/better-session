@@ -43,6 +43,8 @@ export interface WorkspaceManifest {
       readonly dshHome?: string;
       readonly icon?: string;
       readonly window?: Record<string, number>;
+      /** Preset directories the desktop profile distributes (package specs). */
+      readonly agentPresets?: unknown;
     };
   };
 }
@@ -99,6 +101,22 @@ export function desktopConfig(manifest: WorkspaceManifest): DesktopConfig {
     },
     ...(desktop.icon === undefined ? {} : { icon: desktop.icon }),
   };
+}
+
+/**
+ * The app's desktop-distributed agent preset directories: package specs such
+ * as `@scope/pkg/presets`, resolved inside the assembled profile's closure.
+ */
+export function desktopAgentPresets(manifest: WorkspaceManifest): string[] {
+  const value = manifest.dsh?.desktop?.agentPresets;
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((spec) => typeof spec === "string" && spec !== "")) {
+    throw new Error(
+      `dsh-desktopify: workspace ${String(manifest.name)} has an invalid ` +
+        `dsh.desktop.agentPresets (expected package specs such as "@scope/pkg/presets")`,
+    );
+  }
+  return value as string[];
 }
 
 /** The app's declared profile bundles (validated). */

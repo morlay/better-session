@@ -15,6 +15,9 @@
     "@morlay/better-session": "workspace:^",
     "@morlay/dsh-preset": "workspace:^"
   },
+  "peerDependencies": {
+    "tsx": "*"
+  },
   "dsh": {
     "version": "workspace:^",
     "profile": {
@@ -25,6 +28,9 @@
     },
     "desktop": {
       "id": "ai.deepseek.dsh.custom",
+      "agentPresets": [
+        "@morlay/dsh-preset/dist/presets"
+      ],
       "window": {
         "width": 1280,
         "height": 800,

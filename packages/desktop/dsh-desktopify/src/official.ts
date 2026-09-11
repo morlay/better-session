@@ -16,6 +16,7 @@
 /** Official peer packages the desktop composition needs in the closure. */
 export const OFFICIAL_PEER_PACKAGES: readonly string[] = [
   "@deepseek-ai/cordis-plugin-group",
+  "@deepseek-ai/dsh-anonymous-user-id",
   "@deepseek-ai/dsh-authorization",
   "@deepseek-ai/dsh-bash-local",
   "@deepseek-ai/dsh-code-runtime",
