@@ -49,12 +49,12 @@ fork）闭环——GUI 里撤回用户消息到输入框或就地重写、重试
 实现层  @morlay/session-rdb                  RDB 持久化 + branch provider 双服务
 ```
 
-| 层     | 包                                        | 职责                                                                                                                    |
-| ------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| 契约层 | `@morlay/session-branch`                  | `SessionBranchProvider` 抽象（rewind / forkFrom / readBranchPrefix）+ `SessionBranch` 服务 + `buildTimeline` 版本树投影 |
-| 编排层 | `@morlay/ui-conversation-message-actions` | `SessionEditor` 编排（edit / retry / recall / fork 完整功能）+ client bundle（`conversation.chat.node` 渲染替换）                |
+| 层     | 包                                        | 职责                                                                                                                                             |
+| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 契约层 | `@morlay/session-branch`                  | `SessionBranchProvider` 抽象（rewind / forkFrom / readBranchPrefix）+ `SessionBranch` 服务 + `buildTimeline` 版本树投影                          |
+| 编排层 | `@morlay/ui-conversation-message-actions` | `SessionEditor` 编排（edit / retry / recall / fork 完整功能）+ client bundle（`conversation.chat.node` 渲染替换）                                |
 | 实现层 | `@morlay/session-rdb`                     | RDB 持久化（实现上游 `SessionHandle` 模型）+ 分支 provider（实现 `SessionBranchProvider`）+ storages 接管（投影缓存服务与 workspace 域 KV 后端） |
-| 聚合   | `@morlay/better-session`                  | profile bundle：`cordis.patch.yml` 一次性装配以上全部到 web profile                                                     |
+| 聚合   | `@morlay/better-session`                  | profile bundle：`cordis.patch.yml` 一次性装配以上全部到 web profile                                                                              |
 
 ## 核心设计
 
@@ -125,14 +125,14 @@ exports 收敛）、运行流程与运行时语义见
 
 ## 决策索引
 
-| 级别     | 位置                                                                                                        | 决策                                                                                                                                    |
-| -------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| 仓库级   | [docs/adr/](adr/)                                                                                           | 上游 side workspace 版本锁定；workspace 跨 vendor 链接与 devkit 复用；桌面化迁移到 Electron + 上游 desktop-host                         |
-| 装配级   | [packages/better-session/docs/adr/](../packages/better-session/docs/adr/)                                   | rdb 替换官方 jsonl 持久化；配置经 settings 服务覆盖                                                                                     |
-| 上下文级 | [packages/session-branch/docs/adr/](../packages/session-branch/docs/adr/)                                   | 分支面 provider 抽象；ignorable 版本效果原样落库；迁移到上游 SessionHandle 模型                                                         |
+| 级别     | 位置                                                                                                        | 决策                                                                                                                                                                |
+| -------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 仓库级   | [docs/adr/](adr/)                                                                                           | 上游 side workspace 版本锁定；workspace 跨 vendor 链接与 devkit 复用；桌面化迁移到 Electron + 上游 desktop-host                                                     |
+| 装配级   | [packages/better-session/docs/adr/](../packages/better-session/docs/adr/)                                   | rdb 替换官方 jsonl 持久化；配置经 settings 服务覆盖                                                                                                                 |
+| 上下文级 | [packages/session-branch/docs/adr/](../packages/session-branch/docs/adr/)                                   | 分支面 provider 抽象；ignorable 版本效果原样落库；迁移到上游 SessionHandle 模型                                                                                     |
 | 上下文级 | [packages/session-rdb/docs/adr/](../packages/session-rdb/docs/adr/)                                         | 原样存储；事件实体全局化；rewind 直接截断；并发写入 fail loud；未闭合轮次原样保留；导出即修复；混合世代回退；跟随上游 Session format v3；storages 接管到 rdb 语义表 |
-| 上下文级 | [packages/ui-conversation-message-actions/docs/adr/](../packages/ui-conversation-message-actions/docs/adr/) | 就地编辑；client bundle 单文件；agent 驱动重放                                                                                          |
-| 上下文级 | [packages/llm-openai-compatible/docs/adr/](../packages/llm-openai-compatible/docs/adr/)                     | 起因（pi-ai 参数不完整）；传输层复用 ai-sdk；dict 多路由；模型目录缺省为空；凭据服务解析；采样合并规则                                  |
+| 上下文级 | [packages/ui-conversation-message-actions/docs/adr/](../packages/ui-conversation-message-actions/docs/adr/) | 就地编辑；client bundle 单文件；agent 驱动重放                                                                                                                      |
+| 上下文级 | [packages/llm-openai-compatible/docs/adr/](../packages/llm-openai-compatible/docs/adr/)                     | 起因（pi-ai 参数不完整）；传输层复用 ai-sdk；dict 多路由；模型目录缺省为空；凭据服务解析；采样合并规则                                                              |
 
 ## 深入阅读
 

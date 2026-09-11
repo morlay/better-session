@@ -58,12 +58,13 @@ describe("workspace domain on the rdb storage backend", () => {
     await ctx.plugin(Workspace);
     try {
       const registry = await waitFor(
-        () => ctx.get("workspaceRegistry") as
-          | {
-              create(path: string): Promise<{ path: string; title: string }>;
-              archiveSession(sessionId: SessionId): Promise<void>;
-            }
-          | undefined,
+        () =>
+          ctx.get("workspaceRegistry") as
+            | {
+                create(path: string): Promise<{ path: string; title: string }>;
+                archiveSession(sessionId: SessionId): Promise<void>;
+              }
+            | undefined,
       );
       const workspace = await registry.create(project);
       // workspace path 是 create 时 fs.realpath 归一后的目录（macOS 的 /var → /private/var）。
@@ -84,9 +85,7 @@ describe("workspace domain on the rdb storage backend", () => {
         expect(rows[0]!.f_path).toBe(canonical);
         // 显示顺序是数据：workspaceIds 由 f_position 承载。
         expect(rows[0]!.f_position).toBe(0);
-        expect(
-          db.prepare("SELECT f_session_id FROM t_workspace_sessions").all(),
-        ).toEqual([]);
+        expect(db.prepare("SELECT f_session_id FROM t_workspace_sessions").all()).toEqual([]);
 
         // 归档状态是数据：直接落在会话行的 f_archived_at 标记上。
         const sessionId = SessionId("archive-me");
@@ -147,7 +146,13 @@ describe("legacy storages import", () => {
       JSON.stringify({
         version: 7,
         record: {
-          identity: { formatVersion: 3, createdAt: 1, cwd: "/tmp/w1", isSeeded: false, inheritedEventCount: 0 },
+          identity: {
+            formatVersion: 3,
+            createdAt: 1,
+            cwd: "/tmp/w1",
+            isSeeded: false,
+            inheritedEventCount: 0,
+          },
           rows: { title: { ver: 1, seq: 2, val: "hello" } },
         },
       }),

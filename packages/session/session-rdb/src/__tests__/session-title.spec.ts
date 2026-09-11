@@ -162,7 +162,9 @@ describe("session title as session data", () => {
         db.prepare(
           "INSERT INTO t_events (f_event_id, f_parent_id, f_type, f_kind, f_role, f_name, f_action_id, f_encoding, f_data, f_created_at) " +
             "VALUES ('e1', '', 'session/title', 'lifecycle', '', '', '', 'json', ?, 1)",
-        ).run(JSON.stringify({ title: "旧世代标题", messageSeqs: [1], source: { kind: "fallback" } }));
+        ).run(
+          JSON.stringify({ title: "旧世代标题", messageSeqs: [1], source: { kind: "fallback" } }),
+        );
         db.prepare(
           "INSERT INTO t_session_events (f_session_id, f_event_id, f_sequence, f_surface_op) VALUES ('legacy', 'e1', 3, NULL)",
         ).run();

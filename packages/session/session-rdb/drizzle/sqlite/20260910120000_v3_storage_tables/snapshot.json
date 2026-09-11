@@ -2,9 +2,7 @@
   "version": "7",
   "dialect": "sqlite",
   "id": "1d8acf30-2759-4afb-9aa6-81ee2b470237",
-  "prevIds": [
-    "73c73ac0-f96e-4579-8784-04343de1a0d7"
-  ],
+  "prevIds": ["73c73ac0-f96e-4579-8784-04343de1a0d7"],
   "ddl": [
     {
       "name": "t_events",
@@ -357,13 +355,9 @@
       "table": "t_sessions"
     },
     {
-      "columns": [
-        "f_session_id"
-      ],
+      "columns": ["f_session_id"],
       "tableTo": "t_sessions",
-      "columnsTo": [
-        "f_session_id"
-      ],
+      "columnsTo": ["f_session_id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
@@ -372,13 +366,9 @@
       "table": "t_session_events"
     },
     {
-      "columns": [
-        "f_event_id"
-      ],
+      "columns": ["f_event_id"],
       "tableTo": "t_events",
-      "columnsTo": [
-        "f_event_id"
-      ],
+      "columnsTo": ["f_event_id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
@@ -387,45 +377,35 @@
       "table": "t_session_events"
     },
     {
-      "columns": [
-        "f_id"
-      ],
+      "columns": ["f_id"],
       "nameExplicit": false,
       "name": "t_events_pk",
       "table": "t_events",
       "entityType": "pks"
     },
     {
-      "columns": [
-        "f_singleton"
-      ],
+      "columns": ["f_singleton"],
       "nameExplicit": false,
       "name": "t_persistence_state_pk",
       "table": "t_persistence_state",
       "entityType": "pks"
     },
     {
-      "columns": [
-        "f_key"
-      ],
+      "columns": ["f_key"],
       "nameExplicit": false,
       "name": "t_schema_meta_pk",
       "table": "t_schema_meta",
       "entityType": "pks"
     },
     {
-      "columns": [
-        "f_id"
-      ],
+      "columns": ["f_id"],
       "nameExplicit": false,
       "name": "t_session_events_pk",
       "table": "t_session_events",
       "entityType": "pks"
     },
     {
-      "columns": [
-        "f_id"
-      ],
+      "columns": ["f_id"],
       "nameExplicit": false,
       "name": "t_sessions_pk",
       "table": "t_sessions",
@@ -502,28 +482,21 @@
       "table": "t_session_events"
     },
     {
-      "columns": [
-        "f_session_id",
-        "f_sequence"
-      ],
+      "columns": ["f_session_id", "f_sequence"],
       "nameExplicit": true,
       "name": "uq_session_events_session_sequence",
       "entityType": "uniques",
       "table": "t_session_events"
     },
     {
-      "columns": [
-        "f_event_id"
-      ],
+      "columns": ["f_event_id"],
       "nameExplicit": false,
       "name": "t_events_f_event_id_unique",
       "entityType": "uniques",
       "table": "t_events"
     },
     {
-      "columns": [
-        "f_session_id"
-      ],
+      "columns": ["f_session_id"],
       "nameExplicit": false,
       "name": "t_sessions_f_session_id_unique",
       "entityType": "uniques",
@@ -816,74 +789,56 @@
       "table": "t_workspace_sessions"
     },
     {
-      "columns": [
-        "f_id"
-      ],
+      "columns": ["f_id"],
       "nameExplicit": false,
       "name": "t_session_projcache_row_pk",
       "table": "t_session_projcache_row",
       "entityType": "pks"
     },
     {
-      "columns": [
-        "f_name"
-      ],
+      "columns": ["f_name"],
       "nameExplicit": false,
       "name": "t_storage_units_pk",
       "table": "t_storage_units",
       "entityType": "pks"
     },
     {
-      "columns": [
-        "f_singleton"
-      ],
+      "columns": ["f_singleton"],
       "nameExplicit": false,
       "name": "t_workspace_state_pk",
       "table": "t_workspace_state",
       "entityType": "pks"
     },
     {
-      "columns": [
-        "f_id"
-      ],
+      "columns": ["f_id"],
       "nameExplicit": false,
       "name": "t_workspaces_pk",
       "table": "t_workspaces",
       "entityType": "pks"
     },
     {
-      "columns": [
-        "f_id"
-      ],
+      "columns": ["f_id"],
       "nameExplicit": false,
       "name": "t_workspace_sessions_pk",
       "table": "t_workspace_sessions",
       "entityType": "pks"
     },
     {
-      "columns": [
-        "f_session_id",
-        "f_key"
-      ],
+      "columns": ["f_session_id", "f_key"],
       "nameExplicit": true,
       "name": "uq_session_projcache_row_session_key",
       "entityType": "uniques",
       "table": "t_session_projcache_row"
     },
     {
-      "columns": [
-        "f_workspace_id"
-      ],
+      "columns": ["f_workspace_id"],
       "nameExplicit": false,
       "name": "t_workspaces_f_workspace_id_unique",
       "entityType": "uniques",
       "table": "t_workspaces"
     },
     {
-      "columns": [
-        "f_workspace_id",
-        "f_session_id"
-      ],
+      "columns": ["f_workspace_id", "f_session_id"],
       "nameExplicit": true,
       "name": "uq_workspace_sessions_workspace_session",
       "entityType": "uniques",
@@ -924,13 +879,9 @@
       "table": "t_workspace_state"
     },
     {
-      "columns": [
-        "f_session_id"
-      ],
+      "columns": ["f_session_id"],
       "tableTo": "t_sessions",
-      "columnsTo": [
-        "f_session_id"
-      ],
+      "columnsTo": ["f_session_id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
@@ -939,13 +890,9 @@
       "table": "t_session_projcache_row"
     },
     {
-      "columns": [
-        "f_workspace_id"
-      ],
+      "columns": ["f_workspace_id"],
       "tableTo": "t_workspaces",
-      "columnsTo": [
-        "f_workspace_id"
-      ],
+      "columnsTo": ["f_workspace_id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,

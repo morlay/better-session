@@ -92,9 +92,7 @@ function identityOfSession(row: SessionIdentityRow): CheckpointIdentity {
     createdAt: row.fCreatedAt,
     ...(row.fCwd === null ? {} : { cwd: row.fCwd }),
     isSeeded: row.fSeedLength !== null,
-    ...(row.fSeedLength === null
-      ? {}
-      : { inheritedEventCount: SessionLogOffset(row.fSeedLength) }),
+    ...(row.fSeedLength === null ? {} : { inheritedEventCount: SessionLogOffset(row.fSeedLength) }),
   };
 }
 
@@ -305,10 +303,7 @@ export function createStorageRepository(host: StorageRepositoryHost): StorageRep
                 .update(tSessions)
                 .set({ fArchivedAt: null })
                 .where(
-                  and(
-                    isNotNull(tSessions.fArchivedAt),
-                    notInArray(tSessions.fSessionId, archived),
-                  ),
+                  and(isNotNull(tSessions.fArchivedAt), notInArray(tSessions.fSessionId, archived)),
                 ),
         );
         const stamp = Date.now();
@@ -353,10 +348,7 @@ export function createStorageRepository(host: StorageRepositoryHost): StorageRep
       return [...entries.values()].filter((entry) => Object.keys(entry.rows).length > 0);
     },
 
-    async putProjcache(
-      sessionId: string,
-      rows: ProjectionCheckpoint,
-    ): Promise<void> {
+    async putProjcache(sessionId: string, rows: ProjectionCheckpoint): Promise<void> {
       await host.writeAtomically(async () => {
         const db = await dbx();
         await runQuery(db.delete(tProjcacheRows).where(eq(tProjcacheRows.fSessionId, sessionId)));
@@ -412,7 +404,8 @@ export function createStorageRepository(host: StorageRepositoryHost): StorageRep
               .from(tSessions)
               .where(eq(tSessions.fSessionId, sessionId))
               .get() as { fTitle: string | null; fTitleSeq: number | null } | undefined;
-            if (row === undefined || row.fTitle === null || row.fTitleSeq === null) return undefined;
+            if (row === undefined || row.fTitle === null || row.fTitleSeq === null)
+              return undefined;
             return { title: row.fTitle, seq: row.fTitleSeq };
           },
         }),

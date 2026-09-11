@@ -16,8 +16,8 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   PRESET_SOURCES,
-  PERSONA_PREFIX,
   INSTRUCTIONS_PLUGIN,
+  PERSONA_ROW_ID,
   UPSTREAM_PRESETS,
   generatePresets,
   renderComposition,
@@ -56,13 +56,12 @@ describe("generated presets", () => {
     expect(actual).toBe(renderMetadata(entry));
   });
 
-  it("every generated composition carries the personal persona exactly once", () => {
+  it("drops the persona row: the deployment system-prompt owns the persona", () => {
     for (const entry of PRESET_SOURCES) {
       const text = readFileSync(join(OUT_DIR, entry.source, "agent.cordis.yml"), "utf8");
-      // 产物里 persona 以 YAML 块标量缩进 6 空格，故按缩进后的首行计数。
-      const anchor = `    prefix: |-\n      ${PERSONA_PREFIX.split("\n")[0] ?? ""}`;
-      expect(text.split(anchor).length - 1).toBe(1);
-      // 上游的英文 persona 不应残留，否则替换没生效。
+      // preset 自带 persona 行会在 agent scope 遮蔽部署级 persona（system-prompt 的
+      // personaPrefix），所以产物里不能有它。
+      expect(text).not.toContain(`- id: ${PERSONA_ROW_ID}\n`);
       expect(text).not.toContain("You are a coding agent powered by the {{model}} model.");
     }
   });

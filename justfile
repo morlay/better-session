@@ -28,19 +28,13 @@ lint:
     pnpm exec oxlint .
 
 publish:
-    pnpm -r --filter './packages/*' exec tsx {{ justfile_directory() }}/scripts/publish-if-need.mts
+    pnpm -r --filter './packages/*/*' exec tsx {{ justfile_directory() }}/scripts/publish-if-need.mts
 
 build *args:
-    @pnpm -r --filter './packages/*' run build {{ args }}
+    @pnpm -r --filter './packages/*/*' run build {{ args }}
 
 version *args:
-    pnpm -r --filter './packages/*' version {{ args }}
+    pnpm -r --filter './packages/*/*' version {{ args }}
 
 test:
     pnpm exec vitest run
-
-# 显式导入旧 $DSH_HOME/storages JSON 到 session-rdb 专用表（先停掉 dsh）。
-# 例：just import-storages --dsh-home apps/dsh-custom-next/.dsh-store \
-# --path apps/dsh-custom-next/.dsh-store/sessions/sessions.sqlite
-import-storages *args:
-    pnpm exec tsx packages/session-rdb/tool/import-storages.ts {{ args }}

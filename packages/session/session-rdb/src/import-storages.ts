@@ -62,7 +62,10 @@ export async function importStorages(
   const workspaceDocument = await readJson(join(storagesRoot, `${WORKSPACE_UNIT}.json`));
   if (workspaceDocument !== undefined) {
     const tables = unitTables(workspaceDocument, WORKSPACE_UNIT, WORKSPACE_UNIT_VERSIONS);
-    await repository.insertUnitVersion(WORKSPACE_UNIT, WORKSPACE_UNIT_VERSIONS.values().next().value as number);
+    await repository.insertUnitVersion(
+      WORKSPACE_UNIT,
+      WORKSPACE_UNIT_VERSIONS.values().next().value as number,
+    );
     for (const [id, record] of Object.entries(tables["workspaces"] ?? {})) {
       await repository.putWorkspace(id, record as WorkspaceRecord);
       result.workspaces += 1;

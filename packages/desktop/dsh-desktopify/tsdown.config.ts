@@ -4,7 +4,7 @@ const BIN_NAME = "dsh-desktopify";
 const CLI_ENTRY = "./src/cli/index.ts";
 // 上游 desktop-host 是 private 包、不发布：构建时把它的产物一起打进 dist，
 // 工具运行时用自带副本，package.json 不再依赖该私有包。
-const VENDOR_HOST = "../../vendor/deepseek-harness/apps/desktop-host";
+const VENDOR_HOST = "../../../vendor/deepseek-harness/apps/desktop-host";
 
 export default defineConfig([
   {

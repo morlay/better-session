@@ -48,8 +48,8 @@ SQLite 场景下它们是同一份状态的两个介质，PostgreSQL 场景下�
    - **会话标题 → `t_sessions.f_title` / `f_title_seq`**：写路径遇到
      `session/title` 事件即刷新、rewind 截断后重算，列表消费在 checkpoint 行
      缺 title 时直接取该列。
-   workspace 的每次写入（记录 + 归属、顺序 + 归档）在介质事务内整体替换，
-   不留部分应用的中间态。
+     workspace 的每次写入（记录 + 归属、顺序 + 归档）在介质事务内整体替换，
+     不留部分应用的中间态。
 4. **禁用官方文件介质**：`packages/better-session/cordis.patch.yml` 禁用
    `storage-json` 与 `session-projection-cache`，并把 `storage-domain` 的 config
    覆盖为 `{ backend: rdb }`（patch 按 id 替换整段 config）。

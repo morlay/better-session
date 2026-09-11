@@ -44,11 +44,11 @@ session-rdb:
 
 ## 元数据表
 
-| 表                    | 键                    | 说明                                                                                                                                                                                                                                                                                                                                           |
-| --------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 表                    | 键                    | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `t_sessions`          | `f_session_id` UNIQUE | 会话元数据（`SessionHeader` 列：`f_version` / `f_created_at` / `f_cwd` / `f_parent_session` / `f_seed_length` / `f_origin` / `f_delegation_depth`）+ head 游标（`f_head_event_id` / `f_head_sequence`，事务内维护，append 时提供 parent 链与下一个 seq）+ materialization 身份（`f_incarnation` / `f_revision`）+ 归档标记（`f_archived_at`，非空即已归档）+ 标题（`f_title` / `f_title_seq`，由 `session/title` 事件维护）。行的存在即 materialized 信号 |
-| `t_persistence_state` | `f_singleton`         | store 身份单例（`f_store_id`）                                                                                                                                                                                                                                                                                                                 |
-| `t_schema_meta`       | `f_key`               | schema 版本 / 应用身份键值对：双方言都建表，仅 PG 读写；SQLite 走 `PRAGMA user_version` / `application_id`                                                                                                                                                                                                                                     |
+| `t_persistence_state` | `f_singleton`         | store 身份单例（`f_store_id`）                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `t_schema_meta`       | `f_key`               | schema 版本 / 应用身份键值对：双方言都建表，仅 PG 读写；SQLite 走 `PRAGMA user_version` / `application_id`                                                                                                                                                                                                                                                                                                                                                |
 
 ## 事件实体表（全局，忠实存储原始事件）
 
@@ -186,12 +186,12 @@ t_session_events)`。
 [ADR 0009](adr/0009-接管storages到rdb语义表.md)）：官方 `storage-json` 与
 `session-projection-cache` 被禁用，数据落在与事件日志同库的表中。
 
-| 表                        | 键                                     | 说明                                                                                                                                              |
-| ------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `t_storage_units`         | `f_name`                               | 域版本账本：域首次打开时写入 descriptor version，其后按 accepted 集合校验（不匹配以 `version-mismatch` fail loud）。                               |
+| 表                        | 键                                     | 说明                                                                                                                                                |
+| ------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `t_storage_units`         | `f_name`                               | 域版本账本：域首次打开时写入 descriptor version，其后按 accepted 集合校验（不匹配以 `version-mismatch` fail loud）。                                |
 | `t_workspaces`            | `f_workspace_id` UNIQUE                | workspace 记录：`f_path` / `f_title` / `f_created_at` / `f_updated_at`，`f_position` 是显示顺序（`workspaceIds` 的位次；不在顺序中的记录为 -1）。   |
-| `t_workspace_sessions`    | `UNIQUE(f_workspace_id, f_session_id)` | 会话归属：一个归属一行，`f_position` 是归属显示顺序；`f_session_id` 有独立索引，可按 session 反查 workspace。记录删除时随外键 CASCADE。            |
-| `t_workspace_state`       | `f_singleton`                          | workspace 单例的剩余状态：`f_initialized` 与拆列后的两写标记（`f_pending_operation` / `f_pending_workspace_id`）。                                 |
+| `t_workspace_sessions`    | `UNIQUE(f_workspace_id, f_session_id)` | 会话归属：一个归属一行，`f_position` 是归属显示顺序；`f_session_id` 有独立索引，可按 session 反查 workspace。记录删除时随外键 CASCADE。             |
+| `t_workspace_state`       | `f_singleton`                          | workspace 单例的剩余状态：`f_initialized` 与拆列后的两写标记（`f_pending_operation` / `f_pending_workspace_id`）。                                  |
 | `t_session_projcache_row` | `UNIQUE(f_session_id, f_key)`          | 投影 checkpoint 行：`f_ver`（投影单元 stateVersion）/ `f_seq`（日志水位）/ `f_val`（wire 值 JSON）；`f_key` 有独立索引，可按 key 直查（如 title）。 |
 
 - **1:1 的状态不拆表**：会话归档是 `t_sessions.f_archived_at` 标记（非空即已

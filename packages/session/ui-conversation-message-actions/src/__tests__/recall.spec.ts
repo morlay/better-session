@@ -156,9 +156,7 @@ describe("SessionEditor recall", () => {
       });
 
       const rows = await eventRows(ctx, SessionIdBrand("src"));
-      expect(rows.map((r) => r.fSequence)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-      ]);
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
       expect(rows.some((r) => r.fSequence === 12)).toBe(false);
 
       const after = await rdb(ctx).load(SessionIdBrand("src"));

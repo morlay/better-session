@@ -11,6 +11,6 @@ export default defineCordisPluginConfig({
   },
   client: {
     name: "@morlay/ui-conversation-message-actions",
-    entry: "src/client/index.ts",
+    entry: "./src/client/index.ts",
   },
 });

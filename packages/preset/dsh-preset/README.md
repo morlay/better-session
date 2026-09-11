@@ -28,12 +28,28 @@ standard`）。`includeShippedRoot` 是上游 `dsh-agent-presets` 的正式配�
 `preset.yml` 仍有意义：`order` 决定 roster 排序，`name` / `description` 作为
 字典未覆盖 locale 的兜底。
 
-## 为什么需要自建 preset
+## persona 走部署级 system-prompt，preset 不碰
 
-`system-prompt` 的 `personaPrefix` 是**部署级** persona，但官方 preset 都自带
-`persona` 行，它在 agent scope 注册 `deployment:persona-prefix` 并**按 scope
-遮蔽**部署级值（上游 `packages/core/system-prompt/tests/scoped.spec.ts` 固化了
-该语义）。因此只 patch `system-prompt` 对官方模式不生效，必须自建 preset。
+个人提示词只在 `cordis.patch.yml` 的 `system-prompt` 行维护一份：
+
+```yaml
+- id: system-prompt
+  config:
+    includeHarnessIdentity: false # 关掉 harness identity
+    includeRuntimeContext: false # 关掉 runtime context 快照
+    personaSuffix: Your working directory is {{cwd}}.
+    personaPrefix: |- # 个人提示词
+      …
+```
+
+preset 自带的 `persona` 行会在 agent scope 注册 `deployment:persona-prefix` 并
+**按 scope 遮蔽**部署级值（上游 `packages/core/system-prompt/tests/scoped.spec.ts`
+固化了该语义），所以生成器把那一行**删掉**，而不是复制一份改过的 persona——同一份
+文案只维护一处。
+
+自建 preset 仍然必要，但只为别的事：`includeShippedRoot: false` 之后需要一份自己的
+roster（id 沿用官方名以走客户端语言字典），以及桌面形态下 preset 必须落在 dsh 包的
+`config/agent-presets` 挂载点（见 dsh-desktopify 的 `dsh.desktop.agentPresets`）。
 
 ## preset 由构建生成，不是手工副本
 
@@ -52,10 +68,11 @@ pnpm --filter @morlay/dsh-preset run generate-presets [outDir]
 ```
 
 脚本把上游 composition 当**数据**读入：`js-yaml` 用 include 的
-`entryListSchema` 解析（`!!js` 标签保留为表达式节点）→ 在 JS 里 map 出
-`persona` 行、替换 `prefix` → `dump` 回 YAML。因此上游任何结构性改动（新增 /
-重命名 row、改字段）都自动跟随，不依赖易碎的文本锚点；上游若删掉 `persona`
-行则 fail loud，而不是产出 persona 未生效的 preset。
+`entryListSchema` 解析（`!!js` 标签保留为表达式节点）→ 在 JS 里改两处（删掉
+`persona` 行、把 `agent-instructions` 行指向本仓库的 fork）→ `dump` 回 YAML。
+因此上游任何结构性改动（新增 / 重命名 row、改字段）都自动跟随，不依赖易碎的文本
+锚点；上游若删掉 `persona` 行，目标（preset 不自带 persona）本就达成，脚本照常
+通过。
 
 脚本先**整目录清空**输出目录再生成：产物完全派生自脚本，残留目录（改过
 `source`、旧命名）不该留下——否则 discovery 会把它们当有效 preset 扫出来。

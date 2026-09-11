@@ -13,7 +13,7 @@
 | `reroll`   | 重生成最后一条已落定助手回复（使用原用户输入）                                    |
 | `retry`    | 重试任意历史回合（`truncate` 只重放目标输入 / `preserve` 重放后续全部）           |
 | `rewind`   | 截断式回退：原会话回退到闭合 `turn/end` 边界                                      |
-| `recall`   | 撤回 user 消息到输入框：只 `rewind` 截断，不重写、不重放（交给用户改后重发）       |
+| `recall`   | 撤回 user 消息到输入框：只 `rewind` 截断，不重写、不重放（交给用户改后重发）      |
 | `fork`     | 从任意闭合边界派生**新会话**（唯一产生新 id 的操作）                              |
 | `timeline` | 版本树投影（HTTP：`GET /session-editor?sessionId=…`）                             |
 

@@ -11,7 +11,10 @@
 
 import type { SessionId } from "@deepseek-ai/dsh-session";
 import type { CheckpointIdentity } from "@deepseek-ai/dsh-session-projection-cache";
-import type { ProjectionCheckpoint, ProjectionCheckpointRow } from "@deepseek-ai/dsh-session-projection";
+import type {
+  ProjectionCheckpoint,
+  ProjectionCheckpointRow,
+} from "@deepseek-ai/dsh-session-projection";
 import type { WorkspaceDomainState, WorkspaceRecord } from "@deepseek-ai/dsh-workspace";
 
 export type {

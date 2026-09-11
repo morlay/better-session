@@ -98,7 +98,8 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs = 2000): Promise<
   for (;;) {
     const value = read();
     if (value !== undefined) return value;
-    if (Date.now() > deadline) throw new Error("timed out waiting for the projection cache service");
+    if (Date.now() > deadline)
+      throw new Error("timed out waiting for the projection cache service");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
@@ -223,7 +224,9 @@ describe("session-rdb projection cache replacement", () => {
       expect(turnsOf(restored.values["turnOutline"])).toEqual([1]);
       await new Promise((resolve) => setTimeout(resolve, 50)); // cold 写回是 fire-and-forget
 
-      expect(turnsOf(cache.cachedSnapshot(child.header, inherited)?.values["turnOutline"])).toEqual([1]);
+      expect(turnsOf(cache.cachedSnapshot(child.header, inherited)?.values["turnOutline"])).toEqual(
+        [1],
+      );
       // identity 校验：同一个 id 配错的 inherited cut 读不到子记录。
       expect(cache.cachedSnapshot(child.header, SessionLogOffset(0))).toBeUndefined();
 

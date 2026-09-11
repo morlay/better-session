@@ -113,7 +113,10 @@ export class SessionProjectionCacheRdb extends Service {
    * @param expected - the log identity the caller holds (live or stored header).
    * @returns the identity-matching record, or `undefined` (absent or unrelated).
    */
-  private recordFor(id: SessionId, expected: CurrentCheckpointIdentity): StoredProjcacheEntry | undefined {
+  private recordFor(
+    id: SessionId,
+    expected: CurrentCheckpointIdentity,
+  ): StoredProjcacheEntry | undefined {
     const record = this.lookup(id);
     if (record === undefined) return undefined;
     return identityMatches(record.identity, expected) ? record : undefined;
@@ -329,12 +332,15 @@ export class SessionProjectionCacheRdb extends Service {
       this.dirty.delete(session);
     });
 
-    this.ctx.effect(() => () => {
-      for (const state of this.dirty.values()) {
-        if (state.timer !== undefined) clearTimeout(state.timer);
-      }
-      this.dirty.clear();
-    }, "sessionProjectionCacheRdb.timers");
+    this.ctx.effect(
+      () => () => {
+        for (const state of this.dirty.values()) {
+          if (state.timer !== undefined) clearTimeout(state.timer);
+        }
+        this.dirty.clear();
+      },
+      "sessionProjectionCacheRdb.timers",
+    );
   }
 
   /** One fail-soft durable checkpoint. */
@@ -374,7 +380,9 @@ export class SessionProjectionCacheRdb extends Service {
 }
 
 /** Detach one checkpoint from live unit state, refusing non-lossless JSON. */
-function detachJson(rows: Record<string, ProjectionCheckpointRow>): Record<string, ProjectionCheckpointRow> {
+function detachJson(
+  rows: Record<string, ProjectionCheckpointRow>,
+): Record<string, ProjectionCheckpointRow> {
   let text: string | undefined;
   try {
     text = JSON.stringify(rows);
@@ -416,8 +424,7 @@ function identityOf(
  */
 function identityMatches(stored: CheckpointIdentity, expected: CurrentCheckpointIdentity): boolean {
   return (
-    stored.formatVersion === expected.formatVersion &&
-    lifecycleIdentityMatches(stored, expected)
+    stored.formatVersion === expected.formatVersion && lifecycleIdentityMatches(stored, expected)
   );
 }
 

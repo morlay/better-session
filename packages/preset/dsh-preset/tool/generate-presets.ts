@@ -5,9 +5,9 @@
  * 为什么是生成而非复制：preset 是运行期被 discovery 扫描的 composition，
  * 必须随包发布；但手工维护副本会与上游 drift。这里把上游 `standard` / `ptc`
  * 当数据读入——`js-yaml` 用 include 的 `entryListSchema` 解析（`!!js` 标签
- * 因此保留为表达式节点）——在 JS 里 map 出 `persona` 行并替换 prefix，再
- * `dump` 回 YAML。上游任何结构性改动（新增/重命名 row、改字段）都自动跟随，
- * 不依赖易碎的文本锚点。
+ * 因此保留为表达式节点）——在 JS 里改两处（删掉自带的 `persona` 行、把
+ * `agent-instructions` 行指向本仓库的 fork），再 `dump` 回 YAML。上游任何结构性
+ * 改动（新增/重命名 row、改字段）都自动跟随，不依赖易碎的文本锚点。
  *
  * 产物落在 `dist/` 而非源码树：dist 是构建输出（gitignore），既不会与 oxfmt
  * 互相改格式，也不会把派生文件混进源码。
@@ -36,17 +36,6 @@ export const UPSTREAM_PRESETS = join(
   "presets",
 );
 
-/** 个人 persona：替换上游 preset 的部署级默认。 */
-export const PERSONA_PREFIX = [
-  "你是一个经验丰富的编程专家，YAGNI 是你的编程哲学，PDCA 是你的行为规范",
-  "",
-  "## 语言与行为",
-  "",
-  "- 所有思考、分析、推理过程、工具调用描述等必须使用中文，专有名词除外",
-  "- 思考不要陷入重复循环，一旦循环，立即退出",
-  "- 思考聚焦需求理解与方案设计（要点、流程、验证策略），不预演具体代码实现；代码在 Do 阶段基于实际文件状态输出，正确性由 Check 验证。",
-].join("\n");
-
 /** 每个自定义 preset：上游源 preset（同时是产物目录名）与展示元数据。 */
 export const PRESET_SOURCES = [
   {
@@ -71,13 +60,16 @@ function generatedHeader(): string {
 `;
 }
 
-/** 上游 composition 的一行；只用到 id、name 与 config.prefix。 */
+/** 上游 composition 的一行；只用到 id 与 name。 */
 interface CompositionRow {
   id?: string;
   name?: string;
-  config?: { prefix?: string } & Record<string, unknown>;
+  config?: Record<string, unknown>;
   [key: string]: unknown;
 }
+
+/** 上游 preset 里自带 persona 的行 id（本仓库的 persona 走部署级 system-prompt）。 */
+export const PERSONA_ROW_ID = "persona";
 
 /** 上游 preset 里承载工作区指令的行 id。 */
 export const INSTRUCTIONS_ROW_ID = "agent-instructions";
@@ -92,7 +84,7 @@ export const INSTRUCTIONS_ROW_ID = "agent-instructions";
 export const INSTRUCTIONS_PLUGIN = "@morlay/dsh-agent-instructions-as-prompt";
 
 /**
- * 把上游 composition 文本渲染成产物文本：解析 → map persona 与 instructions → dump。
+ * 把上游 composition 文本渲染成产物文本：解析 → 改 persona 与 instructions 两行 → dump。
  * @param source - 上游 preset id，用于 header 与诊断。
  * @param upstream - 上游 composition 文本。
  * @returns 带 header 的产物文本。
@@ -101,13 +93,6 @@ export function renderComposition(source: string, upstream: string): string {
   const rows = yaml.load(upstream, {
     schema: entryListSchema,
   }) as CompositionRow[];
-  const persona = rows.find((row) => row.id === "persona");
-  if (persona?.config === undefined) {
-    throw new Error(
-      `generate-presets: upstream \`${source}\` has no \`persona\` row with a config; ` +
-        "upstream changed — re-check how this preset declares its persona",
-    );
-  }
   const instructions = rows.find((row) => row.id === INSTRUCTIONS_ROW_ID);
   if (instructions === undefined) {
     throw new Error(
@@ -116,8 +101,13 @@ export function renderComposition(source: string, upstream: string): string {
     );
   }
 
-  persona.config.prefix = PERSONA_PREFIX;
   instructions.name = INSTRUCTIONS_PLUGIN;
+  // 删掉 preset 自带的 `persona` 行：它会在 agent scope 注册
+  // `deployment:persona-prefix` 并**遮蔽**部署级 persona（system-prompt 的
+  // personaPrefix，见上游 system-prompt 的 Config 文档）。个人提示词只由
+  // `cordis.patch.yml` 的 system-prompt 行提供，这里不再复制一份。
+  const persona = rows.findIndex((row) => row.id === PERSONA_ROW_ID);
+  if (persona >= 0) rows.splice(persona, 1);
   // `quotingType: '"'` 是刻意选择：yaml.dump 默认用单引号，而仓库的 oxfmt 会把
   // YAML 单引号改成双引号——不显式指定就会 fmt 与生成器来回改。指定后产物与
   // `oxfmt --check` 零差异（实测），故 `presets/**` 无需 fmt 忽略。
