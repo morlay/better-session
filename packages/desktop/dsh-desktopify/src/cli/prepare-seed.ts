@@ -316,6 +316,12 @@ export function seedFingerprint(input: {
     hash.update(readFileSync(lockfile));
     hash.update("\0");
   }
+  // 闭包结构（顶层包名集合）也算指纹：布局/链接变化不改变任何包的源码内容，
+  // 但会改变运行期解析结果，指纹必须跟着变，否则壳会跳过 profile 替换。
+  hash.update("closure\0");
+  for (const name of closurePackageDirs(input.closureModulesDir).keys()) {
+    hash.update(`${name}\0`);
+  }
   hash.update("local-closure\0");
   const local = localPackageDirs(input.workspaceRoot);
   for (const name of closurePackageDirs(input.closureModulesDir).keys()) {
