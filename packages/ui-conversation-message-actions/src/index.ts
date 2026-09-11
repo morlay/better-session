@@ -17,6 +17,7 @@ import {
 import type {
   EditOperation,
   EditableMessageBlock,
+  RecallOperation,
   RerollOperation,
   RetryOperation,
   RetryableTurn,
@@ -43,6 +44,7 @@ export type { CascadePolicy, EditableBlockKind } from "@morlay/session-branch";
 export type {
   EditableMessageBlock,
   EditOperation,
+  RecallOperation,
   RerollOperation,
   RetryOperation,
   RetryableTurn,
@@ -250,6 +252,10 @@ export class SessionEditor extends Service {
     return this.branchOperation(operation, signal);
   }
 
+  recall(operation: RecallOperation, signal?: AbortSignal): Promise<SessionEditorResult> {
+    return this.recallOperation(operation, signal);
+  }
+
   async editableMessages(
     sessionId: SessionId,
     signal?: AbortSignal,
@@ -384,6 +390,57 @@ export class SessionEditor extends Service {
       // 操作后是否仍有 live owner（prepareReplay 可能 resume 出 agent）。
       live: this.ctx.sessions.get(operation.sessionId) !== undefined,
     };
+  }
+
+  /**
+   * 撤回（recall）：只 rewind 截断，不重写、不重放——被撤回的 user 消息文本
+   * 由客户端回填到输入框，交给用户修改后重新发送。
+   *
+   * 边界与 edit 的轮首 user 一致：轮首消息整轮截断到前一轮 `turn/end`
+   * （无前轮则 -1），轮内 followup 只截断到该消息本身（exclusive drop），
+   * 避免留下悬空 `turn/start` 让下一次发送开到错误轮号。
+   */
+  private async recallOperation(
+    operation: RecallOperation,
+    signal?: AbortSignal,
+  ): Promise<SessionEditorResult> {
+    signal?.throwIfAborted();
+    const events = await this.readEvents(operation.sessionId, signal);
+    const turns = closedTurns(events);
+    const turnIndex = turns.findIndex(
+      (turn) =>
+        operation.eventSeq > turn.startSeq &&
+        (turn.endSeq === undefined || operation.eventSeq < turn.endSeq),
+    );
+    const turn = turns[turnIndex];
+    if (turn === undefined) {
+      throw new SessionBranchError("所选消息不属于已落定回合。", "INVALID_BOUNDARY");
+    }
+    const userIndex = turn.users.findIndex((user) => user.seq === operation.eventSeq);
+    if (userIndex === -1) {
+      throw new SessionBranchError("所选消息不存在或不可撤回。", "INVALID_BOUNDARY");
+    }
+    const preceding = precedingContentIndex(turns, turnIndex);
+    const boundary =
+      userIndex === 0 ? (preceding < 0 ? -1 : turns[preceding]!.endSeq!) : operation.eventSeq;
+    // live agent 运行中时先等其停下：rewind 会截断其 session 内存 log。
+    await this.prepareIdle(operation.sessionId, signal);
+    await this.ctx.sessionBranch.rewind(operation.sessionId, boundary, signal);
+    return {
+      sessionId: operation.sessionId,
+      queuedTurns: 0,
+      live: this.ctx.sessions.get(operation.sessionId) !== undefined,
+    };
+  }
+
+  /** rewind 前等待驻留 agent 到达 quiescence（无 agent / 无 live owner 时空操作）。 */
+  private async prepareIdle(sessionId: SessionId, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    const agents = this.ctx.get("agents") as EditorAgentRegistry | undefined;
+    const existing = agents?.get(sessionId);
+    if (existing === undefined) return;
+    await existing.whenIdle();
+    signal?.throwIfAborted();
   }
 
   private async readEvents(
@@ -546,6 +603,12 @@ function decodeOperation(value: unknown): SessionEditorOperation {
         sessionId,
         toBoundary: integerOf(record["toBoundary"], "toBoundary"),
       };
+    case "recall":
+      return {
+        action: "recall",
+        sessionId,
+        eventSeq: integerOf(record["eventSeq"], "eventSeq"),
+      };
     case "fork":
       return {
         action: "fork",
@@ -556,7 +619,7 @@ function decodeOperation(value: unknown): SessionEditorOperation {
           : { childSessionId: sessionIdOf(record["childSessionId"]) }),
       };
     default:
-      throw new TypeError("action 必须是 edit、reroll、retry、rewind 或 fork。");
+      throw new TypeError("action 必须是 edit、reroll、retry、rewind、recall 或 fork。");
   }
 }
 
@@ -629,6 +692,14 @@ async function runOperation(
     case "rewind":
       await editor.rewind(operation.sessionId, operation.toBoundary);
       return { sessionId: operation.sessionId, queuedTurns: 0 };
+    case "recall": {
+      const result = await editor.recall(operation);
+      return {
+        sessionId: result.sessionId,
+        queuedTurns: result.queuedTurns,
+        ...(result.live === undefined ? {} : { live: result.live }),
+      };
+    }
     case "fork":
       return {
         sessionId: await editor.fork(

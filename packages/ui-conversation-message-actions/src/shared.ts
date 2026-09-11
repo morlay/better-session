@@ -33,6 +33,12 @@ export interface RewindOperation {
   toBoundary: number;
 }
 
+export interface RecallOperation {
+  action: "recall";
+  sessionId: SessionId;
+  eventSeq: number;
+}
+
 export interface ForkOperation {
   action: "fork";
   sessionId: SessionId;
@@ -45,6 +51,7 @@ export type SessionEditorOperation =
   | RerollOperation
   | RetryOperation
   | RewindOperation
+  | RecallOperation
   | ForkOperation;
 
 export interface SessionEditorOperationResult {

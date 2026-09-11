@@ -6,7 +6,7 @@
 
 ## 上下文
 
-- [会话编辑](./packages/session-branch/CONTEXT.md) — 为会话提供就地编辑 / 重试 / 分支（rewind / retry / fork）闭环
+- [会话编辑](./packages/session-branch/CONTEXT.md) — 为会话提供就地编辑 / 重试 / 撤回 / 分支（rewind / retry / recall / fork）闭环
 - [LLM 适配](./packages/llm-openai-compatible/CONTEXT.md) — 为 OpenAI 兼容端点提供 LLM 适配器
 
 ## 关系

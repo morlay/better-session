@@ -26,7 +26,7 @@ function editorApiPath(): string {
 export interface SessionEditorState {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
-  pending: VersionOperation | "import" | null;
+  pending: VersionOperation | "recall" | "import" | null;
   timeline: SessionEditorTimeline | null;
 }
 
@@ -42,6 +42,7 @@ export interface SessionEditorFace {
   retry(turn: number, cascade: "truncate" | "preserve"): Promise<boolean>;
   reroll(): Promise<boolean>;
   rewind(toBoundary: number): Promise<boolean>;
+  recall(message: EditableMessageBlock): Promise<boolean>;
 
   importSession(file: File): Promise<boolean>;
   openVersion(sessionId: string): Promise<void>;
@@ -105,6 +106,11 @@ export class SessionEditorController {
       reroll: () => this.mutate({ action: "reroll", sessionId: this.sessionId }),
       rewind: (toBoundary) =>
         this.mutate({ action: "rewind", sessionId: this.sessionId, toBoundary }),
+      recall: (message) =>
+        this.mutate(
+          { action: "recall", sessionId: this.sessionId, eventSeq: message.eventSeq },
+          () => this.setComposerDraft(message.text),
+        ),
       importSession: (file) => this.importSession(file),
       openVersion: (sessionId) => this.openWhenListed(sessionId as SessionId),
     };
@@ -196,7 +202,10 @@ export class SessionEditorController {
     }
   }
 
-  private async mutate(operation: SessionEditorOperation): Promise<boolean> {
+  private async mutate(
+    operation: SessionEditorOperation,
+    onApplied?: () => void,
+  ): Promise<boolean> {
     // 只拦截并发操作；不要求 status === "ready"——编辑/重试的数据来自客户端
     // conversation 节点，与 timeline 加载无关，status 为 idle 时也可发起请求。
     const current = this.store.getSnapshot();
@@ -222,6 +231,9 @@ export class SessionEditorController {
       this.store.update((state) => {
         state.pending = null;
       });
+      // recall 的草稿回填必须在刷新（resync / 整页重载）之前：草稿经会话级
+      // 持久化 mirror 落 store，整页重载后仍能恢复。
+      onApplied?.();
       const result = value as SessionEditorOperationResult;
       // 仅 fork 产生新 id 时需要等列表发布并打开新版本；就地编辑不改 id。
       if (String(result.sessionId) !== String(this.sessionId)) {
@@ -264,6 +276,22 @@ export class SessionEditorController {
       });
       return false;
     }
+  }
+
+  /**
+   * 把撤回的消息文本回填到该会话的 composer 草稿（`conversation.input` 的
+   * `setDraft`，即主输入框的整段替换语义）。会话 scope / binding / conversation
+   * 服务缺失时静默跳过——撤回本身已成功，草稿回填失败不应回滚会话状态。
+   */
+  private setComposerDraft(text: string): void {
+    // binding 缺失时 input.for 会抛（会话 scope 已拆除），先短路。
+    if (this.sessions.binding(this.sessionId) === undefined) return;
+    const scoped = this.sessions.scope(this.sessionId);
+    if (scoped === undefined) return;
+    const conversation = scoped.get("conversation") as
+      | { input?: { for(ctx: ClientContext): { setDraft(text: string): void } } }
+      | undefined;
+    conversation?.input?.for(scoped).setDraft(text);
   }
 
   private async importSession(file: File): Promise<boolean> {

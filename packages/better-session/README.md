@@ -17,7 +17,7 @@ dsh plugin --profile web add "@morlay/better-session"
 
 - `ctx.sessionPersistence` ← RDB（SQLite / PostgreSQL）持久化后端
 - `ctx.sessionBranch` ← rewind / fork 数据层
-- `ctx.sessionEditor` ← edit / retry / fork 编排（HTTP：`/session-editor`）
+- `ctx.sessionEditor` ← edit / retry / recall / fork 编排（HTTP：`/session-editor`）
 - `conversation.chat.node` ← 渲染替换（user 消息行内编辑 / 重试按钮）
 - `ctx.sessionProjectionCache` ← 投影 checkpoint（替换官方插件，落 rdb 语义表）
 - storage hub 的 `rdb` KV 后端 ← workspace 域落 rdb 语义表
@@ -31,7 +31,7 @@ dsh plugin --profile web add "@morlay/better-session"
 
 装配后即可在 GUI 会话中：
 
-- **编辑** user 消息 → 就地重写并重放（重新生成回复）
+- **编辑** user 消息 → 撤回该消息及其后内容到输入框（rewind，不重放），用户改后自行发送（带确认弹窗）
 - **重试** 任意闭合回合 → 就地重放该回合输入（带确认弹窗）
 - **分支**（fork）→ 从任意闭合边界派生**新会话**
 

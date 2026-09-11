@@ -1,6 +1,6 @@
 # @morlay/ui-conversation-message-actions
 
-`rewind / retry / fork` 的**编排层**：在 `@morlay/session-branch` 的 provider
+`rewind / retry / recall / fork` 的**编排层**：在 `@morlay/session-branch` 的 provider
 抽象之上组装完整功能（产品语义对齐 [dsh-message-edit](https://github.com/Moeblack/dsh-message-edit)），
 并提供**浏览器半**（client bundle）：替换 `conversation.chat.node` 的
 `user` / `steering` 渲染，在 user 消息行内直接挂编辑 / 重试入口。
@@ -13,6 +13,7 @@
 | `reroll`   | 重生成最后一条已落定助手回复（使用原用户输入）                                    |
 | `retry`    | 重试任意历史回合（`truncate` 只重放目标输入 / `preserve` 重放后续全部）           |
 | `rewind`   | 截断式回退：原会话回退到闭合 `turn/end` 边界                                      |
+| `recall`   | 撤回 user 消息到输入框：只 `rewind` 截断，不重写、不重放（交给用户改后重发）       |
 | `fork`     | 从任意闭合边界派生**新会话**（唯一产生新 id 的操作）                              |
 | `timeline` | 版本树投影（HTTP：`GET /session-editor?sessionId=…`）                             |
 
@@ -28,6 +29,9 @@
   点不开的空项与轮号空洞；manualTurn 的轮号同样按保留前缀收敛（正常会话
   等于目标轮号）。版本效果仍记录**原**目标轮号（操作历史）；
 - **只有 `fork` 创建新 id**（`ForkOperation` / `forkFrom`，纯 append 派生）；
+- **`recall` 只截断不重写**：边界与 `edit` 的轮首 user 一致（轮首整轮截断到前一轮
+  `turn/end`，轮内 followup exclusive drop），但只 `rewind` 即返回——不写版本效果、
+  不重放；被撤回的 user 文本由浏览器半回填到 composer，用户修改后自行发送；
 - 版本效果事件（`session-branch/version`）携带 `ignorable: true`：**原样落库**
   （rdb 不按信封过滤，与 JSONL 一致），非 branch 读者凭信封跳过；
 - 重放输入经 agent 驱动（见下）排队到原会话，agent 基于截断后历史回复。
@@ -52,9 +56,10 @@
 
 - **shadow 注册**：`user` / `steering` 两个 key 以 `priority: -1` 重新注册
   （最低优先级渲染，shadow 上游默认注册）；其余 key 沿用上游渲染器；
-- **编辑 / 重试按钮只挂在 user 消息**（`UserMessageNodeView`）：编辑弹窗复用
-  dsh settings 同款 `Modal` + `Button`，输入框复用 composer-card 视觉与自动
-  增长；重试先弹确认；未闭合轮次不显示重试；
+- **编辑 / 重试按钮只挂在 user 消息**（`UserMessageNodeView`）：编辑不再打开编辑
+  弹窗，而是确认（`Modal` + `Button`）后调用 `recall`——服务端只 `rewind` 截断，
+  客户端把消息文本 `setDraft` 回填到主输入框（`conversation.input`），交给用户
+  修改后自行发送；重试仍先弹确认；未闭合轮次不显示重试；
 - **操作后刷新**：就地编辑后优先调用客户端会话级 `resync()`（重置窗口并重新
   拉取历史，不整页重载——rewind 的删除无法经 append-only 事件流表达，seq
   回退只做增量会残留旧节点），随后丢弃该会话的全部投影行
@@ -73,7 +78,7 @@
   `ctx.sessionBranch`（provider 实现，如 `@morlay/session-rdb`）；
 - 本服务只做**编排**：闭合轮次扫描、版本效果事件构造、派生 seed 组装、
   rewind 命令透传、agent 驱动、HTTP 面（`POST /session-editor` 执行
-  edit / reroll / retry / rewind / fork）。
+  edit / reroll / retry / rewind / recall / fork）。
 
 ## 装配
 

@@ -2,8 +2,8 @@
 
 分支式会话编辑 monorepo：在不修改上游 `@deepseek-ai/*` 代码的前提下，为
 DeepSeek Harness 会话提供 **就地编辑 / 重试 / 分支**（rewind / retry /
-fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写**同一会话**
-（session id 不变），只有分支才派生新 id。领域术语见
+fork）闭环——GUI 里撤回用户消息到输入框或就地重写、重试任意回合，重写
+**同一会话**（session id 不变），只有分支才派生新 id。领域术语见
 [CONTEXT-MAP.md](../CONTEXT-MAP.md)（会话编辑 / LLM 适配两个上下文）。
 
 ## 仓库布局
@@ -52,7 +52,7 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 | 层     | 包                                        | 职责                                                                                                                    |
 | ------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | 契约层 | `@morlay/session-branch`                  | `SessionBranchProvider` 抽象（rewind / forkFrom / readBranchPrefix）+ `SessionBranch` 服务 + `buildTimeline` 版本树投影 |
-| 编排层 | `@morlay/ui-conversation-message-actions` | `SessionEditor` 编排（edit / retry / fork 完整功能）+ client bundle（`conversation.chat.node` 渲染替换）                |
+| 编排层 | `@morlay/ui-conversation-message-actions` | `SessionEditor` 编排（edit / retry / recall / fork 完整功能）+ client bundle（`conversation.chat.node` 渲染替换）                |
 | 实现层 | `@morlay/session-rdb`                     | RDB 持久化（实现上游 `SessionHandle` 模型）+ 分支 provider（实现 `SessionBranchProvider`）+ storages 接管（投影缓存服务与 workspace 域 KV 后端） |
 | 聚合   | `@morlay/better-session`                  | profile bundle：`cordis.patch.yml` 一次性装配以上全部到 web profile                                                     |
 
@@ -65,6 +65,9 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 - **就地编辑**：edit / retry 用 `rewind` 截断 + `append` 重写同一会话
   （session id 不变、版本树单根）；只有 `fork` 创建新 id
   （[ADR 0001](../packages/ui-conversation-message-actions/docs/adr/0001-就地编辑重写同一会话而非新建会话.md)）。
+- **撤回（recall）**：只 `rewind` 截断到与 edit 轮首 user 相同的边界（轮首到
+  前一轮 `turn/end`，轮内 followup exclusive drop），不重写、不重放、不写版本
+  效果；被撤回的 user 文本由 client 回填到 composer，用户修改后自行发送。
 - **`rewind` 支持 live 会话**：GUI 打开中的会话也能就地编辑（截断 RDB 与
   内存 log、对齐 handle cursor、重置 agent 轮次游标）
   （[ADR 0003](../packages/session-rdb/docs/adr/0003-rewind绕过handle模型直接截断.md)）。
@@ -78,7 +81,7 @@ fork）闭环——GUI 里直接编辑用户消息、重试任意回合，重写
 ## 装配（`@morlay/better-session` bundle patch）
 
 `cordis.patch.yml` 一次装配四层服务：持久化（RDB，替换官方 jsonl）、分支
-数据、edit / retry / fork 编排、`conversation.chat.node` 渲染替换。装配链
+数据、edit / retry / recall / fork 编排、`conversation.chat.node` 渲染替换。装配链
 与服务调用示例见
 [packages/better-session/README.md](../packages/better-session/README.md)，
 rdb 替换的起因与权衡见
@@ -99,7 +102,8 @@ workspace 域经上游 `StorageBackend.kv` 契约落 `t_workspaces` /
 ## 操作语义
 
 `edit` / `retry` / `reroll` 就地重写同一会话（`rewind` 截断 + `append`
-重放，session id 不变），只有 `fork` 派生新 id。各操作的完整语义见
+重放，session id 不变）；`recall` 只 `rewind` 截断并把消息文本交回 composer
+（不重放）；只有 `fork` 派生新 id。各操作的完整语义见
 [packages/ui-conversation-message-actions/README.md](../packages/ui-conversation-message-actions/README.md)。
 
 ## 与上游的关系

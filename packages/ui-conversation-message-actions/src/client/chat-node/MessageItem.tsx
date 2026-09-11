@@ -12,7 +12,6 @@ import { JsonBlock } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { ChatNodeViewProps, ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-chat/client";
 import type { RenderMessageImages } from "@deepseek-ai/dsh-client-ui-conversation/client";
 import { MessageIconActions } from "./MessageIconActions.tsx";
-import { MessageEditDialog } from "./MessageEditDialog.tsx";
 import css from "./MessageItem.module.css";
 import type { EditableMessageBlock } from "../../shared.ts";
 import type { SessionEditorFace } from "../controller.ts";
@@ -104,11 +103,11 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
   node,
   renderMessageImages,
   t,
-  edit,
+  recall,
   retry,
 }: ChatNodeViewProps<"user" | "steering"> & InjectFace<SessionEditorFace>) {
   const data = node.data;
-  const [editing, setEditing] = useState<EditableMessageBlock | null>(null);
+  const [confirmingRecall, setConfirmingRecall] = useState<EditableMessageBlock | null>(null);
   const [confirmingRetry, setConfirmingRetry] = useState(false);
   const turnLocation =
     node.location.kind === "turn" || node.location.kind === "step" ? node.location.turn : undefined;
@@ -125,7 +124,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
     textBlock === undefined || turn === undefined
       ? undefined
       : () => {
-          setEditing({
+          setConfirmingRecall({
             key: `${node.anchorSeq}:${String(textBlockIndex)}`,
             turn,
             eventSeq: node.anchorSeq,
@@ -144,11 +143,30 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
       : undefined;
   return (
     <>
-      {editing !== null && (
-        <MessageEditDialog
-          block={editing}
-          onSave={(text) => edit(editing, text, "truncate")}
-          onClose={() => setEditing(null)}
+      {confirmingRecall !== null && (
+        <Modal
+          open
+          onClose={() => setConfirmingRecall(null)}
+          title="编辑消息"
+          closeLabel="关闭"
+          description="将撤回该消息及其之后的对话内容到输入框，请修改后重新发送。"
+          footer={
+            <div className={css.confirmActions}>
+              <Button variant="outline" onClick={() => setConfirmingRecall(null)}>
+                取消
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const target = confirmingRecall;
+                  setConfirmingRecall(null);
+                  void recall(target);
+                }}
+              >
+                撤回并编辑
+              </Button>
+            </div>
+          }
         />
       )}
       {confirmingRetry && turn !== undefined && (

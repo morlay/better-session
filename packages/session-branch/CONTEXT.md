@@ -1,11 +1,11 @@
 # 会话编辑
 
-为 DeepSeek Harness 会话提供**就地编辑 / 重试 / 分支**（rewind / retry /
-fork）闭环的领域：在不修改上游 `@deepseek-ai/*` 的前提下，重写同一会话或
-从闭合边界派生新会话，并投影版本树。契约层 `@morlay/session-branch` →
-编排层 `@morlay/ui-conversation-message-actions` → 实现层
-`@morlay/session-rdb`；装配决策（rdb 替换官方 jsonl、settings 覆盖）归
-聚合层 `@morlay/better-session`。
+为 DeepSeek Harness 会话提供**就地编辑 / 重试 / 撤回 / 分支**（rewind /
+retry / recall / fork）闭环的领域：在不修改上游 `@deepseek-ai/*` 的前提下，
+重写同一会话或从闭合边界派生新会话，并投影版本树。契约层
+`@morlay/session-branch` → 编排层 `@morlay/ui-conversation-message-actions` →
+实现层 `@morlay/session-rdb`；装配决策（rdb 替换官方 jsonl、settings 覆盖）
+归聚合层 `@morlay/better-session`。
 
 ## 装配
 
@@ -31,6 +31,11 @@ _避免使用_：对话、聊天记录
 edit / retry / reroll 的语义：rewind 截断到闭合边界后重写**同一会话**，
 session id 不变、版本树保持单根。
 _避免使用_：原地修改、in-place
+
+**撤回（recall）**：
+把已落定 user 消息从会话截断（rewind），文本交回输入框由用户修改后重新
+发送——只截断、不重写、不重放、不产生版本效果。
+_避免使用_：撤销、undo
 
 **分支（fork）**：
 从任意闭合边界派生**新会话**（纯 append，不触碰源会话）——唯一产生新
