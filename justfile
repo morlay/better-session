@@ -1,5 +1,5 @@
-mod pg 'packages/session-rdb/tool/pg/justfile'
 mod vendor 'vendor/justfile'
+mod pg 'packages/session/session-rdb/tool/pg/justfile'
 mod custom 'apps/dsh-custom-next/justfile'
 
 default:
@@ -41,6 +41,6 @@ test:
 
 # 显式导入旧 $DSH_HOME/storages JSON 到 session-rdb 专用表（先停掉 dsh）。
 # 例：just import-storages --dsh-home apps/dsh-custom-next/.dsh-store \
-#       --path apps/dsh-custom-next/.dsh-store/sessions/sessions.sqlite
+# --path apps/dsh-custom-next/.dsh-store/sessions/sessions.sqlite
 import-storages *args:
     pnpm exec tsx packages/session-rdb/tool/import-storages.ts {{ args }}

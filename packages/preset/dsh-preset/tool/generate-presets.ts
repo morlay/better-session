@@ -28,7 +28,7 @@ import { entryListSchema } from "@deepseek-ai/cordis-plugin-include";
 import yaml from "js-yaml";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const REPO_ROOT = resolve(PACKAGE_ROOT, "..", "..");
+const REPO_ROOT = resolve(PACKAGE_ROOT, "..", "..", "..");
 const UPSTREAM_PRESETS = join(
   REPO_ROOT,
   "vendor/deepseek-harness/packages/preset/agent-presets/presets",
@@ -118,13 +118,18 @@ export const PRESETS_OUT_DIR = "dist/presets";
  * @param outDir - 输出目录绝对路径；缺省为包根下的 {@link PRESETS_OUT_DIR}。
  * @returns 产物文件路径列表。
  */
-export function generatePresets(outDir: string = join(PACKAGE_ROOT, PRESETS_OUT_DIR)): string[] {
+export function generatePresets(
+  outDir: string = join(PACKAGE_ROOT, PRESETS_OUT_DIR),
+): string[] {
   // 先整目录清空：产物完全派生自本脚本，残留目录（改过 source、旧命名）不该留下
   // ——否则 discovery 会把它们当有效 preset 扫出来。
   rmSync(outDir, { recursive: true, force: true });
   const written: string[] = [];
   for (const entry of PRESET_SOURCES) {
-    const upstream = readFileSync(join(UPSTREAM_PRESETS, entry.source, "agent.cordis.yml"), "utf8");
+    const upstream = readFileSync(
+      join(UPSTREAM_PRESETS, entry.source, "agent.cordis.yml"),
+      "utf8",
+    );
     // 产物目录名 = 上游 preset id：canonical id 让展示名走客户端语言字典
     // （`presetDisplayText` 对 trust=system 且 id 命中的行做本地化）。
     const dir = join(outDir, entry.source);
@@ -146,7 +151,9 @@ export function generatePresets(outDir: string = join(PACKAGE_ROOT, PRESETS_OUT_
  * 在 clean 之前写会被删掉。挂在 done 上则产物与 JS/d.ts 同批产出。
  * @returns 供 `UserConfig.hooks` 使用的 hook 集合。
  */
-export function presetHooks(): { "build:done": (ctx: { options: { outDir: string } }) => void } {
+export function presetHooks(): {
+  "build:done": (ctx: { options: { outDir: string } }) => void;
+} {
   return {
     "build:done": (ctx) => {
       // 用 tsdown 解析后的 outDir（尊重用户覆盖），而非硬编码 dist。
@@ -156,7 +163,10 @@ export function presetHooks(): { "build:done": (ctx: { options: { outDir: string
   };
 }
 
-if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === `file://${process.argv[1]}`
+) {
   const outDir = process.argv[2];
   for (const path of generatePresets(outDir)) {
     process.stdout.write(`generated ${path}\n`);

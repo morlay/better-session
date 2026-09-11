@@ -34,8 +34,10 @@
   },
   "scripts": {
     "build": "pnpm exec tsdown",
-    "generate-presets": "pnpm exec tsx tool/generate-presets.ts",
     "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "@morlay/dsh-instructions-as-prompt": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/cordis-plugin-include": "workspace:^",

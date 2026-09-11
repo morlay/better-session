@@ -5,7 +5,7 @@ packages:
   - vendor/deepseek-harness/native/system/packages/*
   - vendor/deepseek-harness/apps/*
   - devpackages/*
-  - packages/*
+  - packages/*/*
   - apps/*
 
 linkWorkspacePackages: true
