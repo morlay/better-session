@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-preset",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Personal dsh profile bundle: disables the shipped agent presets, builds generated standard / ptc presets into dist, and declares personal llm-pi-ai provider routes.",
   "keywords": [
     "dsh",
@@ -51,6 +51,13 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    }
+    },
+    "configTrees": [
+      {
+        "mount": "config/agent-presets",
+        "path": "dist/presets",
+        "scanRoster": true
+      }
+    ]
   }
 }

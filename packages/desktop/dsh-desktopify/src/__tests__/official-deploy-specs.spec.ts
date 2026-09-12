@@ -45,6 +45,8 @@ describe("official deploy specs", () => {
     expect(specs["@deepseek-ai/dsh-bash-local"]).toBe("^0.9.0");
     // 工作区没有的官方包（仓库外 app 缺的实验包）：按 app 的目标版本补装。
     expect(specs["@deepseek-ai/dsh-experimental-agent-team"]).toBe("1.2.3");
+    // 非 harness 版本化的官方包（cordis-plugin-group 走独立的 1.x 线）：不猜版本。
+    expect(specs["@deepseek-ai/cordis-plugin-group"]).toBeUndefined();
     // 源码树的包与工具自带产物不进 deploy 清单（`workspace:` 依赖在 deploy 项目里解析不了）。
     expect(specs["@deepseek-ai/dsh-shell"]).toBeUndefined();
     expect(specs["@deepseek-ai/dsh-desktop-host"]).toBeUndefined();

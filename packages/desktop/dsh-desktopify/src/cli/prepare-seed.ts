@@ -46,7 +46,7 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { SEED_HASH_NAME } from "../seed.ts";
 
-import { materializeAgentPresets } from "./agent-presets.ts";
+import { discoverPresetMounts, materializeAgentPresets } from "./agent-presets.ts";
 import {
   DSH_PACKAGE,
   closurePackageDirs,
@@ -453,9 +453,12 @@ export async function runPrepareSeed(options: PrepareSeedOptions): Promise<void>
   // 工作区包（@morlay/*）的 exports 指向 src（dev 友好），打包闭包没有
   // tsx 加载器——把闭包内这些包的 exports 切到 publishConfig 的 dist 产物。
   switchToPublishedExports(join(profileDir, "node_modules"));
-  // 桌面宿主把 preset roots 钉在 dsh 包内的挂载点，app 声明的 preset 目录
-  // 必须物化到那里才会进入桌面 roster。
-  materializeAgentPresets(profileDir, desktopAgentPresets(manifest));
+  // 桌面宿主把 preset roots 钉在 dsh 包内的挂载点：包自声明（dsh.configTrees）与
+  // app 显式声明的 preset 目录都必须物化到那里才会进入桌面 roster。
+  materializeAgentPresets(
+    profileDir,
+    discoverPresetMounts(manifest, join(profileDir, "node_modules"), desktopAgentPresets(manifest)),
+  );
   writeFileSync(join(profileDir, SEED_HASH_NAME), fingerprint);
   console.log(`desktop seed: wrote ${seedOutputRoot} (${fingerprint.slice(0, 12)})`);
 }

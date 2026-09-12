@@ -34,7 +34,7 @@ import {
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { writeAppConfig } from "../appconfig.ts";
-import { materializeAgentPresets } from "./agent-presets.ts";
+import { discoverPresetMounts, materializeAgentPresets } from "./agent-presets.ts";
 import {
   DESKTOP_HOST_PACKAGE,
   DSH_PACKAGE,
@@ -245,7 +245,10 @@ function prepareDevelopmentProject(
   const hostLink = join(destinationModules, "@deepseek-ai", "dsh-desktop-host");
   removeOwnedPath(hostLink);
   copyPackage(host.dir, hostLink);
-  materializeAgentPresets(projectDir, desktopAgentPresets(manifest));
+  materializeAgentPresets(
+    projectDir,
+    discoverPresetMounts(manifest, destinationModules, desktopAgentPresets(manifest)),
+  );
   return projectDir;
 }
 

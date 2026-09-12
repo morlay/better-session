@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-desktopify",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Desktop packaging tool for dsh workspaces: hosts the upstream dsh-desktop-host child over framed byte pipes, with dev (workspace-linked) and bundle (static, unsigned) modes.",
   "keywords": [
     "desktop",

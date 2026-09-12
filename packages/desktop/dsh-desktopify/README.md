@@ -47,22 +47,27 @@
   cordis-plugin-group 及约 20 个 peer 包）由工具内部维护
   （`src/official.ts`），app 只声明自己的依赖、`dsh.version` 与 bundles。
   包位置一律由 node 解析（`src/cli/official-deps.ts`）：app 工作区优先、
-  工具自身安装兜底，不写死 `workspace:`；装配时从官方根（dsh、自带 host、
-  peer 白名单）遍历依赖图，把整棵官方闭包补进部署产物，工作区的清单与
-  lockfile 始终只读。工作区（含工具自身安装）解析不到的官方包——仓库外 app
-  的依赖图里没有实验包这类 peer——按已解析的 dsh 版本钉住装进部署项目
-  （`deploy/package.json`），装之前部署项目先继承工作区的安装设置
+  工具自身安装兜底，不写死 `workspace:`。打包时官方面分两条路进闭包：
+  **registry 面交给 pnpm**——按工作区已解析版本写进 `deploy/package.json` 再
+  `pnpm install`（工作区没装的 `@deepseek-ai/dsh*` 按 app 的 `dsh.version`
+  钉版本；独立版本线如 `cordis-plugin-group` 1.x 不猜版本），文件集语义由
+  npm/pnpm 负责（`files` 不会裁掉 `main` / `bin` / README / LICENSE）；
+  **本地源码包与工具自带的 host** 仍由闭包复制补齐（它们带 `workspace:`
+  依赖，在部署项目里解析不了）。装之前部署项目先继承工作区的安装设置
   （`minimumReleaseAge` 等，`pnpm deploy` 只带走 `allowBuilds` /
-  `patchedDependencies` / `overrides`）。
+  `patchedDependencies` / `overrides`）。工作区的清单与 lockfile 始终只读。
 - **bundles 自动合并**：官方 bundles（`@deepseek-ai/dsh-base`、
   `@deepseek-ai/dsh-web-app`）+ app 的 `dsh.profile.bundles` 自动合并进 dev
   项目与种子 profile。
 - **桌面 preset 物化**：桌面宿主把 `agent-presets.roots` 固定为 dsh 包内的
   `config/agent-presets`（`system` root），bundle patch 里配的 roots 在桌面
-  形态下不生效。app 用 `dsh.desktop.agentPresets` 声明随应用分发的 preset
-  目录（包名 + 子路径，如 `@scope/pkg/presets`），工具把其内容复制到该挂载
-  点；dev 项目里 dsh 包因此以真实副本装入——工作区链接指向只读的上游树，
-  挂载点写不进去。
+  形态下不生效，registry 版 dsh 包内该目录也是空的。工具装配 profile 时把
+  preset 目录物化到该挂载点，两条来源：**随包声明**——profile bundle 用上游
+  同名字段 `dsh.configTrees`（`mount: config/agent-presets`、`path` 相对包根）
+  声明自己的 preset 目录，工具自动发现（`@morlay/dsh-preset` 即声明
+  `dist/presets`）；**app 显式**——`dsh.desktop.agentPresets` 列出 app 自带或
+  要覆盖的目录（包名 + 子路径，如 `@scope/pkg/presets`），最后应用。dev 项目
+  里 dsh 包因此以真实副本装入——工作区链接指向只读的上游树，挂载点写不进去。
 
 ## 工作区契约（package.json）
 
@@ -79,7 +84,8 @@
       "id": "ai.deepseek.dsh.custom",
       "icon": "icon.svg",
       "dshHome": "xdg",
-      "agentPresets": ["@morlay/dsh-preset/dist/presets"], // 随桌面分发的 preset 目录
+      // 可选：包自己用 dsh.configTrees 声明时不用写
+      "agentPresets": ["@morlay/dsh-preset/dist/presets"],
     },
   },
 }
@@ -100,13 +106,13 @@
   `--allow-linked-profile` 放行工作区链接；`--web` 则准备 `web` profile 后
   启动 `dsh web`。
 - **bundle**：`pnpm deploy --prod` 导出 app 闭包（工作区清单与 lockfile 只读）
-  → 部署项目继承工作区的安装设置、补装工作区没有的官方包（按 dsh 版本钉住）
-  → 工具按 node 解析补入官方闭包 → 种子（`dsh-home/profiles/desktop` +
+  → 部署项目继承工作区安装设置；官方 registry 面由 pnpm 装进部署项目，本地
+  源码包与自带 host 由闭包复制补齐 → 种子（`dsh-home/profiles/desktop` +
   `.seed-hash` 指纹）→ 下载校验随包 Node 二进制 → electron-builder 静态打包。
-  指纹覆盖 app 工作区白名单、根 lockfile，以及闭包内每个本地源码包的产物内容
-  （本地源码依赖的版本号不变、内容也可能变），指纹变化时壳在启动时替换
-  profile。闭包内 `@morlay/*` 的 exports 切到 publishConfig 的 dist 产物
-  （打包环境没有 tsx）。
+  指纹覆盖 app 工作区白名单、根 lockfile、闭包内每个本地源码包的产物内容，以及
+  每个安装产物的文件清单（本地源码依赖版本号不变、内容也可能变；安装产物版本
+  固定，但工具选哪些文件进闭包会变），指纹变化时壳在启动时替换 profile。闭包内
+  `@morlay/*` 的 exports 切到 publishConfig 的 dist 产物（打包环境没有 tsx）。
 
 ## 运行时语义
 
@@ -119,6 +125,10 @@
 - **morlay 插件适配**：desktop 模式禁用 `webserver`，`SessionEditor` 的
   HTTP 路由改经 `connection.fetch` 注册到 `/api/session-editor`（web 模式
   仍走 `webServer`）；客户端按 `__DSH_TRANSPORT__.ownsHost` 加 `/api` 前缀。
+- **启动即静默退出**：Electron 的单实例锁落在 userData 目录里；进程被强杀或
+  PID 被复用后残留的 `SingletonLock` 会让新实例直接退出（无输出、退出码 0）。
+  清掉 `<userData>/Singleton*`（macOS `~/Library/Application Support/<app id>/`）
+  即可恢复；同一个 app id 同时只允许一个实例。
 
 ## 环境变量
 

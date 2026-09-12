@@ -499,8 +499,11 @@ export function officialDependencySpecs(input: OfficialResolutionInput): Record<
  * Dependency specs pnpm itself materializes inside the deploy project: the part
  * of the official surface that resolves to registry packages. A package the app
  * targets by version keeps that version, a package the workspace installed
- * keeps a range on its resolved version, and one the workspace cannot resolve at
- * all takes `fallbackVersion` (the version the app targets).
+ * keeps a range on its resolved version, and a harness-versioned package
+ * (`@deepseek-ai/dsh*`) the workspace cannot resolve at all takes
+ * `fallbackVersion` (the version the app targets). An official package with its
+ * own version line (`@deepseek-ai/cordis-plugin-group`, 1.x) is never guessed:
+ * without a resolution it stays out, and the closure walk reports it.
  *
  * Two kinds of official packages stay out of it, because a deploy-project
  * install cannot resolve them: a local source package and the bundled desktop
@@ -525,8 +528,12 @@ export function officialDeploySpecs(
     if (packageName === DESKTOP_HOST_PACKAGE) continue;
     const resolved = resolveOfficialPackage(packageName, input);
     if (resolved === undefined) {
-      // 工作区没有这个包（如仓库外 app 缺的实验包）：按 app 的目标版本补装。
-      if (fallbackVersion !== undefined && fallbackVersion !== "")
+      // 工作区没有这个包（如仓库外 app 缺的实验包）：只有 harness 版本化的包
+      // （`@deepseek-ai/dsh*`，含实验包）能用 app 的目标版本补装；其余官方包
+      // （如独立 1.x 版本线的 @deepseek-ai/cordis-plugin-group）不猜版本，留给闭包
+      // walk 报「装不上」，而不是装出一个不存在的版本。
+      const harnessVersioned = packageName.startsWith("@deepseek-ai/dsh");
+      if (harnessVersioned && fallbackVersion !== undefined && fallbackVersion !== "")
         specs[packageName] = fallbackVersion;
       continue;
     }

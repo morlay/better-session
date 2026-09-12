@@ -12,8 +12,11 @@ function filesUnder(dir: string): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...filesUnder(path));
-    else if (entry.isFile()) found.push(path);
+    if (entry.isDirectory()) {
+      // 测试不是壳源码：改了用例不该说壳产物过期。
+      if (entry.name === "__tests__") continue;
+      found.push(...filesUnder(path));
+    } else if (entry.isFile()) found.push(path);
   }
   return found;
 }
