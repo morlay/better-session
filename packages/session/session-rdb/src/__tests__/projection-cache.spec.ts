@@ -141,6 +141,34 @@ function cachedTurns(harness: Harness, id: string): number[] | undefined {
 }
 
 describe("session-rdb projection cache replacement", () => {
+  it("checkpoints a newly created session without an explicit write", async () => {
+    const { ctx, cache, dispose } = await harness();
+    try {
+      // 写路径由 [Service.init] 安装（class-plugin 装载）；等它执行完再建会话。
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const id = SessionId("created");
+      // 生产形状：新建会话只带初始化事件（无 turn/end），只能靠 created 强制点落行。
+      ctx.sessions.create(id, {
+        meta: meta("created"),
+        seed: [
+          {
+            type: "permission/preset",
+            seq: SessionSeq(0),
+            time: 1,
+            data: { preset: "workspace-write" },
+          },
+        ] as never,
+      });
+      const live = ctx.sessions.get(id)!;
+      const snapshot = await waitFor(() =>
+        cache.cachedSnapshot(live.header, live.inheritedEventCount),
+      );
+      expect(snapshot.values).toHaveProperty("turnOutline");
+    } finally {
+      await dispose();
+    }
+  });
+
   it("serves checkpoints written by the live write path", async () => {
     const { ctx, cache, dispose } = await harness();
     try {

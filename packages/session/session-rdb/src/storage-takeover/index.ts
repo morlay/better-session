@@ -48,13 +48,13 @@ export function installStorageTakeover(ctx: Context, options: StorageTakeoverOpt
     storageCtx.provide(storageBackendServiceKey(RDB_STORAGE_BACKEND), backend);
   });
 
-  // 投影 checkpoint：上游插件被禁用后由本服务提供同名 API。
-  ctx.inject(["sessionProjections"], (projectionCtx) => {
-    new SessionProjectionCacheRdb(
-      projectionCtx,
-      options.projectionCache,
-      options.repository,
-      options.ready,
-    );
+  // 投影 checkpoint：上游插件被禁用后由本服务提供同名 API。按 cordis
+  // class plugin 装载（而不是直接 new）：`static inject` 负责等依赖就绪，
+  // 框架负责调用 `[Service.init]` 安装写入路径——直接 new 会静默跳过 init，
+  // 导致 session/created、turn/end、计数与定时器的 checkpoint 写入全部失效。
+  ctx.plugin(SessionProjectionCacheRdb, {
+    ...options.projectionCache,
+    repository: options.repository,
+    ready: options.ready,
   });
 }

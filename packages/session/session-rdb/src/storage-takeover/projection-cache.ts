@@ -49,6 +49,12 @@ export interface ProjectionCacheConfig {
   writeIntervalMs: number;
 }
 
+/** class-plugin 装载参数：写节流 + storages 接管访问层 + 介质就绪信号。 */
+export interface SessionProjectionCacheRdbOptions extends ProjectionCacheConfig {
+  repository: StorageRepository;
+  ready: Promise<unknown>;
+}
+
 /** 每会话写回节流簿记（只对 live session）。 */
 interface DirtyState {
   pending: number;
@@ -67,35 +73,39 @@ export class SessionProjectionCacheRdb extends Service {
   private readonly dirty = new Map<Session, DirtyState>();
   /** 读路径是否直读介质（`readProjcacheSync` 存在即同步驱动）。 */
   private readonly directReads: boolean;
+  private readonly config: ProjectionCacheConfig;
+  private readonly repository: StorageRepository;
+  private readonly ready: Promise<unknown>;
 
   /**
-   * @param ctx - 插件上下文（须已注入 sessionProjections 与 sessions）。
-   * @param config - 写节流参数。
-   * @param repository - storages 接管表访问层。
-   * @param ready - 介质就绪信号（直读介质前必须等到）。
+   * 本类按 cordis class plugin 装载（`ctx.plugin(SessionProjectionCacheRdb, options)`）：
+   * `static inject` 等依赖就绪后构造，构造后框架调用 `[Service.init]` 安装写入
+   * 路径——直接 `new` 不会触发 init，写入路径会静默缺失。
+   * @param ctx - 插件上下文（已注入 sessionProjections 与 sessions）。
+   * @param options - 写节流 + storages 接管访问层 + 介质就绪信号。
    */
-  constructor(
-    ctx: Context,
-    private readonly config: ProjectionCacheConfig,
-    private readonly repository: StorageRepository,
-    private readonly ready: Promise<unknown>,
-  ) {
+  constructor(ctx: Context, options: SessionProjectionCacheRdbOptions) {
     super(ctx, SESSION_PROJECTION_CACHE_SERVICE);
-    this.directReads = repository.readProjcacheSync !== undefined;
+    this.config = options;
+    this.repository = options.repository;
+    this.ready = options.ready;
+    this.directReads = options.repository.readProjcacheSync !== undefined;
   }
 
   /**
-   * Wait for the medium, then install the write path. Only the async driver
-   * needs a startup mirror: the sync driver serves every read from the table.
+   * Install the write path before the async medium wait: listeners must exist
+   * from plugin activation on, or sessions created while the medium settles
+   * lose their mandatory checkpoints. Only the async driver needs the startup
+   * mirror; the sync driver serves every read from the table.
    */
   protected async [Service.init](): Promise<void> {
+    this.installWritePath();
     await this.ready;
     if (!this.directReads) {
       for (const entry of await this.repository.loadProjcache()) {
         this.records.set(entry.sessionId as SessionId, entry);
       }
     }
-    this.installWritePath();
   }
 
   /** Read one session's stored record: straight from the medium, or from the async mirror. */
