@@ -12,6 +12,8 @@
 #   （workspace 域 → `t_workspaces` / `t_workspace_state`）。
 # - `session-telemetry-otel`：官方遥测后端禁用的默认值（用户提交反馈时才向
 #   官方端点 OTLP 外发）；需要该通路时删除本行即可。
+# - `session-log-deepseek`：官方请求日志上传扩展禁用（默认即 `enabled: false`，
+#   显式禁用让默认部署零官方外发）；需要时删除本行并在 settings 打开。
 
 - id: session-persistence-jsonl
   disabled: true
@@ -23,6 +25,9 @@
   disabled: true
 
 - id: session-telemetry-otel
+  disabled: true
+
+- id: session-log-deepseek
   disabled: true
 
 - id: storage-json

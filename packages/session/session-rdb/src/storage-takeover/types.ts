@@ -80,6 +80,11 @@ export interface StorageRepository {
    * @param rows - 每个投影 key 一行。
    */
   putProjcache(sessionId: string, rows: ProjectionCheckpoint): Promise<void>;
-  /** 删除一个会话的 checkpoint（缺失为 no-op）。 */
-  deleteProjcache(sessionId: string): Promise<void>;
+  /**
+   * 清理陈旧 checkpoint 行：水位为负却已有事件的会话（旧版写入路径的产物，
+   * 会把有对话的会话误判为空白）。缓存是派生数据，删除只让该会话回到
+   * 「未知即可见」并等待下一次强制点重写。
+   * @returns 删除的行数。
+   */
+  pruneStaleProjcache(): Promise<number>;
 }

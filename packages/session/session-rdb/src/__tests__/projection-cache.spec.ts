@@ -105,15 +105,15 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs = 2000): Promise<
   }
 }
 
-async function harness(): Promise<Harness> {
-  const root = await mkdtemp(join(tmpdir(), "projection-cache-"));
-  dirs.push(root);
+async function harness(root?: string): Promise<Harness> {
+  const dir = root ?? (await mkdtemp(join(tmpdir(), "projection-cache-")));
+  if (root === undefined) dirs.push(dir);
   const ctx = new Context();
   await ctx.plugin(EmptySettings);
   await ctx.plugin(SessionStore);
   new SessionProjectionRegistry(ctx);
   await ctx.plugin(SessionTurnOutline);
-  const dbPath = join(root, "sessions.sqlite");
+  const dbPath = join(dir, "sessions.sqlite");
   const fiber = await ctx.plugin(SessionPersistenceSqlite, {
     type: "sqlite",
     path: dbPath,
@@ -277,6 +277,50 @@ describe("session-rdb projection cache replacement", () => {
       expect(withoutTitle?.values["title"]).toBeUndefined();
     } finally {
       await dispose();
+    }
+  });
+
+  it("prunes stale snapshots whose watermark predates the stored log", async () => {
+    const root = await mkdtemp(join(tmpdir(), "projection-cache-stale-"));
+    dirs.push(root);
+    const staleCount = (dbPath: string): number => {
+      const db = new DatabaseSync(dbPath);
+      try {
+        return (
+          db.prepare("SELECT COUNT(*) AS c FROM t_session_projcache_row").get() as { c: number }
+        ).c;
+      } finally {
+        db.close();
+      }
+    };
+
+    const first = await harness(root);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const id = SessionId("stale");
+      first.ctx.sessions.create(id, { meta: meta("stale"), seed: threeTurnLog() });
+      const live = first.ctx.sessions.get(id)!;
+      await first.ctx.sessions.flush(live);
+      await waitFor(() => first.cache.cachedSnapshot(live.header, live.inheritedEventCount));
+      expect(staleCount(first.dbPath!)).toBeGreaterThan(0);
+      // 模拟旧版写入路径的产物：行水位被写成 -1（日志起点之前）。
+      const db = new DatabaseSync(first.dbPath!);
+      try {
+        db.exec("UPDATE t_session_projcache_row SET f_seq = -1");
+      } finally {
+        db.close();
+      }
+    } finally {
+      await first.dispose();
+    }
+
+    // 重启：新装配启动时应清掉这些陈旧行（缓存 miss 只意味着更长的尾重放）。
+    const second = await harness(root);
+    try {
+      await waitFor(() => (staleCount(second.dbPath!) === 0 ? true : undefined));
+      expect(second.cache.cachedSnapshot(meta("stale"), SessionLogOffset(0))).toBeUndefined();
+    } finally {
+      await second.dispose();
     }
   });
 

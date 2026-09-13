@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { and, eq, gte, isNotNull, notInArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, lt, notInArray, sql } from "drizzle-orm";
 import {
   SESSION_FORMAT_VERSION,
   SessionId,
@@ -390,9 +390,35 @@ export function createStorageRepository(host: StorageRepositoryHost): StorageRep
       });
     },
 
-    async deleteProjcache(sessionId: string): Promise<void> {
+    async pruneStaleProjcache(): Promise<number> {
       const db = await dbx();
-      await runQuery(db.delete(tProjcacheRows).where(eq(tProjcacheRows.fSessionId, sessionId)));
+      const stale = await allRows<{ fSessionId: string }>(
+        db
+          .select({ fSessionId: tProjcacheRows.fSessionId })
+          .from(tProjcacheRows)
+          .where(
+            and(
+              lt(tProjcacheRows.fSeq, 0),
+              inArray(
+                tProjcacheRows.fSessionId,
+                db
+                  .select({ fSessionId: tSessions.fSessionId })
+                  .from(tSessions)
+                  .where(gte(tSessions.fHeadSequence, 0)),
+              ),
+            ),
+          ),
+      );
+      if (stale.length === 0) return 0;
+      await runQuery(
+        db.delete(tProjcacheRows).where(
+          inArray(
+            tProjcacheRows.fSessionId,
+            stale.map((row) => row.fSessionId),
+          ),
+        ),
+      );
+      return stale.length;
     },
 
     // 同步驱动（SQLite）才有：读路径直接查介质，进程内不维护 checkpoint 镜像。

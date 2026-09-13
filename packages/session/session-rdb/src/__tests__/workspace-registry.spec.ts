@@ -131,6 +131,26 @@ describe("official workspace registry over the rdb storage backend", () => {
       first.ctx.sessions.create(phantom, { meta: meta("phantom", first.canonical) });
       await first.registry.archiveSession(phantom);
       expect(first.registry.archivedSessionIds.map(String)).toEqual(["phantom"]);
+      // 骨架行是"仅承载归档标记的最小行"：head=-1、无 cwd/seed，不伪造会话内容。
+      const db = new DatabaseSync(dbPath);
+      try {
+        const row = db
+          .prepare(
+            "SELECT f_head_sequence, f_cwd, f_seed_length, f_archived_at FROM t_sessions WHERE f_session_id = 'phantom'",
+          )
+          .get() as {
+          f_head_sequence: number;
+          f_cwd: string | null;
+          f_seed_length: number | null;
+          f_archived_at: number;
+        };
+        expect(row.f_head_sequence).toBe(-1);
+        expect(row.f_cwd).toBeNull();
+        expect(row.f_seed_length).toBeNull();
+        expect(row.f_archived_at).toBeGreaterThan(0);
+      } finally {
+        db.close();
+      }
     } finally {
       await first.dispose();
     }

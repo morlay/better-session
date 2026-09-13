@@ -101,6 +101,15 @@ export class SessionProjectionCacheRdb extends Service {
   protected async [Service.init](): Promise<void> {
     this.installWritePath();
     await this.ready;
+    // 一次性清理旧版写入路径留下的陈旧行（水位为负却已有事件）：这些行会把
+    // 有对话的会话在 cold 列表里误判为空白。缓存是派生数据，删除让会话回到
+    // 「未知即可见」，等待下一次强制点重写。
+    const pruned = await this.repository.pruneStaleProjcache();
+    if (pruned > 0) {
+      this.ctx.logger.info(
+        `session projection cache: pruned stale snapshot(s) for ${String(pruned)} session(s)`,
+      );
+    }
     if (!this.directReads) {
       for (const entry of await this.repository.loadProjcache()) {
         this.records.set(entry.sessionId as SessionId, entry);

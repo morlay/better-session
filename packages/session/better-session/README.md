@@ -25,9 +25,10 @@ dsh plugin --profile web add "@morlay/better-session"
 - storage hub 的 `rdb` KV 后端 ← workspace 域落 rdb 语义表
 
 同时禁用官方 `session-persistence-jsonl`、`storage-json`、
-`session-projection-cache`、`session-query-sqlite` 与 `session-telemetry-otel`
-（遥测外发默认关闭，需要时删掉该行即可），并把 `storage-domain` 的 backend
-路由为 `rdb`：`$DSH_HOME/storages` 不再产生文件，storages 数据与事件日志同库
+`session-projection-cache`、`session-query-sqlite` 与两条官方外发通路
+（`session-telemetry-otel`、`session-log-deepseek`，默认部署零官方外发，需要时
+删行恢复），并把 `storage-domain` 的 backend 路由为 `rdb`：`$DSH_HOME/storages`
+不再产生文件，storages 数据与事件日志同库
 （[ADR 0009](../session-rdb/docs/adr/0009-接管storages到rdb语义表.md)）。
 
 ## 使用
