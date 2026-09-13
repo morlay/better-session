@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-preset",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Personal dsh profile bundle: disables the shipped agent presets, builds generated standard / ptc presets into dist, and declares personal llm-pi-ai provider routes.",
   "keywords": [
     "dsh",

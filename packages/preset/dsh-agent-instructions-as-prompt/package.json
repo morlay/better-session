@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-agent-instructions-as-prompt",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Fork of @deepseek-ai/dsh-agent-instructions that delivers the workspace instruction baseline as system-prompt sections, keeping the upstream mid-session reminder path.",
   "keywords": [
     "agents-md",
