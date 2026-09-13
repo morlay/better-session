@@ -73,8 +73,14 @@ SQLite 场景下它们是同一份状态的两个介质，PostgreSQL 场景下�
   声明 `StorageRepository` 接口与"上游类型 + 会话键"的组合）。
 - `rdb` KV 后端只服务 `workspace` 域：未知 unit 名直接报错，表结构显式维护，
   不做通用 KV 兜底。
-- 归档标记落在会话行上，因此要求会话已物化（`t_sessions` 有行）：live 但从未
-  落库的会话归档时没有可标记的行（后续 workspace 写入会重试该标记）。
+- 归档标记落在会话行上（`t_sessions.f_archived_at`）：live 但从未物化的会话
+  归档时补一行骨架（head=-1、无 cwd/seed），标记立即可落；该会话后续真正物化
+  走 `upsertSession`，其冲突列不含 `f_archived_at`，标记继续保留（组合回归
+  用例锁定「归档 → 物化 → 重启」）。
+- PostgreSQL 的 storages 写事务用 `serializable` 隔离级别：workspace 域是整
+  记录替换，多实例并发写同一记录时冲突以序列化失败暴露，而不是 read
+  committed 下「最后提交者赢」的静默覆盖——与「并发写入 fail loud」一致，
+  调用方重试即可。
 - 读路径直读介质（SQLite）：`cachedSnapshot` 系列同步查表，进程里不再有
   第二份 checkpoint 表；PostgreSQL 因驱动异步保留写穿镜像，重启或他实例
   写入读作 cache miss（与官方 json 介质的行为等价）。

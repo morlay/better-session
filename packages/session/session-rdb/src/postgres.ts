@@ -60,16 +60,22 @@ export class PostgresBackend implements Backend {
     this.opened.catch(() => {});
     this.storage = createStorageRepository({
       db: () => this.opened.then(() => this.txOverride ?? this.db),
+      // storages 写事务用 serializable：workspace 域是整记录替换，多实例并发写
+      // 同一记录在 read committed 下是「最后提交者赢」的静默覆盖；提升隔离级别
+      // 后冲突以序列化失败暴露（与「并发写入 fail loud」一致），调用方重试即可。
       writeAtomically: (fn) =>
-        this.db.transaction(async (tx) => {
-          const previous = this.txOverride;
-          this.txOverride = tx;
-          try {
-            return await fn();
-          } finally {
-            this.txOverride = previous;
-          }
-        }),
+        this.db.transaction(
+          async (tx) => {
+            const previous = this.txOverride;
+            this.txOverride = tx;
+            try {
+              return await fn();
+            } finally {
+              this.txOverride = previous;
+            }
+          },
+          { isolationLevel: "serializable" },
+        ),
       tables: this.tables,
     });
   }
