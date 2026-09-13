@@ -42,9 +42,11 @@ export interface StoragesImportOptions {
 }
 
 const WORKSPACE_UNIT = "workspace";
-const WORKSPACE_UNIT_VERSIONS = new Set([2]);
+/** 旧 workspace 文档可接受的域版本集（对齐上游 `workspaceDomainSpec`，见对齐测试）。 */
+export const WORKSPACE_UNIT_VERSIONS: ReadonlySet<number> = new Set([2]);
 const PROJCACHE_UNIT = "session_projcache";
-const PROJCACHE_UNIT_VERSIONS = new Set([7, 3, 4, 5, 6]);
+/** 旧投影缓存文档可接受的域版本集（对齐上游 spec 的 version ∪ compatibleVersions）。 */
+export const PROJCACHE_UNIT_VERSIONS: ReadonlySet<number> = new Set([7, 3, 4, 5, 6]);
 
 /**
  * Import the legacy storages documents into the rdb tables.
