@@ -82,6 +82,7 @@ interface Harness {
     cachedSnapshot(
       header: SessionHeader,
       inheritedEventCount: SessionLogOffset,
+      keys?: readonly string[],
     ): { asOfSeq: number; values: Record<string, unknown> } | undefined;
     coldSnapshot(
       header: SessionHeader,
@@ -182,6 +183,98 @@ describe("session-rdb projection cache replacement", () => {
         return value !== undefined && value.length > 0 ? value : undefined;
       });
       expect(turns).toEqual([1]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("keeps the host list blank flag correct for a newly created session", async () => {
+    const { ctx, cache, dispose } = await harness();
+    try {
+      // host ApiSessionList 的单元（schema 只需满足注册契约；本用例只读 wire 值）。
+      const passthrough = { parse: (value: unknown) => value } as never;
+      ctx.sessionProjections.register({
+        key: "sessionListMetadata",
+        stateSchema: passthrough,
+        init: () => ({ blank: true, lastPromptAt: null }),
+        apply: (
+          state: { blank: boolean; lastPromptAt: number | null },
+          event: { type: string },
+        ) => ({
+          blank: state.blank && event.type !== "turn/start",
+          lastPromptAt: state.lastPromptAt,
+        }),
+        wire: { viewSchema: passthrough, view: (state: unknown) => state },
+        stateVersion: 1,
+      } as never);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const id = SessionId("blank");
+      const live = ctx.sessions.create(id, {
+        meta: meta("blank"),
+        seed: [
+          {
+            type: "permission/preset",
+            seq: SessionSeq(0),
+            time: 1,
+            data: { preset: "workspace-write" },
+          },
+        ] as never,
+      });
+      // host 列表的 cold 口径（api/session-controller list.ts）：cache miss 即
+      // `blank=false`（未知即可见）；这正是"新建会话被当作非空白、复用失效"的根源。
+      const blankOf = (): boolean => {
+        const snapshot = cache.cachedSnapshot(live.header, live.inheritedEventCount);
+        const metadata = snapshot?.values["sessionListMetadata"] as { blank?: boolean } | undefined;
+        return metadata?.blank ?? false;
+      };
+      await waitFor(
+        () =>
+          cache.cachedSnapshot(live.header, live.inheritedEventCount)?.values[
+            "sessionListMetadata"
+          ],
+      );
+      expect(blankOf()).toBe(true);
+
+      live.append("turn/start", { turn: 1 });
+      live.append("turn/end", { turn: 1, reason: { kind: "completed" } });
+      await waitFor(() => (blankOf() ? undefined : true));
+      expect(blankOf()).toBe(false);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("serves the title column when the checkpoint rows carry no title", async () => {
+    const { ctx, cache, dispose } = await harness();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const id = SessionId("titled");
+      // 注册集里没有 title 单元（harness 只装 turnOutline）→ 行里不会有 title；
+      // rdb 写路径仍把 session/title 事件维护进 t_sessions.f_title 列。
+      ctx.sessions.create(id, {
+        meta: meta("titled"),
+        seed: [
+          ...threeTurnLog(),
+          {
+            type: "session/title",
+            seq: SessionSeq(18),
+            time: 19,
+            data: { title: "直取标题", messageSeqs: [], source: "auto" },
+          } as never,
+        ],
+      });
+      const live = ctx.sessions.get(id)!;
+      await ctx.sessions.flush(live);
+      await waitFor(() => cache.cachedSnapshot(live.header, live.inheritedEventCount));
+
+      const withTitle = cache.cachedSnapshot(live.header, live.inheritedEventCount, ["title"]);
+      expect(withTitle?.values["title"]).toBe("直取标题");
+      // 未请求 title 的读不合并该列（避免无谓的直查）。
+      const withoutTitle = cache.cachedSnapshot(live.header, live.inheritedEventCount, [
+        "turnOutline",
+      ]);
+      expect(withoutTitle?.values["title"]).toBeUndefined();
     } finally {
       await dispose();
     }
