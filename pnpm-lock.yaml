@@ -388,6 +388,9 @@ importers:
       '@deepseek-ai/dsh-session-persistence':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/session/session-persistence
+      '@deepseek-ai/dsh-session-query':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/session-query/session-query
       '@deepseek-ai/dsh-settings':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/settings/settings

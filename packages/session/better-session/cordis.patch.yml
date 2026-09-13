@@ -4,6 +4,9 @@
 #   `ctx.sessionPersistence`。
 # - `session-projection-cache`：官方投影缓存插件禁用，由 session-rdb 提供同名
 #   `ctx.sessionProjectionCache` 服务（`t_session_projcache*` 语义表）。
+# - `session-query-sqlite`：官方查询后端（FTS5 派生索引库）禁用，由 session-rdb
+#   提供同名 `ctx.sessionQuery`——精确读 / 过滤 / 血缘复用上游基类（数据面走
+#   ctx.sessionPersistence），全文检索维持 disabled，不引入派生索引库。
 # - `storage-json`：JSON 介质禁用，storages 目录不再产生文件。
 # - `storage-domain`：改为把域路由到 session-rdb 注册的 `rdb` KV 后端
 #   （workspace 域 → `t_workspaces` / `t_workspace_state`）。
@@ -12,6 +15,9 @@
   disabled: true
 
 - id: session-projection-cache
+  disabled: true
+
+- id: session-query-sqlite
   disabled: true
 
 - id: storage-json

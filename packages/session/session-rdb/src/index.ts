@@ -50,6 +50,7 @@ import { SqliteBackend } from "./sqlite.ts";
 import { PostgresBackend } from "./postgres.ts";
 import { SessionBranchRdb } from "./branch.ts";
 import { registerSessionImport } from "./import.ts";
+import { SessionQueryRdb } from "./session-query.ts";
 import { adoptLegacyRows, convertLegacyRows, isLegacyVersion } from "./legacy.ts";
 import { installStorageTakeover } from "./storage-takeover/index.ts";
 
@@ -532,6 +533,10 @@ export class SessionPersistenceRdb extends SessionPersistence {
     this.installLiveRouting(ctx);
     // 分支 provider 服务（rewind / forkFrom / timeline），随 fiber 卸载自动回滚。
     new SessionBranchRdb(this.ctx);
+    // 会话查询服务：接管官方 session-query-sqlite（同名 provide 会 fail loud，
+    // 其装配行由 better-session patch 禁用）；class-plugin 装载以复用基类的
+    // 精确读 / 过滤 / 血缘实现。
+    this.ctx.plugin(SessionQueryRdb, {});
     // 导入端点：webServer + connection 就绪后注册 `/api/session.import`。
     registerSessionImport(this.ctx, this);
     // storages 接管：storage hub 的 `rdb` 后端（workspace 域）与
