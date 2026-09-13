@@ -6,6 +6,7 @@ import {
   harness,
   meta,
   oneTurnLog,
+  turnLog,
   twoTurnLog,
   SessionIdBrand,
   SessionSeq,
@@ -167,7 +168,7 @@ describe("SessionEditor recall", () => {
     }
   });
 
-  it("waits for a busy live agent to settle BEFORE rewinding", async () => {
+  it("stops a busy live agent's loop before rewinding", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
       const header: SessionEvent = {
@@ -185,20 +186,27 @@ describe("SessionEditor recall", () => {
       });
       const live = ctx.sessions.get(SessionIdBrand("busy"))!;
       await ctx.sessions.flush(live);
+      const before = live.snapshotEvents().length;
 
+      // agent 正在跑（whenIdle 需要显式 resolve 才会放行 rewind）。
       let releaseIdle: () => void = () => {};
       const idlePromise = new Promise<void>((resolve) => {
         releaseIdle = resolve;
       });
-      let idleWaited = false;
+      const calls: string[] = [];
+      const cancels: Array<{ cause: unknown; options: unknown }> = [];
       const disposeAgents = ctx.provide("agents", {
         get: (id: SessionIdBrand) =>
           id === SessionIdBrand("busy")
             ? {
                 session: live,
                 followup: () => {},
+                cancel: (cause: unknown, options: unknown) => {
+                  calls.push("cancel");
+                  cancels.push({ cause, options });
+                },
                 whenIdle: () => {
-                  idleWaited = true;
+                  calls.push("whenIdle");
                   return idlePromise;
                 },
                 inbox: { clear: () => {} },
@@ -217,8 +225,14 @@ describe("SessionEditor recall", () => {
         sessionId: SessionIdBrand("busy"),
         eventSeq: 2,
       });
-      await Promise.resolve();
-      expect(idleWaited).toBe(true);
+      // 运行中的 loop 先被停止（cancel），再等其收敛——此时 rewind 未发生。
+      // live 路径无真实 IO 等待，microtask 轮询足以推进到停止点；实现缺失
+      // 停止时循环退出、断言明确失败（不挂起）。
+      for (let i = 0; i < 1000 && !calls.includes("whenIdle"); i += 1) await Promise.resolve();
+      expect(calls).toEqual(["cancel", "whenIdle"]);
+      // keepInbox：停止本身不丢弃待处理输入（截断后由 live 钩子 durable 取消）。
+      expect(cancels[0]).toEqual({ cause: { kind: "user" }, options: { keepInbox: true } });
+      expect(live.snapshotEvents()).toHaveLength(before);
       // 释放 agent → 撤回继续完成，live 内存 log 清空。
       releaseIdle();
       const result = await recalling;
@@ -246,6 +260,53 @@ describe("SessionEditor recall", () => {
       // 拒绝不截断会话（原子：失败不丢数据）。
       const rows = await eventRows(ctx, SessionIdBrand("src"));
       expect(rows).toHaveLength(12);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("recalls a message outside every turn: truncates from that message on", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      // 轮外排队输入（首个 turn/start 之前落成 user/message）：撤回即从该
+      // 消息开始 exclusive drop，其后的整轮一并截断。
+      const outside = userMessage(0, "outside", "queued then stopped", 1);
+      await createPersisted(ctx, "src", [outside, ...turnLog(1, 1)]);
+
+      await editor.recall({
+        action: "recall",
+        sessionId: SessionIdBrand("src"),
+        eventSeq: 0,
+      });
+
+      const rows = await eventRows(ctx, SessionIdBrand("src"));
+      expect(rows).toEqual([]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("recalls a message between two turns without touching the earlier turn", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      const log = [
+        ...turnLog(0, 1),
+        userMessage(6, "between", "between turns", 7),
+        ...turnLog(7, 2),
+      ];
+      await createPersisted(ctx, "src", log);
+
+      await editor.recall({
+        action: "recall",
+        sessionId: SessionIdBrand("src"),
+        eventSeq: 6,
+      });
+
+      const rows = await eventRows(ctx, SessionIdBrand("src"));
+      expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5]);
+      expect(rows[5]?.fType).toBe("turn/end");
+      // 撤回不写版本效果：交给用户重新发送，不产生派生版本记录。
+      expect(rows.some((r) => r.fType === "session-branch/version")).toBe(false);
     } finally {
       await dispose();
     }

@@ -184,6 +184,31 @@ export function downstreamUsers(turns: readonly ClosedTurn[], start: number): Us
     .flatMap((turn): UserMessage[] => turn.users.map((user) => cloneUser(user.data)));
 }
 
+// 撤回的 rewind 边界：轮内消息沿用 edit 的轮首规则（轮首整轮截断到前一轮
+// turn/end，无前轮则 -1；轮内 followup 截断到该消息本身），轮外 user 消息按
+// 消息自身位置 exclusive drop（截断该消息及其后全部）。
+export function recallBoundary(
+  events: readonly SessionEvent[],
+  turns: readonly ClosedTurn[],
+  eventSeq: number,
+): number {
+  const turnIndex = turns.findIndex(
+    (turn) => eventSeq > turn.startSeq && (turn.endSeq === undefined || eventSeq < turn.endSeq),
+  );
+  const turn = turns[turnIndex];
+  if (turn === undefined) {
+    const target = events.find((event) => event.seq === eventSeq);
+    if (target?.type !== "user/message" || target.data.source.kind !== "user")
+      throw new SessionBranchError("所选消息不属于已落定回合。", "INVALID_BOUNDARY");
+    return eventSeq;
+  }
+  const userIndex = turn.users.findIndex((user) => user.seq === eventSeq);
+  if (userIndex === -1)
+    throw new SessionBranchError("所选消息不存在或不可撤回。", "INVALID_BOUNDARY");
+  const preceding = precedingContentIndex(turns, turnIndex);
+  return userIndex === 0 ? (preceding < 0 ? -1 : turns[preceding]!.endSeq!) : eventSeq;
+}
+
 function assistantReplacement(
   event: SessionEvent<"assistant/message">,
   blockIndex: number,

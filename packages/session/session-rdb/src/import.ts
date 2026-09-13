@@ -114,18 +114,39 @@ export function parseImportZip(zip: Uint8Array): SessionStorageMetadata & {
   return parseJsonlArtifact(new TextDecoder().decode(artifact));
 }
 
+// 上游 Agent 的取消面（duck-type）：停止运行中的 loop。
+interface ImportAgentLike {
+  cancel?(cause: { kind: "user" }, options?: { keepInbox?: boolean }): void;
+  whenIdle(): Promise<void>;
+}
+
+// persistImport 会先 rewind(-1) 截断 live 会话的内存 log，不能与 agent 写日志
+// 并发；keepInbox 保留排队输入（截断后由 rewind 的 live 钩子 durable 取消）。
+async function stopAgentLoop(ctx: Context, sessionId: SessionId): Promise<void> {
+  const agents = ctx.get("agents") as
+    | { get(id: SessionId): ImportAgentLike | undefined }
+    | undefined;
+  const agent = agents?.get(sessionId);
+  if (agent === undefined) return;
+  agent.cancel?.({ kind: "user" }, { keepInbox: true });
+  await agent.whenIdle();
+}
+
 export async function persistImport(
   persistence: SessionPersistenceRdb,
   branch: { rewind(id: SessionId, toBoundary: number): Promise<unknown> } | undefined,
   imported: SessionStorageMetadata & { events: SessionEvent[] },
   targetId?: SessionId,
   sessions?: { get(id: SessionId): Session | undefined },
+  stopLoop?: (id: SessionId) => Promise<void>,
 ): Promise<SessionId> {
   const id = targetId ?? (`session-${randomUUID()}` as SessionId);
   if (targetId !== undefined) {
     if (branch === undefined) {
       throw new Error("sessionBranch service is unavailable");
     }
+    // 覆盖语义先 rewind(-1) 截断：停止运行中的 loop（未注入端口时空操作）。
+    if (stopLoop !== undefined) await stopLoop(targetId);
     await branch.rewind(targetId, -1);
     // rewind 截断后追加导入事件（覆盖语义）。live 会话的 write handle 由
     // live 路由持有——复用而非 open（open 会撞 SessionAlreadyOwnedError）。
@@ -252,7 +273,14 @@ export function registerSessionImport(ctx: Context, persistence: SessionPersiste
               const sessions = webCtx.get("sessions") as
                 | { get(id: SessionId): Session | undefined }
                 | undefined;
-              const id = await persistImport(persistence, branch, imported, targetId, sessions);
+              const id = await persistImport(
+                persistence,
+                branch,
+                imported,
+                targetId,
+                sessions,
+                (sessionId) => stopAgentLoop(webCtx, sessionId),
+              );
               res.writeHead(200, { "content-type": "application/json" });
               res.end(JSON.stringify({ sessionId: id }));
             } catch (error: unknown) {

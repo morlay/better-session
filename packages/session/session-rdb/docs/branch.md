@@ -38,7 +38,16 @@ fork 的持久化闭环。
 ## rewind：绕过 handle 模型的直接截断 + 状态同步
 
 上游 `SessionHandle` 模型只有 append-only，没有显式回退原语。rewind 直接
-操作后端事务：
+操作后端事务。
+
+**调用方前置**：截断会重写 live 会话的内存 log，与运行中的 agent loop 并发
+会写穿边界，因此调用方必须先停止 loop（`cancel` + `whenIdle`）。会话编辑
+编排层（[ui-conversation-message-actions](../../ui-conversation-message-actions/README.md)）
+的三处 rewind 入口（edit / retry / reroll、recall、HTTP `rewind`）统一执行
+该停止；覆盖导入（`session.import`）在 `persistImport` 的 rewind 前注入同一
+停止端口（[ADR 0005](../../ui-conversation-message-actions/docs/adr/0005-rewind前主动停止运行中的loop.md)）。
+
+rewind 直接操作后端事务的步骤：
 
 1. **边界校验**：`toBoundary` 是已存在事件且为闭合 `turn/end`（或 `-1`
    空前缀）；live 会话先落盘 write-behind 缓冲，保证后续读取与后端事务

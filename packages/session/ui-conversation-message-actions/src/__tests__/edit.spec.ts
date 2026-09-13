@@ -1188,7 +1188,7 @@ describe("SessionEditor edit", () => {
     }
   });
 
-  it("waits for a busy live agent to settle BEFORE rewinding (edit stops the run first)", async () => {
+  it("stops a busy live agent's loop before rewinding (edit cancels the run first)", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
       const header: SessionEvent = {
@@ -1206,13 +1206,15 @@ describe("SessionEditor edit", () => {
       });
       const live = ctx.sessions.get(SessionIdBrand("busy"))!;
       await ctx.sessions.flush(live);
+      const before = live.snapshotEvents().length;
 
       // agent 正在跑（whenIdle 需要显式 resolve 才会放行 rewind）。
       let releaseIdle: () => void = () => {};
       const idlePromise = new Promise<void>((resolve) => {
         releaseIdle = resolve;
       });
-      let idleWaited = false;
+      const calls: string[] = [];
+      const cancels: Array<{ cause: unknown; options: unknown }> = [];
       const followups: unknown[] = [];
       const disposeAgents = ctx.provide("agents", {
         get: (id: SessionIdBrand) =>
@@ -1222,8 +1224,12 @@ describe("SessionEditor edit", () => {
                 followup: (message: unknown) => {
                   followups.push(message);
                 },
+                cancel: (cause: unknown, options: unknown) => {
+                  calls.push("cancel");
+                  cancels.push({ cause, options });
+                },
                 whenIdle: () => {
-                  idleWaited = true;
+                  calls.push("whenIdle");
                   return idlePromise;
                 },
               }
@@ -1236,7 +1242,7 @@ describe("SessionEditor edit", () => {
         },
       });
 
-      // 发起编辑（内部会先等 agent idle）——不应在 agent 释放前完成 rewind。
+      // 发起编辑：运行中的 loop 先被停止，再等其收敛——释放前 rewind 不完成。
       const editing = editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("busy"),
@@ -1245,9 +1251,13 @@ describe("SessionEditor edit", () => {
         text: "edited while busy",
         cascade: "truncate",
       });
-      // 给 microtask 让 whenIdle 被调用。
-      await Promise.resolve();
-      expect(idleWaited).toBe(true);
+      // live 路径无真实 IO 等待，microtask 轮询足以推进到停止点；实现缺失
+      // 停止时循环退出、断言明确失败（不挂起）。
+      for (let i = 0; i < 1000 && !calls.includes("whenIdle"); i += 1) await Promise.resolve();
+      expect(calls).toEqual(["cancel", "whenIdle"]);
+      // keepInbox：停止本身不丢弃待处理输入（截断后由 live 钩子 durable 取消）。
+      expect(cancels[0]).toEqual({ cause: { kind: "user" }, options: { keepInbox: true } });
+      expect(live.snapshotEvents()).toHaveLength(before);
       // 释放 agent → 编辑继续完成。
       releaseIdle();
       const result = await editing;

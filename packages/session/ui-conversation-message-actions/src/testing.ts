@@ -13,10 +13,12 @@ import { type BranchTimeline } from "@morlay/session-branch";
 import SessionPersistenceSqlite from "@morlay/session-rdb";
 import { parseJsonlArtifact } from "@morlay/session-rdb/artifact";
 import { EmptySettings, meta, oneTurnLog } from "@morlay/session-rdb/testing";
+import { SESSION_EDITOR_PATH } from "./shared.ts";
 import { SessionEditor } from "@morlay/ui-conversation-message-actions";
 
 export {
   BranchTimeline,
+  SESSION_EDITOR_PATH,
   Session,
   SessionIdBrand,
   SessionSeq,
@@ -35,12 +37,15 @@ export interface Harness {
   dispose: () => Promise<void>;
 }
 
-export async function harness(): Promise<Harness> {
+export async function harness(provide?: (ctx: Context) => void): Promise<Harness> {
   const ctx = new Context();
   await ctx.plugin(EmptySettings);
   await ctx.plugin(SessionStore);
   new SessionProjectionRegistry(ctx);
   const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path: ":memory:" });
+  // 额外服务（如 HTTP 面测试的 webServer 替身）必须在 SessionEditor 构造前
+  // 就绪：构造函数内的 effect 只在服务可解析时注册路由。
+  provide?.(ctx);
   await ctx.plugin(SessionEditor);
   return { ctx, editor: ctx.sessionEditor, dispose: () => fiber.dispose() };
 }

@@ -120,13 +120,15 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
   );
   const textBlock =
     textBlockIndex === -1 ? undefined : (data.content[textBlockIndex] as { text?: string });
+  // 编辑（撤回）只要求存在可编辑文本块：轮外消息（location 无 turn/step
+  // 归属）同样可撤回——服务端按消息自身位置截断，不依赖轮次边界。
   const onEdit =
-    textBlock === undefined || turn === undefined
+    textBlock === undefined
       ? undefined
       : () => {
           setConfirmingRecall({
             key: `${node.anchorSeq}:${String(textBlockIndex)}`,
-            turn,
+            ...(turn === undefined ? {} : { turn }),
             eventSeq: node.anchorSeq,
             blockIndex: textBlockIndex,
             kind: "user",

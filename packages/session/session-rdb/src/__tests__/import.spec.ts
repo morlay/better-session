@@ -19,10 +19,12 @@ import { toJsonlArtifact } from "@morlay/session-rdb/artifact";
 import { EmptySettings } from "@morlay/session-rdb/testing";
 import { meta, oneTurnLog } from "@morlay/session-rdb/testing";
 import {
+  SESSION_IMPORT_PATH,
   SESSION_LOG_ARTIFACT_FILENAME,
   parseImportZip,
   parseJsonlArtifact,
   persistImport,
+  registerSessionImport,
 } from "@morlay/session-rdb/artifact";
 
 const dirs: string[] = [];
@@ -34,6 +36,36 @@ async function freshDbPath(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "session-rdb-import-"));
   dirs.push(dir);
   return join(dir, "sessions.sqlite");
+}
+
+// 最小 HTTP 请求替身：headers + 单块 body 的 async iterable（handler 逐块读取）。
+function fakeJsonRequest(body: unknown): import("node:http").IncomingMessage {
+  const chunk = Buffer.from(JSON.stringify(body));
+  return {
+    headers: {},
+    async *[Symbol.asyncIterator]() {
+      yield chunk;
+    },
+  } as unknown as import("node:http").IncomingMessage;
+}
+
+// 最小 HTTP 响应替身：记录 status 与 body。
+function fakeResponse(): { res: import("node:http").ServerResponse; code: number; body: string } {
+  const state = {
+    res: undefined as unknown as import("node:http").ServerResponse,
+    code: 0,
+    body: "",
+  };
+  state.res = {
+    writeHead: (code: number) => {
+      state.code = code;
+      return state.res;
+    },
+    end: (chunk?: string) => {
+      if (chunk !== undefined) state.body = chunk;
+    },
+  } as unknown as import("node:http").ServerResponse;
+  return state;
 }
 
 function richLog(): SessionEvent[] {
@@ -445,6 +477,89 @@ describe("import round-trip through the backend", () => {
       // 源会话保持不变。
       const source = await p.load(src.id);
       expect(source.events).toEqual(loaded.events);
+    } finally {
+      await fiber.dispose();
+    }
+  });
+
+  it("stops the target session's running loop before the overwrite rewind", async () => {
+    const path = await freshDbPath();
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
+    try {
+      const p = ctx.sessionPersistence as SessionPersistenceSqlite;
+      const src = meta("export-src", "/work");
+      await p.createAndAppend(src, richLog());
+      // 目标 live 会话：覆盖会 rewind(-1) 截断其内存 log，必须先停止 loop。
+      const target = meta("target-busy", "/other");
+      await p.createAndAppend(target, oneTurnLog());
+      const live = ctx.sessions.create(target.id, { meta: target, seed: [...oneTurnLog()] });
+      await ctx.sessions.flush(live);
+      const before = live.snapshotEvents().length;
+
+      const calls: string[] = [];
+      const cancels: Array<{ cause: unknown; options: unknown }> = [];
+      const disposeAgents = ctx.provide("agents", {
+        get: (id: SessionId) =>
+          id === target.id
+            ? {
+                session: live,
+                cancel: (cause: unknown, options: unknown) => {
+                  calls.push("cancel");
+                  cancels.push({ cause, options });
+                },
+                whenIdle: async () => {
+                  calls.push("whenIdle");
+                  // 收敛等待期间覆盖（rewind）尚未发生：内存 log 未被截断。
+                  expect(live.snapshotEvents()).toHaveLength(before);
+                },
+              }
+            : undefined,
+      });
+
+      // route 级：注册 fake webServer / connection，走真实 HTTP 导入入口。
+      const routes = new Map<string, (req: unknown, res: unknown) => void | Promise<void>>();
+      ctx.provide("webServer", {
+        register: (route: {
+          path: string;
+          handler: (req: unknown, res: unknown) => void | Promise<void>;
+        }) => {
+          routes.set(route.path, route.handler);
+          return () => {};
+        },
+      });
+      ctx.provide("connection", { requestRejection: () => undefined });
+      registerSessionImport(ctx, p);
+      for (let i = 0; i < 1000 && !routes.has(SESSION_IMPORT_PATH); i += 1) await Promise.resolve();
+      expect(routes.has(SESSION_IMPORT_PATH)).toBe(true);
+
+      const raw = await p.readRaw(src.id);
+      const zip = Buffer.from(
+        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+      ).toString("base64");
+      const response = fakeResponse();
+      await routes.get(SESSION_IMPORT_PATH)!(
+        fakeJsonRequest({ zip, sessionId: target.id }),
+        response.res,
+      );
+
+      expect(response.code).toBe(200);
+      expect(JSON.parse(response.body)).toEqual({ sessionId: target.id });
+      // 覆盖（rewind）前先停止运行中的 loop：cancel → whenIdle → 覆盖。
+      expect(calls).toEqual(["cancel", "whenIdle"]);
+      expect(cancels[0]).toEqual({ cause: { kind: "user" }, options: { keepInbox: true } });
+      const loaded = await p.load(target.id);
+      expect(loaded.events.map((e) => e.type)).toEqual([
+        "turn/start",
+        "user/message",
+        "step/start",
+        "assistant/message",
+        "step/end",
+        "turn/end",
+      ]);
+      disposeAgents();
     } finally {
       await fiber.dispose();
     }

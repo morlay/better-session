@@ -63,6 +63,95 @@ describe("SessionEditor rewind / fork / timeline", () => {
     }
   });
 
+  it("stops the running live agent's loop before rewinding", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      ctx.sessions.create(SessionIdBrand("busy"), {
+        meta: meta("busy"),
+        seed: [...twoTurnLog()],
+      });
+      const live = ctx.sessions.get(SessionIdBrand("busy"))!;
+      await ctx.sessions.flush(live);
+      const before = live.snapshotEvents().length;
+
+      const calls: string[] = [];
+      const cancels: Array<{ cause: unknown; options: unknown }> = [];
+      const disposeAgents = ctx.provide("agents", {
+        get: (id: SessionIdBrand) =>
+          id === SessionIdBrand("busy")
+            ? {
+                session: live,
+                followup: () => {},
+                cancel: (cause: unknown, options: unknown) => {
+                  calls.push("cancel");
+                  cancels.push({ cause, options });
+                },
+                whenIdle: async () => {
+                  calls.push("whenIdle");
+                  // 收敛等待期间 rewind 尚未发生：内存 log 与停止前一致。
+                  expect(live.snapshotEvents()).toHaveLength(before);
+                },
+              }
+            : undefined,
+        create: async () => {
+          throw new Error("unused");
+        },
+        resume: async () => {
+          throw new Error("unused");
+        },
+      });
+
+      await editor.rewind(SessionIdBrand("busy"), 5);
+
+      // 先停止 loop（cancel），再等其收敛，最后才截断。
+      expect(calls).toEqual(["cancel", "whenIdle"]);
+      expect(cancels[0]).toEqual({ cause: { kind: "user" }, options: { keepInbox: true } });
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("falls back to waiting when the live agent exposes no cancel capability", async () => {
+    const { ctx, editor, dispose } = await harness();
+    try {
+      ctx.sessions.create(SessionIdBrand("legacy"), {
+        meta: meta("legacy"),
+        seed: [...twoTurnLog()],
+      });
+      const live = ctx.sessions.get(SessionIdBrand("legacy"))!;
+      await ctx.sessions.flush(live);
+      const calls: string[] = [];
+      const disposeAgents = ctx.provide("agents", {
+        get: (id: SessionIdBrand) =>
+          id === SessionIdBrand("legacy")
+            ? {
+                session: live,
+                followup: () => {},
+                whenIdle: async () => {
+                  calls.push("whenIdle");
+                },
+              }
+            : undefined,
+        create: async () => {
+          throw new Error("unused");
+        },
+        resume: async () => {
+          throw new Error("unused");
+        },
+      });
+
+      await editor.rewind(SessionIdBrand("legacy"), 5);
+
+      expect(calls).toEqual(["whenIdle"]);
+      expect(live.snapshotEvents()).toHaveLength(6);
+      disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
   it("rewind resets the live agent's turn cursor so replay reuses the turn number", async () => {
     const { ctx, editor, dispose } = await harness();
     try {

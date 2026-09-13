@@ -65,12 +65,15 @@ fork）闭环——GUI 里撤回用户消息到输入框或就地重写、重试
 - **就地编辑**：edit / retry 用 `rewind` 截断 + `append` 重写同一会话
   （session id 不变、版本树单根）；只有 `fork` 创建新 id
   （[ADR 0001](../packages/ui-conversation-message-actions/docs/adr/0001-就地编辑重写同一会话而非新建会话.md)）。
-- **撤回（recall）**：只 `rewind` 截断到与 edit 轮首 user 相同的边界（轮首到
-  前一轮 `turn/end`，轮内 followup exclusive drop），不重写、不重放、不写版本
-  效果；被撤回的 user 文本由 client 回填到 composer，用户修改后自行发送。
+- **撤回（recall）**：只 `rewind` 截断到目标消息的边界（轮首到前一轮
+  `turn/end`，轮内 followup 与轮外 user 消息 exclusive drop），不重写、不重放、
+  不写版本效果；被撤回的 user 文本由 client 回填到 composer，用户修改后自行发送
+  （[ADR 0004](../packages/session/ui-conversation-message-actions/docs/adr/0004-编辑入口不依赖轮次归属.md)）。
 - **`rewind` 支持 live 会话**：GUI 打开中的会话也能就地编辑（截断 RDB 与
-  内存 log、对齐 handle cursor、重置 agent 轮次游标）
-  （[ADR 0003](../packages/session-rdb/docs/adr/0003-rewind绕过handle模型直接截断.md)）。
+  内存 log、对齐 handle cursor、重置 agent 轮次游标）；截断前先停止运行中的
+  loop（`cancel` + `whenIdle`），不与 agent 写内存 log 并发
+  （[ADR 0003](../packages/session-rdb/docs/adr/0003-rewind绕过handle模型直接截断.md)、
+  [ADR 0005](../packages/session/ui-conversation-message-actions/docs/adr/0005-rewind前主动停止运行中的loop.md)）。
 - **`ignorable` 版本效果**：分支版本事件原样落库（带 ignorable 信封），非
   branch 读者安全跳过（[ADR 0003](../packages/session-branch/docs/adr/0003-版本效果以ignorable事件原样落库.md)）。
 - **配置经 settings 服务覆盖**：`$DSH_HOME/settings.yaml` 的 `session-rdb`
@@ -131,7 +134,7 @@ exports 收敛）、运行流程与运行时语义见
 | 装配级   | [packages/better-session/docs/adr/](../packages/better-session/docs/adr/)                                   | rdb 替换官方 jsonl 持久化；配置经 settings 服务覆盖                                                                                                                 |
 | 上下文级 | [packages/session-branch/docs/adr/](../packages/session-branch/docs/adr/)                                   | 分支面 provider 抽象；ignorable 版本效果原样落库；迁移到上游 SessionHandle 模型                                                                                     |
 | 上下文级 | [packages/session-rdb/docs/adr/](../packages/session-rdb/docs/adr/)                                         | 原样存储；事件实体全局化；rewind 直接截断；并发写入 fail loud；未闭合轮次原样保留；导出即修复；混合世代回退；跟随上游 Session format v3；storages 接管到 rdb 语义表 |
-| 上下文级 | [packages/ui-conversation-message-actions/docs/adr/](../packages/ui-conversation-message-actions/docs/adr/) | 就地编辑；client bundle 单文件；agent 驱动重放                                                                                                                      |
+| 上下文级 | [packages/ui-conversation-message-actions/docs/adr/](../packages/ui-conversation-message-actions/docs/adr/) | 就地编辑；client bundle 单文件；agent 驱动重放；编辑入口不依赖轮次归属；rewind 前主动停止运行中的 loop                                                              |
 | 上下文级 | [packages/llm-openai-compatible/docs/adr/](../packages/llm-openai-compatible/docs/adr/)                     | 起因（pi-ai 参数不完整）；传输层复用 ai-sdk；dict 多路由；模型目录缺省为空；凭据服务解析；采样合并规则                                                              |
 
 ## 深入阅读

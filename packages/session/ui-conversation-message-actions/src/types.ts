@@ -65,7 +65,8 @@ export type SessionEditorTimeline = BranchTimeline;
 
 export interface EditableMessageBlock {
   key: string;
-  turn: number;
+  // 消息所属轮号；轮外消息（无 turn 归属）缺省。
+  turn?: number;
   eventSeq: number;
   blockIndex: number;
   kind: "user" | "assistant.reasoning" | "assistant.response";

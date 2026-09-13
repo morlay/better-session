@@ -29,9 +29,11 @@
   点不开的空项与轮号空洞；manualTurn 的轮号同样按保留前缀收敛（正常会话
   等于目标轮号）。版本效果仍记录**原**目标轮号（操作历史）；
 - **只有 `fork` 创建新 id**（`ForkOperation` / `forkFrom`，纯 append 派生）；
-- **`recall` 只截断不重写**：边界与 `edit` 的轮首 user 一致（轮首整轮截断到前一轮
-  `turn/end`，轮内 followup exclusive drop），但只 `rewind` 即返回——不写版本效果、
-  不重放；被撤回的 user 文本由浏览器半回填到 composer，用户修改后自行发送；
+- **`recall` 只截断不重写**：轮内消息沿用 `edit` 的轮首规则（轮首整轮截断到前一轮
+  `turn/end`，无前轮则清空全部；轮内 followup exclusive drop），轮外 user 消息
+  （`location` 无轮次归属的排队落定消息）按消息自身位置 exclusive drop（截断该消息
+  及其后全部），但只 `rewind` 即返回——不写版本效果、不重放；被撤回的 user 文本由
+  浏览器半回填到 composer，用户修改后自行发送；
 - 版本效果事件（`session-branch/version`）携带 `ignorable: true`：**原样落库**
   （rdb 不按信封过滤，与 JSONL 一致），非 branch 读者凭信封跳过；
 - 重放输入经 agent 驱动（见下）排队到原会话，agent 基于截断后历史回复。
@@ -42,8 +44,13 @@
 缺失时退化为「已 durable 的就地版本」（可随时 resume 续跑）：
 
 - **live agent**（会话驻留 / 已恢复）：直接 `followup` 排队，不重建、不换 id；
-  编辑前只等 agent 停下（`whenIdle`），残留排队输入由 rewind 在截断后强制
-  durable 取消（session-rdb 的 live 会话钩子 `inbox.clear`）；
+- **rewind 前必须停止运行中的 loop**：每次 rewind（edit / retry / reroll /
+  recall / HTTP `rewind`）都先对驻留 agent `cancel({ kind: "user" }, { keepInbox: true })`
+  再 `whenIdle()`，然后才截断——截断会重写 agent 的 session 内存 log，不能与
+  运行中的 loop 并发；`keepInbox` 表示停止本身不丢弃待处理输入，残留排队输入由
+  rewind 在截断后强制 durable 取消（session-rdb 的 live 会话钩子 `inbox.clear`）；
+  实现无 `cancel` 能力时退化为等待其自然停下
+  （[ADR 0005](./docs/adr/0005-rewind前主动停止运行中的loop.md)）；
 - **cold 会话**：`resume` 已持久化会话（`create` 对已持久化日志必失败），
   resume 后 agent 驻留（不 dispose，避免 session 被移出 store 破坏客户端窗口）；
 - 模型 provider/model 在 **rewind 之前**从 `request/header` 解析（就地编辑
@@ -56,10 +63,12 @@
 
 - **shadow 注册**：`user` / `steering` 两个 key 以 `priority: -1` 重新注册
   （最低优先级渲染，shadow 上游默认注册）；其余 key 沿用上游渲染器；
-- **编辑 / 重试按钮只挂在 user 消息**（`UserMessageNodeView`）：编辑不再打开编辑
-  弹窗，而是确认（`Modal` + `Button`）后调用 `recall`——服务端只 `rewind` 截断，
-  客户端把消息文本 `setDraft` 回填到主输入框（`conversation.input`），交给用户
-  修改后自行发送；重试仍先弹确认；未闭合轮次不显示重试；
+- **编辑 / 重试按钮只挂在 user 消息**（`UserMessageNodeView`）：编辑只要消息存在
+  可编辑文本块就显示（不要求轮次归属——`location` 无 turn/step 的已落定消息同样
+  可撤回），点击后不再打开编辑弹窗，而是确认（`Modal` + `Button`）后调用
+  `recall`——服务端只 `rewind` 截断，客户端把消息文本 `setDraft` 回填到主输入框
+  （`conversation.input`），交给用户修改后自行发送；重试仍先弹确认，且只对已闭合
+  轮次开放；
 - **操作后刷新**：就地编辑后优先调用客户端会话级 `resync()`（重置窗口并重新
   拉取历史，不整页重载——rewind 的删除无法经 append-only 事件流表达，seq
   回退只做增量会残留旧节点），随后丢弃该会话的全部投影行

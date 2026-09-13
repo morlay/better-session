@@ -2,6 +2,7 @@ import { Service, type Context } from "@deepseek-ai/cordis";
 import type { AssistantMessage, UserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionSeq } from "@deepseek-ai/dsh-session";
 import type {
+  AgentCancelCause,
   Session,
   SessionEvent,
   SessionId,
@@ -35,6 +36,7 @@ import {
   editableMessages,
   editPlan,
   precedingContentIndex,
+  recallBoundary,
   retryPlan,
   rerollPlan,
   retryableTurns,
@@ -69,6 +71,8 @@ export interface EditorAgent {
   followup(message: UserMessage): void;
   /** 等待 agent 到达 quiescence（当前 turn/任务结束后 resolve）。 */
   whenIdle(): Promise<void>;
+  // 停止运行中的 loop（上游 Agent.cancel 的 duck-typed 面）；缺省表示实现无取消能力。
+  cancel?(cause: AgentCancelCause, options?: { keepInbox?: boolean }): void;
 }
 
 export interface EditorAgentHandle {
@@ -232,7 +236,8 @@ export class SessionEditor extends Service {
     );
   }
 
-  rewind(id: SessionId, toBoundary: number, signal?: AbortSignal) {
+  async rewind(id: SessionId, toBoundary: number, signal?: AbortSignal) {
+    await this.stopLoop(id, signal);
     return this.ctx.sessionBranch.rewind(id, toBoundary, signal);
   }
 
@@ -310,7 +315,7 @@ export class SessionEditor extends Service {
     }
 
     // 就地编辑：不创建新会话、不改变 id。需要重放排队输入时，先在 rewind
-    // 前确保 agent 就绪（live agent 等其停；cold 先 resume）——rewind 截断后
+    // 前确保 agent 就绪（cold 先 resume；live 复用驻留 agent）——rewind 截断后
     // agent 无法再以完整会话 resume，且重放失败不应让截断静默丢弃内容。
     const replay = await this.prepareReplay(
       operation.sessionId,
@@ -319,6 +324,8 @@ export class SessionEditor extends Service {
       headerConfig,
     );
 
+    // rewind 前必须停止运行中的 loop：截断会重写 agent 的 session 内存 log。
+    await this.stopLoop(operation.sessionId, signal);
     const live = this.ctx.sessions.get(operation.sessionId);
     await this.ctx.sessionBranch.rewind(operation.sessionId, boundary, signal);
     if (seedSuffix.length > 0) {
@@ -396,9 +403,9 @@ export class SessionEditor extends Service {
    * 撤回（recall）：只 rewind 截断，不重写、不重放——被撤回的 user 消息文本
    * 由客户端回填到输入框，交给用户修改后重新发送。
    *
-   * 边界与 edit 的轮首 user 一致：轮首消息整轮截断到前一轮 `turn/end`
-   * （无前轮则 -1），轮内 followup 只截断到该消息本身（exclusive drop），
-   * 避免留下悬空 `turn/start` 让下一次发送开到错误轮号。
+   * 边界见 {@link recallBoundary}：轮首消息整轮截断到前一轮 `turn/end`
+   * （无前轮则 -1），轮内 followup 与轮外 user 消息只截断到该消息本身
+   * （exclusive drop），避免留下悬空 `turn/start` 让下一次发送开到错误轮号。
    */
   private async recallOperation(
     operation: RecallOperation,
@@ -406,25 +413,9 @@ export class SessionEditor extends Service {
   ): Promise<SessionEditorResult> {
     signal?.throwIfAborted();
     const events = await this.readEvents(operation.sessionId, signal);
-    const turns = closedTurns(events);
-    const turnIndex = turns.findIndex(
-      (turn) =>
-        operation.eventSeq > turn.startSeq &&
-        (turn.endSeq === undefined || operation.eventSeq < turn.endSeq),
-    );
-    const turn = turns[turnIndex];
-    if (turn === undefined) {
-      throw new SessionBranchError("所选消息不属于已落定回合。", "INVALID_BOUNDARY");
-    }
-    const userIndex = turn.users.findIndex((user) => user.seq === operation.eventSeq);
-    if (userIndex === -1) {
-      throw new SessionBranchError("所选消息不存在或不可撤回。", "INVALID_BOUNDARY");
-    }
-    const preceding = precedingContentIndex(turns, turnIndex);
-    const boundary =
-      userIndex === 0 ? (preceding < 0 ? -1 : turns[preceding]!.endSeq!) : operation.eventSeq;
-    // live agent 运行中时先等其停下：rewind 会截断其 session 内存 log。
-    await this.prepareIdle(operation.sessionId, signal);
+    const boundary = recallBoundary(events, closedTurns(events), operation.eventSeq);
+    // rewind 前必须停止运行中的 loop：截断会重写 agent 的 session 内存 log。
+    await this.stopLoop(operation.sessionId, signal);
     await this.ctx.sessionBranch.rewind(operation.sessionId, boundary, signal);
     return {
       sessionId: operation.sessionId,
@@ -433,12 +424,15 @@ export class SessionEditor extends Service {
     };
   }
 
-  /** rewind 前等待驻留 agent 到达 quiescence（无 agent / 无 live owner 时空操作）。 */
-  private async prepareIdle(sessionId: SessionId, signal?: AbortSignal): Promise<void> {
+  // rewind 前停止运行中的 loop：截断会重写 agent 的 session 内存 log；无
+  // live agent 时跳过，实现无取消能力时退化为等待其自然停下（keepInbox
+  // 保留排队输入，截断后由 rdb 的 live 钩子 durable 取消）。
+  private async stopLoop(sessionId: SessionId, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     const agents = this.ctx.get("agents") as EditorAgentRegistry | undefined;
     const existing = agents?.get(sessionId);
     if (existing === undefined) return;
+    existing.cancel?.({ kind: "user" }, { keepInbox: true });
     await existing.whenIdle();
     signal?.throwIfAborted();
   }
@@ -460,12 +454,10 @@ export class SessionEditor extends Service {
     return (await branch.readRawEvents(sessionId, signal)).events;
   }
 
-  /**
-   * rewind 前确保 agent 可驱动重放：live agent 先等待其停下（rewind 会截断其
-   * session 内存 log，须在 quiescence 后执行）；cold 会话先 resume 出驻留
-   * agent（此时会话完整，resume 的 prepare 不与截断冲突）。agents 服务缺失或
-   * 无需重放时返回空——调用方退化为就地截断版本。
-   */
+  // rewind 前确保 agent 可驱动重放：cold 会话先 resume 出驻留 agent（此时会话
+  // 完整，resume 的 prepare 不与截断冲突）；live 会话复用驻留 agent，停止其
+  // 运行中的 loop 由 rewind 前的 stopLoop 统一负责。agents 服务缺失或无需
+  // 重放时返回空——调用方退化为就地截断版本。
   private async prepareReplay(
     sessionId: SessionId,
     queuedUsers: readonly UserMessage[],
@@ -478,10 +470,8 @@ export class SessionEditor extends Service {
     if (agents === undefined) return { agent: undefined };
     const existing = agents.get(sessionId);
     if (existing !== undefined) {
-      await existing.whenIdle();
-      signal?.throwIfAborted();
       // 排队输入由 rewind 在截断后强制 durable 取消（session-rdb 的
-      // LiveSessionHooks.inbox.clear），这里只需保证 agent 已停下。
+      // LiveSessionHooks.inbox.clear），这里只需复用驻留 agent。
       return { agent: existing };
     }
     // cold：resume 已持久化会话（create 会因「已存在持久化日志」失败）。

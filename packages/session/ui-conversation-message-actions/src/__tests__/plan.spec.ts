@@ -5,11 +5,18 @@ import {
   editableMessages,
   editPlan,
   precedingContentIndex,
+  recallBoundary,
   retryPlan,
   rerollPlan,
   retryableTurns,
 } from "@morlay/ui-conversation-message-actions/plan";
-import { turnLog, twoTurnLog } from "@morlay/ui-conversation-message-actions/testing";
+import {
+  assistantMessage,
+  oneTurnLog,
+  turnLog,
+  twoTurnLog,
+  userMessage,
+} from "@morlay/ui-conversation-message-actions/testing";
 
 /** 空轮：turn/start 后直接 turn/end（早期重放缺陷的遗留形状）。 */
 function emptyTurn(base: number, turn: number): SessionEvent[] {
@@ -359,5 +366,61 @@ describe("precedingContentIndex", () => {
     const turns = closedTurns(log);
     expect(precedingContentIndex(turns, 1)).toBe(0);
     expect(precedingContentIndex(turns, 0)).toBe(-1);
+  });
+});
+
+describe("recallBoundary", () => {
+  it("rewinds a later turn's first user to the previous turn/end", () => {
+    const log = twoTurnLog();
+    // 轮 2 的轮首 user（7）→ 轮 1 的 turn/end（5）。
+    expect(recallBoundary(log, closedTurns(log), 7)).toBe(5);
+  });
+
+  it("clears the whole log for the first turn's first user (boundary -1)", () => {
+    const log = oneTurnLog();
+    expect(recallBoundary(log, closedTurns(log), 1)).toBe(-1);
+  });
+
+  it("rewinds a mid-turn followup to the message itself (exclusive drop)", () => {
+    const log = turnLog(0, 1, {
+      users: [
+        { id: "u1", text: "first" },
+        { id: "u2", text: "followup" },
+      ],
+    });
+    const followupSeq = log.find(
+      (event) => event.type === "user/message" && (event.data as { id: string }).id === "u2",
+    )!.seq;
+    expect(recallBoundary(log, closedTurns(log), followupSeq)).toBe(followupSeq);
+  });
+
+  it("rewinds a message before every turn to the message itself", () => {
+    // 排队输入在首个 turn/start 之前落成 user/message（无轮归属）。
+    const outside = userMessage(0, "outside", "queued then stopped");
+    const log = [outside, ...turnLog(1, 1)];
+    expect(closedTurns(log)).toHaveLength(1);
+    expect(recallBoundary(log, closedTurns(log), 0)).toBe(0);
+  });
+
+  it("rewinds a message between two turns to the message itself", () => {
+    const outside = userMessage(6, "between", "queued between turns");
+    const log = [...turnLog(0, 1), outside, ...turnLog(7, 2)];
+    expect(recallBoundary(log, closedTurns(log), 6)).toBe(6);
+  });
+
+  it("rejects an event outside every turn that is not a user message", () => {
+    const log = [assistantMessage(0, 1, 1, "orphan-assistant", "orphan"), ...turnLog(1, 1)];
+    expect(() => recallBoundary(log, closedTurns(log), 0)).toThrow(/不属于已落定回合/);
+  });
+
+  it("rejects an unknown eventSeq", () => {
+    const log = oneTurnLog();
+    expect(() => recallBoundary(log, closedTurns(log), 99)).toThrow(/不属于已落定回合/);
+  });
+
+  it("rejects an eventSeq inside a turn that is not a turn user", () => {
+    const log = oneTurnLog();
+    // seq 3 是轮内 assistant/message：定位到轮，但不在 turn.users。
+    expect(() => recallBoundary(log, closedTurns(log), 3)).toThrow(/不存在或不可撤回/);
   });
 });
