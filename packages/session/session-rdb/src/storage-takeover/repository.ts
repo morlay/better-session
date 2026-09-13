@@ -7,8 +7,14 @@
  * 在介质事务内完成（`host.writeAtomically`），不留部分应用的中间态。
  */
 
+import { randomUUID } from "node:crypto";
 import { and, eq, gte, isNotNull, notInArray, sql } from "drizzle-orm";
-import { SessionId, SessionLogOffset, SessionSeq } from "@deepseek-ai/dsh-session";
+import {
+  SESSION_FORMAT_VERSION,
+  SessionId,
+  SessionLogOffset,
+  SessionSeq,
+} from "@deepseek-ai/dsh-session";
 import type { SessionSeqCursor } from "@deepseek-ai/dsh-session";
 import type { WorkspaceId } from "@deepseek-ai/dsh-workspace";
 import type {
@@ -308,12 +314,33 @@ export function createStorageRepository(host: StorageRepositoryHost): StorageRep
         );
         const stamp = Date.now();
         for (const sessionId of archived) {
-          // 首次归档时间保留：重复写入同一集合不刷新标记。
+          // 归档标记落在会话行上（f_archived_at）；live 但从未物化的会话还没有
+          // 行——补一行骨架（head=-1、无 cwd/seed），否则标记无处可写，重启后
+          // 归档集由介质重算时会静默丢失。真正物化走 upsertSession，其冲突列
+          // 不含 f_archived_at，所以标记在物化后仍保留。
           await runQuery(
             db
-              .update(tSessions)
-              .set({ fArchivedAt: sql`COALESCE(${tSessions.fArchivedAt}, ${stamp})` })
-              .where(eq(tSessions.fSessionId, sessionId)),
+              .insert(tSessions)
+              .values({
+                fSessionId: sessionId,
+                fHeadEventId: "",
+                fHeadSequence: -1,
+                fVersion: SESSION_FORMAT_VERSION,
+                fCreatedAt: stamp,
+                fCwd: null,
+                fParentSession: null,
+                fSeedLength: null,
+                fOrigin: null,
+                fDelegationDepth: null,
+                fIncarnation: randomUUID(),
+                fRevision: 0,
+                fArchivedAt: stamp,
+              })
+              .onConflictDoUpdate({
+                target: tSessions.fSessionId,
+                // 首次归档时间保留：重复写入同一集合不刷新标记。
+                set: { fArchivedAt: sql`COALESCE(${tSessions.fArchivedAt}, ${stamp})` },
+              }),
           );
         }
       });
