@@ -13,6 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Context } from "@deepseek-ai/cordis";
 import { SessionId, SessionStore } from "@deepseek-ai/dsh-session";
 import Storage from "@deepseek-ai/dsh-storage";
+import type { StorageBackend } from "@deepseek-ai/dsh-storage";
 import * as StorageDomain from "@deepseek-ai/dsh-storage-domain";
 import Workspace from "@deepseek-ai/dsh-workspace";
 import SessionPersistenceSqlite from "@morlay/session-rdb";
@@ -114,6 +115,94 @@ describe("workspace domain on the rdb storage backend", () => {
       expect(existsSync(join(root, "storages"))).toBe(false);
     } finally {
       await fiber.dispose();
+    }
+  });
+});
+
+describe("rdb KV backend contract", () => {
+  const descriptor = {
+    name: "workspace",
+    version: 2,
+    tables: ["workspaces"],
+    hasGlobal: true,
+  } as const;
+
+  async function harness(): Promise<{
+    backend: StorageBackend;
+    dbPath: string;
+    dispose: () => Promise<void>;
+  }> {
+    const root = await tempDir("kv-backend-");
+    const dbPath = join(root, "sessions.sqlite");
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(Storage);
+    await ctx.plugin(StorageDomain, { backend: "rdb" });
+    await ctx.plugin(SessionStore);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path: dbPath });
+    const backend = await waitFor(
+      () => ctx.storage.backend.get("rdb") as StorageBackend | undefined,
+    );
+    return { backend, dbPath, dispose: () => fiber.dispose() };
+  }
+
+  it("rejects a concurrent double-open before the medium read", async () => {
+    const { backend, dispose } = await harness();
+    try {
+      // 名字必须在同步段预留：第二个 open 不得穿过去等 readUnitVersion。
+      const first = backend.kv!.open({ ...descriptor });
+      const second = backend.kv!.open({ ...descriptor });
+      await expect(second).rejects.toThrow(/already open/);
+      const unit = await first;
+      await unit.close();
+      // unit 关闭后名字释放，可再次打开。
+      const reopened = await backend.kv!.open({ ...descriptor });
+      await reopened.close();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("drains accepted writes before closing and refuses later writes", async () => {
+    const { backend, dbPath, dispose } = await harness();
+    try {
+      const unit = await backend.kv!.open({ ...descriptor });
+      const record = {
+        path: "/tmp/kv-drain",
+        title: "kv-drain",
+        sessionIds: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      };
+      const writing = unit.putRecord("workspaces", "w-drain", record);
+      await backend.close();
+      await writing;
+
+      const db = new DatabaseSync(dbPath);
+      try {
+        const rows = db.prepare("SELECT f_workspace_id FROM t_workspaces").all() as Array<{
+          f_workspace_id: string;
+        }>;
+        expect(rows.map((row) => row.f_workspace_id)).toEqual(["w-drain"]);
+      } finally {
+        db.close();
+      }
+
+      await expect(unit.putRecord("workspaces", "w-late", record)).rejects.toThrow(/closed/);
+      await expect(backend.kv!.open({ ...descriptor })).rejects.toThrow(/closed/);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("rejects a per-record layout instead of reading it as single", async () => {
+    const { backend, dispose } = await harness();
+    try {
+      await expect(backend.kv!.open({ ...descriptor, layout: "per-record" })).rejects.toThrow(
+        /single/,
+      );
+    } finally {
+      await dispose();
     }
   });
 });

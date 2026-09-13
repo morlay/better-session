@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
 import { SESSION_FORMAT_VERSION, SessionLogOffset } from "@deepseek-ai/dsh-session";
 import type { Session, SessionEvent, SessionId, SessionHeader } from "@deepseek-ai/dsh-session";
+import { parseSessionFormatLogFilename } from "@deepseek-ai/dsh-session-format";
 import { sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import { unzipSync } from "fflate";
 import { replaceLiveSessionLog } from "./branch.ts";
 import type { SessionPersistenceRdb } from "./index.ts";
 
+/** 当前世代产物的文件名（读入侧接受任意 canonical 世代名，见 parseImportZip）。 */
 export const SESSION_LOG_ARTIFACT_FILENAME = "session.jsonl";
 
 export const SESSION_IMPORT_PATH = "/api/session.import";
@@ -107,11 +109,18 @@ export function parseImportZip(zip: Uint8Array): SessionStorageMetadata & {
   } catch {
     throw new Error("imported zip is not a valid ZIP archive");
   }
-  const artifact = entries[SESSION_LOG_ARTIFACT_FILENAME];
+  // 上游导出按世代命名（`session.v3.jsonl`），早期 rdb 导出沿用 `session.jsonl`：
+  // 两者都接受，按 canonical 名字规则识别（临时/大写/压缩后缀名不视为产物）。
+  const artifact = Object.entries(entries).find(
+    ([name]) => parseSessionFormatLogFilename(name) !== undefined,
+  );
   if (artifact === undefined) {
-    throw new Error(`imported zip is missing ${SESSION_LOG_ARTIFACT_FILENAME}`);
+    throw new Error(
+      `imported zip has no session log artifact (expected ${SESSION_LOG_ARTIFACT_FILENAME} ` +
+        "or a canonical session.vN.jsonl)",
+    );
   }
-  return parseJsonlArtifact(new TextDecoder().decode(artifact));
+  return parseJsonlArtifact(new TextDecoder().decode(artifact[1]));
 }
 
 // 上游 Agent 的取消面（duck-type）：停止运行中的 loop。

@@ -10,6 +10,8 @@
 # - `storage-json`：JSON 介质禁用，storages 目录不再产生文件。
 # - `storage-domain`：改为把域路由到 session-rdb 注册的 `rdb` KV 后端
 #   （workspace 域 → `t_workspaces` / `t_workspace_state`）。
+# - `session-telemetry-otel`：官方遥测后端禁用的默认值（用户提交反馈时才向
+#   官方端点 OTLP 外发）；需要该通路时删除本行即可。
 
 - id: session-persistence-jsonl
   disabled: true
@@ -18,6 +20,9 @@
   disabled: true
 
 - id: session-query-sqlite
+  disabled: true
+
+- id: session-telemetry-otel
   disabled: true
 
 - id: storage-json

@@ -25,8 +25,8 @@ const WORKSPACE_TABLE = "workspaces";
 export class RdbStorageBackend implements StorageBackend {
   readonly kv: KvFacet = { open: (descriptor) => this.openUnit(descriptor) };
 
-  /** 已打开（或打开中）的 unit 名；重复 open 是调用方 bug。 */
-  private readonly open = new Set<string>();
+  /** 已打开（或打开中）的 unit；重复 open 是调用方 bug。 */
+  private readonly open = new Map<string, WorkspaceKvUnit>();
   private closed = false;
 
   /**
@@ -47,45 +47,72 @@ export class RdbStorageBackend implements StorageBackend {
           `(table '${WORKSPACE_TABLE}' plus a global slot)`,
       );
     }
+    // 本后端是 single 布局的专用表实现：per-record 布局（及其 compatibleVersions
+    // 读语义）无法表达，宁可 fail loud 也不静默按 single 读。
+    if (descriptor.layout !== undefined && descriptor.layout !== "single") {
+      throw new Error(
+        `rdb storage backend serves only the 'single' layout (domain '${descriptor.name}' ` +
+          `declares '${descriptor.layout}')`,
+      );
+    }
     if (this.open.has(descriptor.name)) {
       throw new Error(`kv unit '${descriptor.name}' is already open (double-open is a caller bug)`);
     }
-    const stored = await this.repository.readUnitVersion(descriptor.name);
-    if (stored === undefined) {
-      await this.repository.insertUnitVersion(descriptor.name, descriptor.version);
-    } else if (stored !== descriptor.version) {
-      throw new StorageError(
-        "version-mismatch",
-        `kv unit '${descriptor.name}' is stamped version ${stored} on the medium, ` +
-          `incompatible with descriptor version ${descriptor.version}`,
-      );
+    // 名字在同步段预留：并发第二个 open 必须在任何 await 之前被拒。
+    const unit = new WorkspaceKvUnit(this.repository, descriptor);
+    this.open.set(descriptor.name, unit);
+    try {
+      const stored = await this.repository.readUnitVersion(descriptor.name);
+      if (stored === undefined) {
+        await this.repository.insertUnitVersion(descriptor.name, descriptor.version);
+      } else if (stored !== descriptor.version) {
+        throw new StorageError(
+          "version-mismatch",
+          `kv unit '${descriptor.name}' is stamped version ${stored} on the medium, ` +
+            `incompatible with descriptor version ${descriptor.version}`,
+        );
+      }
+    } catch (error) {
+      this.open.delete(descriptor.name);
+      throw error;
     }
-    this.open.add(descriptor.name);
-    return new WorkspaceKvUnit(this.repository, descriptor, () => {
+    unit.onClose(() => {
       this.open.delete(descriptor.name);
     });
+    return unit;
   }
 
   /**
-   * Release the backend. The medium (the session database) belongs to the
-   * owning session-rdb plugin, so closing open units here does not close it.
-   * @returns resolution after the name table is cleared.
+   * Release the backend. New writes are rejected immediately; already-queued
+   * unit writes drain first (upstream backend contract). The medium (the
+   * session database) belongs to the owning session-rdb plugin, so closing
+   * open units here does not close it.
+   * @returns resolution after every open unit drained.
    */
   async close(): Promise<void> {
     this.closed = true;
+    const units = [...this.open.values()];
     this.open.clear();
+    await Promise.all(units.map((unit) => unit.close()));
   }
 }
 
 /** workspace 域的 KV unit：每个原语一条 SQL 语句，值形状与上游记录一致。 */
 class WorkspaceKvUnit implements KvUnit {
   private closed = false;
+  /** 在途写操作：close 先拒绝新写，再 drain 它们（不丢已受理的写）。 */
+  private readonly inflight = new Set<Promise<void>>();
+  private onClosed: (() => void) | undefined;
 
   constructor(
     private readonly repository: StorageRepository,
     private readonly descriptor: KvUnitDescriptor,
-    private readonly onClose: () => void,
   ) {}
+
+  /** Install the name-release callback after the backend registered this unit. */
+  onClose(release: () => void): void {
+    this.onClosed = release;
+  }
 
   async loadAll(): Promise<{ tables: Record<string, Record<string, unknown>>; global: unknown }> {
     this.assertOpen();
@@ -100,24 +127,41 @@ class WorkspaceKvUnit implements KvUnit {
   async putRecord(table: string, key: string, value: unknown): Promise<void> {
     this.assertOpen();
     this.assertTable(table);
-    await this.repository.putWorkspace(key, workspaceRecordOf(value));
+    await this.track(this.repository.putWorkspace(key, workspaceRecordOf(value)));
   }
 
   async deleteRecord(table: string, key: string): Promise<void> {
     this.assertOpen();
     this.assertTable(table);
-    await this.repository.deleteWorkspace(key);
+    await this.track(this.repository.deleteWorkspace(key));
   }
 
   async setGlobal(value: unknown): Promise<void> {
     this.assertOpen();
-    await this.repository.writeWorkspaceState(workspaceStateOf(value));
+    await this.track(this.repository.writeWorkspaceState(workspaceStateOf(value)));
   }
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.onClose();
+    while (this.inflight.size > 0) {
+      await Promise.allSettled(this.inflight);
+    }
+    this.onClosed?.();
+  }
+
+  /** Register one accepted write so close can drain it. */
+  private async track(operation: Promise<unknown>): Promise<void> {
+    const settled = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.inflight.add(settled);
+    try {
+      await operation;
+    } finally {
+      this.inflight.delete(settled);
+    }
   }
 
   private assertOpen(): void {

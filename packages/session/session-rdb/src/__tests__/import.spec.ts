@@ -288,10 +288,23 @@ describe("parseImportZip", () => {
     expect(parsed.events).toEqual(oneTurnLog());
   });
 
+  it("accepts the generation-addressed artifact name used by upstream export", () => {
+    // 上游 UI 导出按世代命名（session.v3.jsonl）：导入必须识别同一份产物。
+    const artifact = toJsonlArtifact(meta("v3", "/work"), 0, oneTurnLog());
+    const zip = zipSync({ "session.v3.jsonl": strToU8(artifact) });
+    const parsed = parseImportZip(zip);
+    expect(parsed.meta.id).toBe("v3");
+    expect(parsed.events).toEqual(oneTurnLog());
+  });
+
   it("rejects a corrupt zip and a zip without the artifact", () => {
     expect(() => parseImportZip(strToU8("not a zip"))).toThrow(/not a valid ZIP/);
     expect(() => parseImportZip(zipSync({ other: strToU8("x") }))).toThrow(
-      /missing session\.jsonl/,
+      /no session log artifact/,
+    );
+    // 非 canonical 名（大写/压缩后缀/临时名）不视为产物。
+    expect(() => parseImportZip(zipSync({ "Session.jsonl": strToU8("x") }))).toThrow(
+      /no session log artifact/,
     );
   });
 });
@@ -353,7 +366,9 @@ describe("import round-trip through the backend", () => {
 
       const raw = await p.readRaw(m.id);
       expect(raw).toBeDefined();
-      const zip = zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) });
+      // 导出内容按当前世代编码，文件名必须声明同一世代（与上游导出对齐）。
+      expect(raw!.filename).toBe("session.v3.jsonl");
+      const zip = zipSync({ [raw!.filename]: strToU8(raw!.content) });
       const parsed = parseImportZip(zip);
       // 导入以新 id 落库：源会话保持不变。
       const importedId = `session-imported` as SessionId;

@@ -30,6 +30,7 @@ import {
   type SessionPersistenceStatOptions,
 } from "@deepseek-ai/dsh-session-persistence";
 import {
+  SESSION_FORMAT_VERSION,
   SessionLogOffset,
   type Session,
   type SessionEvent,
@@ -37,6 +38,7 @@ import {
   type SessionId,
   type SurfaceEventType,
 } from "@deepseek-ai/dsh-session";
+import { sessionFormatLogFilename } from "@deepseek-ai/dsh-session-format";
 import { type Backend, type BackendTx, type EventInsert } from "./backend.ts";
 import { WriteGuard } from "./write-guard.ts";
 import { repairReadView, rowToMeta, scanRows, toJsonlArtifact } from "./log.ts";
@@ -711,7 +713,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
 
   // --- RDB 特有能力（rewind / fork / 导出 / 测试支撑） ---
 
-  /** 导出 artifact（jsonl v2 文本），视图只读不落库。 */
+  /** 导出当前世代的 jsonl artifact，视图只读不落库。 */
   async readRaw(
     id: SessionId,
     signal?: AbortSignal,
@@ -729,7 +731,8 @@ export class SessionPersistenceRdb extends SessionPersistence {
     return {
       meta: log.meta,
       inheritedEventCount,
-      filename: "session.jsonl",
+      // 内容按当前世代编码，文件名必须声明同一世代（上游导出用 session.vN.jsonl）。
+      filename: sessionFormatLogFilename(SESSION_FORMAT_VERSION),
       content: toJsonlArtifact(log.meta, inheritedEventCount, log.events),
     };
   }
