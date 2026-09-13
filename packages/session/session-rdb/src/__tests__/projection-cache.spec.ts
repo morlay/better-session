@@ -169,6 +169,24 @@ describe("session-rdb projection cache replacement", () => {
     }
   });
 
+  it("advances the checkpoint on turn/end without an explicit write", async () => {
+    const { ctx, cache, dispose } = await harness();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const id = SessionId("turn-end");
+      // 只喂第 1 轮（含 turn/end）：行内容必须由 turn/end 强制点推进，
+      // 而不是停在 created 时的空快照。
+      ctx.sessions.create(id, { meta: meta("turn-end"), seed: threeTurnLog().slice(0, 6) });
+      const turns = await waitFor(() => {
+        const value = cachedTurns({ ctx, cache, dispose }, "turn-end");
+        return value !== undefined && value.length > 0 ? value : undefined;
+      });
+      expect(turns).toEqual([1]);
+    } finally {
+      await dispose();
+    }
+  });
+
   it("serves checkpoints written by the live write path", async () => {
     const { ctx, cache, dispose } = await harness();
     try {
