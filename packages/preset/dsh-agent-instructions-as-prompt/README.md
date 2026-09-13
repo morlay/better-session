@@ -1,5 +1,9 @@
 # @morlay/dsh-agent-instructions-as-prompt
 
+> **当前状态**：本包**暂不接入默认打包**——`@morlay/dsh-preset` 的生成器保持
+> `agent-instructions` 行为上游官方插件（baseline 走 user 消息），源码与测试保留，
+> 供后续调整后重新启用（恢复步骤见「preset 里也要替换」）。
+
 上游 `@deepseek-ai/dsh-agent-instructions` 的 fork：源码复制（`src/` 下 6 个文件
 与上游一一对应），**baseline 的落点从 user 消息改成 system-prompt section**，
 其余行为（发现、去重、字节预算、工具触达后的增量提醒、pre-step 折叠）与上游一致。
@@ -46,13 +50,19 @@
 
 配置字段与上游同名同义（`maxBytes` 必填；`dshHome`、`projectRootMarkers`、
 `maxSourceBytes`、`instructionFileCandidates`、`localInstructionFileCandidates`
-缺省即上游默认，例如默认候选含 `CLAUDE.md`）。
+缺省即上游默认，包括候选里的 `CLAUDE.md`）。**当前部署在 preset 侧把候选收紧为
+`AGENTS` 系列**（不读 CLAUDE，见 `@morlay/dsh-preset` README）；本包源码保持与上游
+一致，接入时由 preset 传入收紧后的 config。
 
-**preset 里也要替换**：preset 的 `agent.cordis.yml` 是**会话级** composition，
-profile 级的 `disabled` 管不到它——只要 preset 里还写着上游包名，每个会话仍会由
-上游插件把 baseline 作为 user 消息注入一次。`@morlay/dsh-preset` 的生成器
-（`tool/generate-presets.ts`）因此在生成产物时把 `agent-instructions` 行的 `name`
-换成 `@morlay/dsh-agent-instructions-as-prompt`。
+**preset 里也要替换（当前未启用）**：preset 的 `agent.cordis.yml` 是**会话级**
+composition，profile 级的 `disabled` 管不到它——只要 preset 里还写着上游包名，每个
+会话仍会由上游插件把 baseline 作为 user 消息注入一次。因此启用本包时，
+`@morlay/dsh-preset` 的生成器（`tool/generate-presets.ts`）要在生成产物时把
+`agent-instructions` 行的 `name` 换成 `@morlay/dsh-agent-instructions-as-prompt`
+（含 profile 侧的 `disabled: true` 行）。
+
+当前生成器不改这一行，preset 跟随官方行为；要重新启用，就把替换逻辑加回生成器，
+并在 `@morlay/dsh-preset` 的 `dependencies` 里加回本包。
 
 `fs` provider 是必需的（发现/读取经 `ctx.fs`，无 provider 时插件是 no-op）；
 base bundle 已带 `fs-local`。

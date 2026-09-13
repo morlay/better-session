@@ -318,9 +318,6 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/vendor/cordis
-      '@morlay/dsh-agent-instructions-as-prompt':
-        specifier: workspace:^
-        version: link:../dsh-agent-instructions-as-prompt
     devDependencies:
       '@deepseek-ai/cordis-plugin-include':
         specifier: workspace:^

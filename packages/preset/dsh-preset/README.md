@@ -47,9 +47,43 @@ preset 自带的 `persona` 行会在 agent scope 注册 `deployment:persona-pref
 固化了该语义），所以生成器把那一行**删掉**，而不是复制一份改过的 persona——同一份
 文案只维护一处。
 
+### 指令遵循设计
+
+`personaPrefix` 位于 order 0（prompt 最前，紧跟被关掉的 harness identity 之后）：
+声明指令优先级（直接用户指令 > 工作区 `AGENTS.md` > 本系统提示词）与执行协议。其中
+点名 `AGENTS.md` 是**强制约束**——官方 `agent-instructions` 注入模板的措辞
+（"may be relevant" / "as guidance" / "do not override…"）是上游的通用保守表述，会让
+模型把仓库规则当参考而不是规则，所以这里显式反制。协议一行覆盖：动手前读相关
+`AGENTS.md`、过程自检、交付前核对红线与验证证据、无法遵守时明确说明、派发子代理时
+把约束写进任务说明。
+
+`personaSuffix` 位于 order 10200（prompt 最后）：一句话复述"结束任务前对照本提示词与
+`AGENTS.md` 自检"。长 prompt 里中段指令会被稀释，首尾各放一次最关键的约束，用近因
+位置兜住遵循度；细节只在 prefix 维护，避免两处重复。
+
+改这两段后**必须重启 dsh 才能生效**：profile 在进程启动时装载，`system-prompt` 的
+section 在插件构造时注册；dev 模式重启 `just custom dev`/`just custom desktop`，打包
+形态需重新 `just custom bundle`（patch 随 seed 快照复制）。
+
 自建 preset 仍然必要，但只为别的事：`includeShippedRoot: false` 之后需要一份自己的
 roster（id 沿用官方名以走客户端语言字典），以及桌面形态下 preset 必须落在 dsh 包的
 `config/agent-presets` 挂载点（见 dsh-desktopify 的 `dsh.desktop.agentPresets`）。
+
+## 工作区指令走官方行为，候选收紧为 AGENTS 系列
+
+preset 里的 `agent-instructions` 行仍是官方 `@deepseek-ai/dsh-agent-instructions`：
+本仓库的 fork `@morlay/dsh-agent-instructions-as-prompt` 暂不接入默认打包，baseline
+仍按官方语义作为 user 消息注入一次。生成器只覆盖该行 config 的两个字段：
+
+```yaml
+instructionFileCandidates: ["AGENTS.md"] # 上游默认 ['AGENTS.md','CLAUDE.md']
+localInstructionFileCandidates: ["AGENTS.local.md"] # 上游默认还含 CLAUDE.local.md
+```
+
+即**不读 CLAUDE 系列**（本部署不需要 CLAUDE 兼容）；`maxBytes` 等其余字段跟随上游。
+
+fork 源码保留在 `packages/preset/dsh-agent-instructions-as-prompt/`；后续要恢复时按
+它的 README 操作：生成器把该行 `name` 换成 fork 名，profile 侧再禁用上游行。
 
 ## preset 由构建生成，不是手工副本
 
@@ -68,11 +102,10 @@ pnpm --filter @morlay/dsh-preset run generate-presets [outDir]
 ```
 
 脚本把上游 composition 当**数据**读入：`js-yaml` 用 include 的
-`entryListSchema` 解析（`!!js` 标签保留为表达式节点）→ 在 JS 里改两处（删掉
-`persona` 行、把 `agent-instructions` 行指向本仓库的 fork）→ `dump` 回 YAML。
-因此上游任何结构性改动（新增 / 重命名 row、改字段）都自动跟随，不依赖易碎的文本
-锚点；上游若删掉 `persona` 行，目标（preset 不自带 persona）本就达成，脚本照常
-通过。
+`entryListSchema` 解析（`!!js` 标签保留为表达式节点）→ 在 JS 里改一处（删掉
+`persona` 行）→ `dump` 回 YAML。因此上游任何结构性改动（新增 / 重命名 row、改字段）
+都自动跟随，不依赖易碎的文本锚点；上游若删掉 `persona` 行，目标（preset 不自带
+persona）本就达成，脚本照常通过。
 
 脚本先**整目录清空**输出目录再生成：产物完全派生自脚本，残留目录（改过
 `source`、旧命名）不该留下——否则 discovery 会把它们当有效 preset 扫出来。

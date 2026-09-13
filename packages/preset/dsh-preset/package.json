@@ -36,9 +36,6 @@
     "build": "pnpm exec tsdown",
     "prepublishOnly": "pnpm run build"
   },
-  "dependencies": {
-    "@morlay/dsh-agent-instructions-as-prompt": "workspace:^"
-  },
   "devDependencies": {
     "@deepseek-ai/cordis-plugin-include": "workspace:^",
     "@deepseek-ai/dsh-agent-presets": "workspace:^",

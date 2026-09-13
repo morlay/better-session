@@ -6,8 +6,11 @@
  * 必须随包发布；但手工维护副本会与上游 drift。这里把上游 `standard` / `ptc`
  * 当数据读入——`js-yaml` 用 include 的 `entryListSchema` 解析（`!!js` 标签
  * 因此保留为表达式节点）——在 JS 里改两处（删掉自带的 `persona` 行、把
- * `agent-instructions` 行指向本仓库的 fork），再 `dump` 回 YAML。上游任何结构性
- * 改动（新增/重命名 row、改字段）都自动跟随，不依赖易碎的文本锚点。
+ * `agent-instructions` 行的指令候选收紧为 AGENTS 系列），再 `dump` 回 YAML。
+ * 上游任何结构性改动（新增/重命名 row、改字段）都自动跟随，不依赖易碎的文本锚点。
+ *
+ * `agent-instructions` 行仍是上游官方插件：fork
+ * （`@morlay/dsh-agent-instructions-as-prompt`）暂不接入，工作区指令走官方行为。
  *
  * 产物落在 `dist/` 而非源码树：dist 是构建输出（gitignore），既不会与 oxfmt
  * 互相改格式，也不会把派生文件混进源码。
@@ -75,39 +78,41 @@ export const PERSONA_ROW_ID = "persona";
 export const INSTRUCTIONS_ROW_ID = "agent-instructions";
 
 /**
- * 承载工作区指令的插件：本仓库的 fork（baseline 走 system prompt）。
+ * 工作区指令的候选文件：只要 AGENTS 系列，不要 CLAUDE 系列。
  *
- * preset 是**会话级** composition，profile 级的 patch（禁用上游行 + 挂 fork）
- * 管不到它——不在这里替换，每个会话仍会由上游插件把 baseline 作为 user 消息
- * 注入一次。
+ * 上游默认是 `['AGENTS.md','CLAUDE.md']` 与 `['AGENTS.local.md','CLAUDE.local.md']`；
+ * 本部署不读 CLAUDE 系文件（覆盖上游 config 的这两个字段，其余字段如 `maxBytes`
+ * 保持上游值）。行本身仍是官方 `@deepseek-ai/dsh-agent-instructions`——fork 暂未
+ * 接入，见模块注释。
  */
-export const INSTRUCTIONS_PLUGIN = "@morlay/dsh-agent-instructions-as-prompt";
+export const INSTRUCTIONS_CONFIG = {
+  instructionFileCandidates: ["AGENTS.md"],
+  localInstructionFileCandidates: ["AGENTS.local.md"],
+} as const;
 
 /**
- * 把上游 composition 文本渲染成产物文本：解析 → 改 persona 与 instructions 两行 → dump。
- * @param source - 上游 preset id，用于 header 与诊断。
+ * 把上游 composition 文本渲染成产物文本：解析 → 删 persona 行、收紧指令候选 → dump。
  * @param upstream - 上游 composition 文本。
  * @returns 带 header 的产物文本。
  */
-export function renderComposition(source: string, upstream: string): string {
+export function renderComposition(upstream: string): string {
   const rows = yaml.load(upstream, {
     schema: entryListSchema,
   }) as CompositionRow[];
-  const instructions = rows.find((row) => row.id === INSTRUCTIONS_ROW_ID);
-  if (instructions === undefined) {
-    throw new Error(
-      `generate-presets: upstream \`${source}\` has no \`${INSTRUCTIONS_ROW_ID}\` row; ` +
-        "upstream changed — re-check which plugin loads the workspace instructions",
-    );
-  }
-
-  instructions.name = INSTRUCTIONS_PLUGIN;
   // 删掉 preset 自带的 `persona` 行：它会在 agent scope 注册
   // `deployment:persona-prefix` 并**遮蔽**部署级 persona（system-prompt 的
   // personaPrefix，见上游 system-prompt 的 Config 文档）。个人提示词只由
   // `cordis.patch.yml` 的 system-prompt 行提供，这里不再复制一份。
   const persona = rows.findIndex((row) => row.id === PERSONA_ROW_ID);
   if (persona >= 0) rows.splice(persona, 1);
+  const instructions = rows.find((row) => row.id === INSTRUCTIONS_ROW_ID);
+  if (instructions === undefined) {
+    throw new Error(
+      `generate-presets: upstream composition has no \`${INSTRUCTIONS_ROW_ID}\` row; ` +
+        "upstream changed — re-check which plugin loads the workspace instructions",
+    );
+  }
+  instructions.config = { ...instructions.config, ...INSTRUCTIONS_CONFIG };
   // `quotingType: '"'` 是刻意选择：yaml.dump 默认用单引号，而仓库的 oxfmt 会把
   // YAML 单引号改成双引号——不显式指定就会 fmt 与生成器来回改。指定后产物与
   // `oxfmt --check` 零差异（实测），故 `presets/**` 无需 fmt 忽略。
@@ -144,7 +149,7 @@ export function generatePresets(outDir: string = join(PACKAGE_ROOT, PRESETS_OUT_
     const dir = join(outDir, entry.source);
     mkdirSync(dir, { recursive: true });
     const compositionPath = join(dir, "agent.cordis.yml");
-    writeFileSync(compositionPath, renderComposition(entry.source, upstream));
+    writeFileSync(compositionPath, renderComposition(upstream));
     const metadataPath = join(dir, "preset.yml");
     writeFileSync(metadataPath, renderMetadata(entry));
     written.push(compositionPath, metadataPath);
