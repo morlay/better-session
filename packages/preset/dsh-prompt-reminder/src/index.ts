@@ -57,8 +57,6 @@ export function apply(ctx: Context, config: Config): void {
   const keep = new Set(config.keep ?? []);
   // 本轮装配捕获的 reminder 文本，按 agent 区分（子 agent 各有自己的组合与 persona）。
   const captured = new WeakMap<Agent, string>();
-  // 已知送达 surface 的文本，稳态下据此跳过 surface 扫描。
-  const delivered = new WeakMap<Agent, string>();
 
   ctx.on("system-prompt/assemble", async (_assembly, context, next) => {
     const result = await next();
@@ -76,12 +74,11 @@ export function apply(ctx: Context, config: Config): void {
     // 没有进入模型的消息时不注入：空消息列表属于 no-step turn，下一轮再试。
     if (decision.kind === "reject" || decision.messages.length === 0) return decision;
     const reminder = captured.get(agent);
-    if (reminder === undefined || delivered.get(agent) === reminder) return decision;
-    if (latestReminderText(agent) === reminder) {
-      delivered.set(agent, reminder);
-      return decision;
-    }
-    delivered.set(agent, reminder);
+    if (reminder === undefined) return decision;
+    // 唯一真相是会话 surface：loop 把注入的消息落库，surface 上有同文本就
+    // 不再注入。不进程内记账——rewind（retry / 编辑 / 撤回）截断掉旧
+    // reminder 时，这里当场恢复，而不是等到文本变化或进程重启。
+    if (latestReminderText(agent) === reminder) return decision;
     // 贴近已领取的这批消息之后：直接输入在前，注入的上下文紧随其后。
     const claimedEnd = decision.messages.findLastIndex((message) => messages.includes(message));
     return {

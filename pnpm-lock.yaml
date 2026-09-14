@@ -367,6 +367,9 @@ importers:
       '@deepseek-ai/dsh-system-prompt':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/core/system-prompt
+      '@morlay/session-rdb':
+        specifier: workspace:^
+        version: link:../../session/session-rdb
 
   packages/session/better-session:
     dependencies:

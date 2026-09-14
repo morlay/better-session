@@ -16,6 +16,8 @@ import { bindScopeParent, createScope, scopeOf } from "@deepseek-ai/dsh-scope";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { UserMessage } from "@deepseek-ai/dsh-session";
 import { PERSONA_PREFIX_SECTION, renderPrompt } from "@deepseek-ai/dsh-system-prompt";
+// 测试面借用 rewind 对 live 会话做的内存截断：不为此在本包拉起 RDB 装配。
+import { truncateLiveSession } from "@morlay/session-rdb/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import * as plugin from "../index.ts";
 import { latestReminderText, renderReminder } from "../reminder.ts";
@@ -164,11 +166,14 @@ describe("reminder 注入", () => {
     expect(textOf(messages[1]!)).toMatch(/<\/system-reminder>$/);
   });
 
-  it("文本未变化时不重复注入", async () => {
+  it("文本未变化时不重复注入（loop 落库后 surface 上已有同文本）", async () => {
     const { ctx, standing, agent } = await mount();
     await toolSection(standing, "tool:bash", 1000, "Check the [exit code: N] marker.");
 
-    expect(await preStep(ctx, agent, [prompt("任务")])).toHaveLength(2);
+    const first = await preStep(ctx, agent, [prompt("任务")]);
+    expect(first).toHaveLength(2);
+    // loop 把注入的消息作为本轮 user/message 落库，surface 随即可见。
+    agent.session.append("user/message", first[1]!, { surfaceOp: "append" });
     expect(await preStep(ctx, agent, [prompt("继续")])).toHaveLength(1);
   });
 
@@ -203,6 +208,25 @@ describe("reminder 注入", () => {
 
     expect(latestReminderText(agent)).toBe(textOf(reminder));
     expect(await preStep(ctx, agent, [prompt("继续")])).toHaveLength(1);
+  });
+
+  it("rewind 掉本轮的 reminder 后（首 msg retry）重放同文本仍补发", async () => {
+    const { ctx, standing, agent } = await mount();
+    await toolSection(standing, "tool:bash", 1000, "Check the [exit code: N] marker.");
+
+    // turn 1：注入并落库（reminder 是本轮内的 user/message）。
+    const first = await preStep(ctx, agent, [prompt("任务")]);
+    expect(first).toHaveLength(2);
+    agent.session.append("user/message", first[1]!, { surfaceOp: "append" });
+
+    // retry turn 1 → rewind 到 boundary -1：内存 log 截断，surface 上的
+    // reminder 随 turn 1 一起消失，而重放只投递 source.kind === "user" 的输入。
+    truncateLiveSession(agent.session, 0);
+    expect(latestReminderText(agent)).toBeUndefined();
+
+    // 捕获文本没变，但 surface 是唯一真相 → 必须补发。
+    const replay = await preStep(ctx, agent, [prompt("任务")]);
+    expect(replay.map((message) => message.source.kind)).toEqual(["user", "prompt-reminder"]);
   });
 
   it("reminder 正文里的闭合标记被转义", () => {
