@@ -153,6 +153,21 @@ export function buildRoot(workspace: string): string {
 }
 
 /**
+ * Strip pnpm's peer suffix from a spec `pnpm deploy` wrote into the deployed
+ * project's manifest. The deploy writes the lockfile's resolved version —
+ * `<version>(<peer>)(<peer>(<peer>))` — where a peer's own peers nest, so the
+ * cut is at the first `(` rather than bracket matching: a leftover nested
+ * suffix is not a version, and pnpm installs it as the relative link
+ * `link:0.0.4(@scope/a@1)(@scope/b@2(@scope/c@3))`, leaving a dangling entry
+ * with no package behind it (the bundle then fails to resolve at runtime).
+ * Specs pnpm wrote without a suffix (`0.0.19`, `^1.0.2`) pass through.
+ */
+export function cleanDeployedSpec(spec: string): string {
+  const suffix = spec.indexOf("(");
+  return suffix === -1 ? spec : spec.slice(0, suffix);
+}
+
+/**
  * Top-level `pnpm-workspace.yaml` keys the deployed project inherits from the
  * workspace. `pnpm deploy` only carries the settings that shape the closure
  * assembly (`allowBuilds`, `patchedDependencies`, `overrides`); the resolution

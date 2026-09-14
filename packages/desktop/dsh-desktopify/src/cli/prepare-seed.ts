@@ -59,6 +59,7 @@ import {
 import {
   PROFILE_NAME,
   buildRoot,
+  cleanDeployedSpec,
   desktopAgentPresets,
   dshVersion as readDshVersion,
   findWorkspaceRoot,
@@ -111,10 +112,12 @@ function inheritDeploySettings(root: string, destination: string): void {
  * semantics: npm always packs `main`, `bin`, README and LICENSE, whatever
  * `files` declares.
  *
- * `pnpm deploy` can leave peer-shaped specs in the deployed manifest
+ * `pnpm deploy` leaves peer-shaped specs in the deployed manifest
  * (`"@morlay/dsh-preset": "0.0.1(faf77f80…)"`); no registry accepts that shape,
- * so strip it before re-resolving. An app targeting `workspace:` sources has
- * nothing installable here and is materialized by the closure walk instead.
+ * so strip it before re-resolving — the suffix nests (`0.0.4(@scope/a@1)(@scope/b@2(@scope/c@3))`),
+ * which `cleanDeployedSpec` cuts at the first `(`. An app targeting
+ * `workspace:` sources has nothing installable here and is materialized by the
+ * closure walk instead.
  */
 async function installOfficialSurface(
   destination: string,
@@ -134,7 +137,7 @@ async function installOfficialSurface(
   const dependencies = new Map(
     Object.entries(manifest.dependencies ?? {}).map(([name, spec]) => [
       name,
-      spec.replace(/\([^()]*\)$/u, ""),
+      cleanDeployedSpec(spec),
     ]),
   );
   for (const [name, spec] of Object.entries(specs)) dependencies.set(name, spec);
