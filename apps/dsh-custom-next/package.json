@@ -12,8 +12,6 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-experimental-agent-team-profile": "workspace:^",
-    "@deepseek-ai/dsh-experimental-agent-team-web-profile": "workspace:^",
     "@morlay/better-session": "workspace:^",
     "@morlay/dsh-preset": "workspace:^"
   },
@@ -25,9 +23,7 @@
     "profile": {
       "bundles": [
         "@morlay/better-session",
-        "@morlay/dsh-preset",
-        "@deepseek-ai/dsh-experimental-agent-team-profile",
-        "@deepseek-ai/dsh-experimental-agent-team-web-profile"
+        "@morlay/dsh-preset"
       ]
     },
     "desktop": {

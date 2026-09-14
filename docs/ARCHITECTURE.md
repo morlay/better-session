@@ -27,7 +27,9 @@ fork）闭环——GUI 里撤回用户消息到输入框或就地重写、重试
 │   ├── session-rdb/             # 实现层 @morlay/session-rdb（RDB 持久化 + branch provider 双服务）
 │   ├── better-session/          # 聚合层 @morlay/better-session（装配决策 docs/adr/）
 │   ├── llm-openai-compatible/   # LLM 适配 @morlay/dsh-llm-openai-compatible（独立上下文）
-│   └── dsh-desktopify/          # 桌面化打包工具（Electron 壳，dev 链接工作区 / bundle 静态打包）
+│   ├── dsh-desktopify/          # 桌面化打包工具（Electron 壳，dev 链接工作区 / bundle 静态打包）
+│   └── sandbox/
+│       └── dsh-sandbox-local/   # 沙箱替换 @morlay/dsh-sandbox-local（额外可写根 + 拒绝项）
 ├── vendor/
 │   └── deepseek-harness/        # 上游 side workspace（独立 git 仓库，见 dsh-side-workspace-plugin-develop skill）
 ├── .agents/skills/dsh-side-workspace-plugin-develop/ # 上游同步与适配流程 skill
@@ -123,6 +125,20 @@ disabled，不引入派生库（[ADR 0010](../packages/session-rdb/docs/adr/0010
   [dsh-side-workspace-plugin-develop skill](../.agents/skills/dsh-side-workspace-plugin-develop/SKILL.md) 与
   [ADR 0001](adr/0001-上游以side-workspace版本锁定完整代码而非发布版本.md)。
 
+## 可配置沙箱（packages/sandbox/dsh-sandbox-local）
+
+`@morlay/dsh-sandbox-local` 替换官方进程沙箱与文件系统围栏：`access` 的
+`rw <path>` 条目追加工作区与平台临时目录之外的可写根（支持 `{{ env.NAME }}` 模板），
+`r- <path>` 条目只读（读放行、写拒绝），`-- <pattern>` 条目拒绝访问（读 + 写，
+支持相对会话工作区的 glob）。进程沙箱侧继承官方
+`LocalSandboxProvider` 并在 `confine` 结果上追加规则——Seatbelt 完整生效
+（后置 SBPL 规则覆盖官方先置的 allow，真实 `sandbox-exec` 已验证），bwrap
+退化为只读、Landlock 与 Windows ACL 无表达，加载期告警；fs 侧继承官方
+`LocalFileSystem` 自实现围栏，使 read / write / edit 工具在所有平台语义一致。
+配置、语法与限制见
+[packages/sandbox/dsh-sandbox-local/README.md](../packages/sandbox/dsh-sandbox-local/README.md)，
+取舍见 [ADR 0001](../packages/sandbox/dsh-sandbox-local/docs/adr/0001-替换官方进程沙箱与fs围栏以支持额外可写根与拒绝项.md)。
+
 ## 桌面化（packages/dsh-desktopify）
 
 `@morlay/dsh-desktopify` 把任意工作区打包 / 运行为桌面应用：Electron 壳
@@ -141,6 +157,7 @@ exports 收敛）、运行流程与运行时语义见
 | 上下文级 | [packages/session-rdb/docs/adr/](../packages/session-rdb/docs/adr/)                                         | 原样存储；事件实体全局化；rewind 直接截断；并发写入 fail loud；未闭合轮次原样保留；导出即修复；混合世代回退；跟随上游 Session format v3；storages 接管到 rdb 语义表；会话查询服务所有权接管 |
 | 上下文级 | [packages/ui-conversation-message-actions/docs/adr/](../packages/ui-conversation-message-actions/docs/adr/) | 就地编辑；client bundle 单文件；agent 驱动重放；编辑入口不依赖轮次归属；rewind 前主动停止运行中的 loop                                                                                      |
 | 上下文级 | [packages/llm-openai-compatible/docs/adr/](../packages/llm-openai-compatible/docs/adr/)                     | 起因（pi-ai 参数不完整）；传输层复用 ai-sdk；dict 多路由；模型目录缺省为空；凭据服务解析；采样合并规则                                                                                      |
+| 上下文级 | [packages/sandbox/dsh-sandbox-local/docs/adr/](../packages/sandbox/dsh-sandbox-local/docs/adr/)             | 替换官方进程沙箱与 fs 围栏以支持额外可写根与拒绝项（跨平台降级 + 加载期告警）                                                                                                               |
 
 ## 深入阅读
 
@@ -153,4 +170,5 @@ exports 收敛）、运行流程与运行时语义见
   [packages/session-rdb/docs/design.md](../packages/session-rdb/docs/design.md)
 - 聚合 bundle：[packages/better-session/README.md](../packages/better-session/README.md)
 - LLM 适配：[packages/llm-openai-compatible/README.md](../packages/llm-openai-compatible/README.md)
+- 可配置沙箱：[packages/sandbox/dsh-sandbox-local/README.md](../packages/sandbox/dsh-sandbox-local/README.md)
 - 桌面化：[packages/dsh-desktopify/README.md](../packages/dsh-desktopify/README.md)

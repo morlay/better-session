@@ -28,7 +28,7 @@ lint:
     pnpm exec oxlint .
 
 publish:
-    pnpm -r --filter './packages/*/*' exec tsx {{ justfile_directory() }}/scripts/publish-if-need.mts
+    pnpm -r --filter './packages/*/*' --workspace-concurrency=1 exec tsx {{ justfile_directory() }}/scripts/publish-if-need.mts
 
 build *args:
     @pnpm -r --filter './packages/*/*' run build {{ args }}

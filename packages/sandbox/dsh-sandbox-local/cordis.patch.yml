@@ -1,0 +1,22 @@
+# @morlay/dsh-sandbox-local bundle patch：把官方沙箱栈换成可配置实现。
+#
+# - `sandbox`：官方 `@deepseek-ai/dsh-sandbox-local` 注册 `ctx.sandbox`；本包用它的
+#   子类注册同名服务（复用官方 probe / runner 选择 / Windows ACL 流程，只在
+#   选中的 runner 参数上追加 `access` 规则）。
+# - `fs-sandbox`：官方 `@deepseek-ai/dsh-fs-sandbox` 注册 `ctx.fs`；本包用继承
+#   `LocalFileSystem` 的实现注册同名服务（复用同一套写围栏，并让 `--` 条目同时
+#   拦住读与写、`r-` / `rw` 条目参与写判定）。
+#
+# 这组 patch 供把本包作为独立 bundle 采用的部署使用：行不带 config，schema 默认是空规则。
+# 本部署（`@morlay/dsh-preset`）不走这条路径——它的 patch 自己禁用官方两行、插入本行
+# 并写上规则，因此不会加载本 bundle；两种采用方式同时上线会重复插入同一行。
+
+- id: sandbox
+  disabled: true
+
+- id: fs-sandbox
+  disabled: true
+
+- insert:
+    - id: sandbox-local
+      name: "@morlay/dsh-sandbox-local"

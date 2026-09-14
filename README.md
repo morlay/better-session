@@ -13,6 +13,7 @@ DeepSeek Harness 的**分支式会话编辑** monorepo：在不修改上游
 | `packages/session-rdb/`                     | 实现层：RDB 持久化 + 分支 provider 双服务                           | [README](packages/session-rdb/README.md) · [design](packages/session-rdb/docs/design.md)             |
 | `packages/ui-conversation-message-actions/` | 编排层：edit / retry / fork 编排 + client UI 替换                   | [README](packages/ui-conversation-message-actions/README.md)                                         |
 | `packages/llm-openai-compatible/`           | LLM 适配层：OpenAI-compatible 多 provider 路由（可选组件）          | [README](packages/llm-openai-compatible/README.md)                                                   |
+| `packages/sandbox/dsh-sandbox-local/`       | 沙箱替换层：额外可写根 + 拒绝项（替换 `ctx.sandbox` / `ctx.fs`）    | [README](packages/sandbox/dsh-sandbox-local/README.md)                                               |
 | `apps/dsh-custom-next/`                     | 示例工作区：web 模式（`dsh web`）与 desktop 模式（Electron 壳）     | [justfile](apps/dsh-custom-next/justfile) · `just custom desktop`                                    |
 | `devpackages/devkit/`                       | 共享开发配置：cordis 插件 tsdown 预设 + tsconfig（packages/* 复用） | [tsconfig](devpackages/devkit/tsconfig.json)                                                         |
 | `packages/dsh-desktopify/`                  | 桌面化打包工具（`dsh-desktopify` CLI：dev / bundle / prepare:*）    | [README](packages/dsh-desktopify/README.md)                                                          |

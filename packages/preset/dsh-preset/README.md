@@ -6,12 +6,12 @@
 
 ## 内容
 
-| 文件                       | 作用                                                                                                         |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `cordis.patch.yml`         | bundle patch：禁用官方 preset、注册本包 preset 为默认、声明个人 `llm-pi-ai` route、插入 `prompt-reminder` 行 |
-| `tool/generate-presets.ts` | 从上游生成 preset 的模块 + tsdown hooks                                                                      |
-| `dist/presets/standard/`   | 构建产物：自定义 preset「标准模式」（由上游 `standard` 生成）                                                |
-| `dist/presets/ptc/`        | 构建产物：自定义 preset「PTC 模式」（由上游 `ptc` 生成）                                                     |
+| 文件                       | 作用                                                                                                                       |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `cordis.patch.yml`         | bundle patch：禁用官方 preset、注册本包 preset 为默认、声明个人 `llm-pi-ai` route、覆盖沙箱规则、插入 `prompt-reminder` 行 |
+| `tool/generate-presets.ts` | 从上游生成 preset 的模块 + tsdown hooks                                                                                    |
+| `dist/presets/standard/`   | 构建产物：自定义 preset「标准模式」（由上游 `standard` 生成）                                                              |
+| `dist/presets/ptc/`        | 构建产物：自定义 preset「PTC 模式」（由上游 `ptc` 生成）                                                                   |
 
 `cordis.patch.yml` 里插入的 `prompt-reminder`（`@morlay/dsh-prompt-reminder`）把被
 裁掉的系统提示词 section 降级为 `<system-reminder>` user 消息，见「工具说明降级为
@@ -156,6 +156,22 @@ row、改字段）都自动跟随，不依赖易碎的文本锚点；上游若�
 2. `pnpm --filter @morlay/dsh-preset run build`（build:done 会重新生成）
 3. `pnpm exec vitest run packages/preset` 确认无 drift（含 reminder 插件的行为测试）。
 
+## 沙箱装配与规则（部署级）
+
+本 bundle 的 `cordis.patch.yml` 里一次做完三件事：禁用官方 `sandbox` / `fs-sandbox`
+两行、插入 `- id: sandbox-local` 行、写上 `rw` / `r-` / `--` 条目（唯一真源，本 README
+不复制一份以免两处漂移）；条目语法、优先级与各平台表达能力见
+[`@morlay/dsh-sandbox-local` 的 README](../../sandbox/dsh-sandbox-local/README.md)。
+
+放本 bundle 而不是示例 app 的 `cordis.patch.yml`：bundle patch 在 dev（web / desktop）
+与打包形态都会应用，app 的 patch 只在打包时作为 seed 的 profile patch 生效。
+
+两个前置条件：
+
+- **本包的 `dependencies` 必须声明 `@morlay/dsh-sandbox-local`**：插入行的 `name` 要能在
+  profile 的依赖树里解析（profile 的 `nodeLinker: hoisted` 由本包的依赖把它带进去）。
+- **规则变化要重启**：profile 在启动时装载，`access` 在插件构造时解析（模板也是）。
+
 ## 装配
 
 `agent-presets.roots` 需指向本包的 `dist/presets/`。因为该目录随包分发，
@@ -198,6 +214,10 @@ profile 里把内容物化到该挂载点；`includeShippedRoot: false` 两种�
 - `cordis.patch.yml` 插入的 `@morlay/dsh-prompt-reminder` 必须能被 **profile** 的依赖
   树解析：示例 app 已在 `dependencies` 声明；换工作区时要一并声明，否则该行加载失败、
   工具说明会留在系统提示词里。
+- 沙箱装配（禁用官方两行 + 插入 `sandbox-local` 行 + 规则）全在本 bundle 的 patch 里，
+  app 的 `dsh.profile.bundles` 不需要额外列 `@morlay/dsh-sandbox-local`；
+  `@morlay/dsh-sandbox-local` 自带的 bundle patch 供把该包作为独立 bundle 采用的部署
+  使用，与本 bundle 同时上线会重复插入同一行。
 - 生成器显式设 `quotingType: '"'`：`yaml.dump` 默认单引号而仓库 oxfmt 偏好双引号，
   不指定会让生成器与 formatter 来回改；产物在 gitignore 的 dist 里，本就不参与 fmt。
 - **dev 模式需要先构建**：`just dev` / `just desktop` / `just bundle` 都先跑
