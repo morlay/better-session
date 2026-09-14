@@ -1,0 +1,3 @@
+# 本包是纯插件：装配点是 agent preset composition 里的一行（见 README），
+# 不经 bundle patch；空 patch 只为满足包 exports 约定。
+[]

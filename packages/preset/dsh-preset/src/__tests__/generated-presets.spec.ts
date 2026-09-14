@@ -29,7 +29,7 @@ import {
 /** 上游 preset 里承载工作区指令的行 id。 */
 const INSTRUCTIONS_ROW_ID = "agent-instructions";
 
-/** 上游那行指向的官方插件（fork 暂未接入，产物须保持官方名）。 */
+/** 上游那行指向的官方插件（产物须保持官方名；提示词分层由 profile 的 patch 承担）。 */
 const UPSTREAM_INSTRUCTIONS_PLUGIN = "@deepseek-ai/dsh-agent-instructions";
 
 /** 产物里指令候选的文件名（字面量：不读 CLAUDE 系列）。 */
@@ -105,7 +105,7 @@ describe("generated presets", () => {
       expect(productRow?.config?.localInstructionFileCandidates).toEqual(["AGENTS.local.md"]);
       // 其余 config 字段跟随上游（如 maxBytes 的字节预算）。
       expect(productRow?.config?.maxBytes).toBe(upstreamRow?.config?.maxBytes);
-      // 产物里不应出现本仓库的插件行。
+      // 提示词分层（prompt-reminder）是 profile 的 bundle patch，不进 preset 产物。
       expect(
         product.some((row) => typeof row.name === "string" && row.name.startsWith("@morlay/")),
       ).toBe(false);

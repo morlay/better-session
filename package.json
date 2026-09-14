@@ -25,5 +25,5 @@
     "vitest": "4.x",
     "zx": "^8.8.5"
   },
-  "packageManager": "pnpm@12.3.4"
+  "packageManager": "pnpm@12.4.1"
 }

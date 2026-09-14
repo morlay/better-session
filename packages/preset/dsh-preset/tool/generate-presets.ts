@@ -9,8 +9,8 @@
  * `agent-instructions` 行的指令候选收紧为 AGENTS 系列），再 `dump` 回 YAML。
  * 上游任何结构性改动（新增/重命名 row、改字段）都自动跟随，不依赖易碎的文本锚点。
  *
- * `agent-instructions` 行仍是上游官方插件：fork
- * （`@morlay/dsh-agent-instructions-as-prompt`）暂不接入，工作区指令走官方行为。
+ * `agent-instructions` 行是上游官方插件：工作区指令的 baseline 留在 user 消息通道，
+ * 与「系统提示词只留 persona、其余走 reminder」的分层一致。
  *
  * 产物落在 `dist/` 而非源码树：dist 是构建输出（gitignore），既不会与 oxfmt
  * 互相改格式，也不会把派生文件混进源码。

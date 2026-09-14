@@ -1,12 +1,12 @@
 {
-  "name": "@morlay/dsh-agent-instructions-as-prompt",
-  "version": "0.0.2",
-  "description": "Fork of @deepseek-ai/dsh-agent-instructions that delivers the workspace instruction baseline as system-prompt sections, keeping the upstream mid-session reminder path.",
+  "name": "@morlay/dsh-prompt-reminder",
+  "version": "0.0.1",
+  "description": "Demotes the system-prompt sections a reduced prompt leaves out into <system-reminder> user messages, so tool guidance stops diluting the system prompt while it stays in force.",
   "keywords": [
-    "agents-md",
     "dsh",
     "dsh-plugin",
-    "instructions",
+    "preset",
+    "reminder",
     "system-prompt"
   ],
   "license": "MIT",
@@ -38,39 +38,23 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-util-values": "workspace:^",
-    "@deepseek-ai/schemastery": "workspace:^",
-    "zod": "^4.4.3"
+    "@deepseek-ai/schemastery": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-agent-loop": "workspace:^",
     "@deepseek-ai/dsh-agent-loop-testkit": "workspace:^",
-    "@deepseek-ai/dsh-fs": "workspace:^",
-    "@deepseek-ai/dsh-fs-local": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
+    "@deepseek-ai/dsh-scope": "workspace:^",
     "@deepseek-ai/dsh-session": "workspace:^",
-    "@deepseek-ai/dsh-session-projection": "workspace:^",
-    "@deepseek-ai/dsh-storage": "workspace:^",
-    "@deepseek-ai/dsh-storage-domain": "workspace:^",
     "@deepseek-ai/dsh-system-prompt": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-agent": "workspace:^",
-    "@deepseek-ai/dsh-fs": "workspace:^",
-    "@deepseek-ai/dsh-home-paths": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-session": "workspace:^",
-    "@deepseek-ai/dsh-session-projection": "workspace:^",
-    "@deepseek-ai/dsh-storage-domain": "workspace:^",
-    "@deepseek-ai/dsh-system-prompt": "workspace:^",
-    "@deepseek-ai/dsh-tools": "workspace:^"
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
+    "@deepseek-ai/dsh-system-prompt": "workspace:^"
   }
 }

@@ -15,7 +15,8 @@
     "@deepseek-ai/dsh-experimental-agent-team-profile": "workspace:^",
     "@deepseek-ai/dsh-experimental-agent-team-web-profile": "workspace:^",
     "@morlay/better-session": "workspace:^",
-    "@morlay/dsh-preset": "workspace:^"
+    "@morlay/dsh-preset": "workspace:^",
+    "@morlay/dsh-prompt-reminder": "workspace:^"
   },
   "peerDependencies": {
     "tsx": "*"

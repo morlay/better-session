@@ -7,7 +7,6 @@
 - 常用命令：[justfile](./justfile)
 - 整体架构（仓库布局 / 分层 / 核心设计 / 装配）：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - 项目约定（命令 / 代码 / 测试 / 发布）：[docs/CODING_GUIDELINE.md](docs/CODING_GUIDELINE.md)
-- 上游 deepseek-harness 同步与适配流程：[dsh-side-workspace-plugin-develop skill](./.agents/skills/dsh-side-workspace-plugin-develop/SKILL.md)
 
 ## 红线
 

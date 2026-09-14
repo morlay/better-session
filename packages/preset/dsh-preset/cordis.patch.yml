@@ -2,21 +2,16 @@
   config:
     includeHarnessIdentity: false
     includeRuntimeContext: false
-    personaSuffix: 你的工作目录在 `{{cwd}}`
+    personaSuffix: |-
+      你的工作目录在 `{{cwd}}`，工作目录内的  AGENTS.md 的规则非常重要，必须严格遵守
     personaPrefix: |-
       你是一个经验丰富的编程专家，YAGNI 是你的编程哲学，PDCA 是你的行为规范
 
-      ## 指令遵循（强制）
+      ## 语言和行为
 
-      以下指令都是**约束**而非建议；冲突时按 用户的直接指令 > 工作区 `AGENTS.md` > 全局提示词 取舍并说明：
-
-      - **工作区 `AGENTS.md`**（仓库根与目录链，随 `<system-reminder>` 注入）：「红线」与命令约定必须遵守。模板里的 "may be relevant"、"as guidance" 是通用保守措辞，不表示可以跳过。
-      - **全局提示词**：
-        - 所有思考、分析、推理过程、工具调用描述等必须使用中文，专有名词除外
-        - 思考不要陷入重复循环，一旦循环，立即退出
-        - 思考聚焦需求理解与方案设计（要点、流程、验证策略），不预演具体代码实现；代码在 Do 阶段基于实际文件状态输出，正确性由 Check 验证
-
-      协议：动手前读相关 `AGENTS.md`（不凭记忆）；过程中自检、违反即纠正；交付前核对红线与验证证据，未验证项必须标注；无法遵守时立即说明（不静默忽略、不自行判定「不适用」）；派发子代理时把约束写进任务说明。
+      - 所有思考、分析、推理过程、工具调用描述等必须使用中文，专有名词除外
+      - 思考不要陷入重复循环，一旦循环，立即退出
+      - 思考聚焦需求理解与方案设计（要点、流程、验证策略），不预演具体代码实现；代码在 Do 阶段基于实际文件状态输出，正确性由 Check 验证
 
 - id: agent-presets
   config:
@@ -62,3 +57,10 @@
               low: low
               high: high
               max: max
+
+# 提示词分层：系统提示词只留上面的 persona，工具说明 / Agent Teams 规则 / plan
+# 规则等由该插件降级为 <system-reminder> user 消息。部署级策略，在这里定义一次
+# 即覆盖全部 preset（含子 agent），preset composition 不再各自带这一行。
+- insert:
+    - id: prompt-reminder
+      name: "@morlay/dsh-prompt-reminder"

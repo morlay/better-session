@@ -6,12 +6,16 @@
 
 ## 内容
 
-| 文件                       | 作用                                                                              |
-| -------------------------- | --------------------------------------------------------------------------------- |
-| `cordis.patch.yml`         | bundle patch：禁用官方 preset、注册本包 preset 为默认、声明个人 `llm-pi-ai` route |
-| `tool/generate-presets.ts` | 从上游生成 preset 的模块 + tsdown hooks                                           |
-| `dist/presets/standard/`   | 构建产物：自定义 preset「标准模式」（由上游 `standard` 生成）                     |
-| `dist/presets/ptc/`        | 构建产物：自定义 preset「PTC 模式」（由上游 `ptc` 生成）                          |
+| 文件                       | 作用                                                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `cordis.patch.yml`         | bundle patch：禁用官方 preset、注册本包 preset 为默认、声明个人 `llm-pi-ai` route、插入 `prompt-reminder` 行 |
+| `tool/generate-presets.ts` | 从上游生成 preset 的模块 + tsdown hooks                                                                      |
+| `dist/presets/standard/`   | 构建产物：自定义 preset「标准模式」（由上游 `standard` 生成）                                                |
+| `dist/presets/ptc/`        | 构建产物：自定义 preset「PTC 模式」（由上游 `ptc` 生成）                                                     |
+
+`cordis.patch.yml` 里插入的 `prompt-reminder`（`@morlay/dsh-prompt-reminder`）把被
+裁掉的系统提示词 section 降级为 `<system-reminder>` user 消息，见「工具说明降级为
+reminder」。
 
 ## 禁用官方 preset
 
@@ -69,11 +73,40 @@ section 在插件构造时注册；dev 模式重启 `just custom dev`/`just cust
 roster（id 沿用官方名以走客户端语言字典），以及桌面形态下 preset 必须落在 dsh 包的
 `config/agent-presets` 挂载点（见 dsh-desktopify 的 `dsh.desktop.agentPresets`）。
 
+## 工具说明降级为 reminder，不进系统提示词
+
+上游把每个工具的跨调用说明（`tool:bash`、`tool:read`、…）、Agent Teams 协作规则、
+harness 源码位置、Web GUI 说明都注册成系统提示词的 section。本部署实测它们占
+9200 字符里的约 7400：条数多、篇幅大、挤在上下文最前面，稀释真正要遵守的那几行
+纪律。`cordis.patch.yml` 因此在 host plane 插一行：
+
+```yaml
+- insert:
+    - id: prompt-reminder
+      name: "@morlay/dsh-prompt-reminder"
+```
+
+一处定义覆盖全部 preset（standard / ptc 以及后续新增的）——这是与具体 preset 无关
+的部署级策略，preset composition 不各自带这一行，生成器也就不必碰它。该插件注册
+在 root scope，会收到每个 agent 的装配与 pre-step 事件（含子 agent）：
+
+- 装配（`system-prompt/assemble` 瀑布）时保留 `keep` 名单——默认是部署级
+  `deployment:persona-prefix` / `deployment:persona-suffix`——内的 section，其余
+  非空 section 从 assembly 移除并按 order 捕获文本；
+- pre-step 时把捕获的文本作为一条 `<system-reminder>` user 消息注入，紧随本轮
+  用户消息之后；文本不变不重复注入，`plan:policy` / `tools:ptc-only` 这类按模式
+  渲染的 section 变化时追加一条新的全量 reminder（首行声明最新一条覆盖更早的）。
+
+于是系统提示词只剩首尾两段个人提示词，其余内容仍在上下文里、但不再占系统提示词
+的位置，也不再随模式切换改动。**为什么不用 `persona` 行的 `complete: true`**：那会
+连 suffix 一起丢，且子 agent 自己注册同名 persona 时 `complete` 语义消失，保留 /
+降级会不一致；本插件按 `keep` 名单匹配 section 名，两种 agent 行为一致。完整行为与
+配置见 `packages/preset/dsh-prompt-reminder/README.md`。
+
 ## 工作区指令走官方行为，候选收紧为 AGENTS 系列
 
-preset 里的 `agent-instructions` 行仍是官方 `@deepseek-ai/dsh-agent-instructions`：
-本仓库的 fork `@morlay/dsh-agent-instructions-as-prompt` 暂不接入默认打包，baseline
-仍按官方语义作为 user 消息注入一次。生成器只覆盖该行 config 的两个字段：
+preset 里的 `agent-instructions` 行是官方 `@deepseek-ai/dsh-agent-instructions`：
+baseline 按官方语义作为 user 消息注入一次。生成器只覆盖该行 config 的两个字段：
 
 ```yaml
 instructionFileCandidates: ["AGENTS.md"] # 上游默认 ['AGENTS.md','CLAUDE.md']
@@ -82,8 +115,10 @@ localInstructionFileCandidates: ["AGENTS.local.md"] # 上游默认还含 CLAUDE.
 
 即**不读 CLAUDE 系列**（本部署不需要 CLAUDE 兼容）；`maxBytes` 等其余字段跟随上游。
 
-fork 源码保留在 `packages/preset/dsh-agent-instructions-as-prompt/`；后续要恢复时按
-它的 README 操作：生成器把该行 `name` 换成 fork 名，profile 侧再禁用上游行。
+本仓库曾有一个把 baseline 落点改成 system-prompt section 的 fork
+（`@morlay/dsh-agent-instructions-as-prompt`），一直未接入默认打包；提示词分层定为
+「系统提示词只留 persona、其余走 reminder」之后它已删除——baseline 留在 user 消息
+通道与这个分层一致。
 
 ## preset 由构建生成，不是手工副本
 
@@ -102,10 +137,11 @@ pnpm --filter @morlay/dsh-preset run generate-presets [outDir]
 ```
 
 脚本把上游 composition 当**数据**读入：`js-yaml` 用 include 的
-`entryListSchema` 解析（`!!js` 标签保留为表达式节点）→ 在 JS 里改一处（删掉
-`persona` 行）→ `dump` 回 YAML。因此上游任何结构性改动（新增 / 重命名 row、改字段）
-都自动跟随，不依赖易碎的文本锚点；上游若删掉 `persona` 行，目标（preset 不自带
-persona）本就达成，脚本照常通过。
+`entryListSchema` 解析（`!!js` 标签保留为表达式节点）→ 在 JS 里改三处（删掉
+`persona` 行、把 `agent-instructions` 行的候选收紧为 AGENTS 系列、插入
+`prompt-reminder` 行）→ `dump` 回 YAML。因此上游任何结构性改动（新增 / 重命名
+row、改字段）都自动跟随，不依赖易碎的文本锚点；上游若删掉 `persona` 行，目标
+（preset 不自带 persona）本就达成，脚本照常通过。
 
 脚本先**整目录清空**输出目录再生成：产物完全派生自脚本，残留目录（改过
 `source`、旧命名）不该留下——否则 discovery 会把它们当有效 preset 扫出来。
@@ -118,7 +154,7 @@ persona）本就达成，脚本照常通过。
 
 1. 升级 `DEEPSEEK_HARNESS_VERSION` 并 sync/patch/build。
 2. `pnpm --filter @morlay/dsh-preset run build`（build:done 会重新生成）
-3. `pnpm exec vitest run packages/preset/dsh-preset` 确认无 drift。
+3. `pnpm exec vitest run packages/preset` 确认无 drift（含 reminder 插件的行为测试）。
 
 ## 装配
 
@@ -159,6 +195,9 @@ profile 里把内容物化到该挂载点；`includeShippedRoot: false` 两种�
 ## 维护注意
 
 - `package.json` 的 `files` 必须含 `dist`（preset 在其中）与 `tool`，否则发布产物缺内容。
+- `cordis.patch.yml` 插入的 `@morlay/dsh-prompt-reminder` 必须能被 **profile** 的依赖
+  树解析：示例 app 已在 `dependencies` 声明；换工作区时要一并声明，否则该行加载失败、
+  工具说明会留在系统提示词里。
 - 生成器显式设 `quotingType: '"'`：`yaml.dump` 默认单引号而仓库 oxfmt 偏好双引号，
   不指定会让生成器与 formatter 来回改；产物在 gitignore 的 dist 里，本就不参与 fmt。
 - **dev 模式需要先构建**：`just dev` / `just desktop` / `just bundle` 都先跑
