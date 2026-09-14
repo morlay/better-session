@@ -15,8 +15,7 @@
     "@deepseek-ai/dsh-experimental-agent-team-profile": "workspace:^",
     "@deepseek-ai/dsh-experimental-agent-team-web-profile": "workspace:^",
     "@morlay/better-session": "workspace:^",
-    "@morlay/dsh-preset": "workspace:^",
-    "@morlay/dsh-prompt-reminder": "workspace:^"
+    "@morlay/dsh-preset": "workspace:^"
   },
   "peerDependencies": {
     "tsx": "*"
@@ -33,9 +32,6 @@
     },
     "desktop": {
       "id": "ai.deepseek.dsh.custom-next",
-      "agentPresets": [
-        "@morlay/dsh-preset/dist/presets"
-      ],
       "window": {
         "width": 1280,
         "height": 800,

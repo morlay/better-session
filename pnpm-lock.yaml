@@ -223,9 +223,6 @@ importers:
       '@morlay/dsh-preset':
         specifier: workspace:^
         version: link:../../packages/preset/dsh-preset
-      '@morlay/dsh-prompt-reminder':
-        specifier: workspace:^
-        version: link:../../packages/preset/dsh-prompt-reminder
       tsx:
         specifier: '*'
         version: 4.23.13
@@ -323,6 +320,9 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/vendor/cordis
+      '@morlay/dsh-prompt-reminder':
+        specifier: workspace:^
+        version: link:../dsh-prompt-reminder
     devDependencies:
       '@deepseek-ai/cordis-plugin-include':
         specifier: workspace:^

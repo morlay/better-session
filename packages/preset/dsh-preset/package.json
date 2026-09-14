@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-preset",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Personal dsh profile bundle: disables the shipped agent presets, builds generated standard / ptc presets into dist, and declares personal llm-pi-ai provider routes.",
   "keywords": [
     "dsh",
@@ -31,6 +31,9 @@
       "./package.json": "./package.json",
       "./cordis.patch.yml": "./cordis.patch.yml"
     }
+  },
+  "dependencies": {
+    "@morlay/dsh-prompt-reminder": "workspace:^"
   },
   "scripts": {
     "build": "pnpm exec tsdown",
