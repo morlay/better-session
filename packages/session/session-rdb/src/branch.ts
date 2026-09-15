@@ -107,6 +107,30 @@ export interface LiveAgentLike {
   inbox?: { clear(): void };
 }
 
+// 上游 SurfaceManager 私有结构（duck-type 读取）：重置折叠状态，保留
+// borrowed 的 projections 定义，截断后重放的事件才带得动插件消息投影。
+interface SurfaceManagerLike {
+  _state: {
+    nodes: number[];
+    replaceGeneration: number;
+    contentGeneration: number;
+    projectedMessages: Map<unknown, unknown>;
+  };
+  _lastProcessedSeq: number;
+  _pendingPlan?: unknown;
+  baseSeq: number;
+}
+
+function resetSurfaceManager(surfaceManager: SurfaceManagerLike): void {
+  const state = surfaceManager._state;
+  state.nodes = [];
+  state.replaceGeneration = 0;
+  state.contentGeneration = 0;
+  state.projectedMessages = new Map();
+  surfaceManager._lastProcessedSeq = surfaceManager.baseSeq - 1;
+  surfaceManager._pendingPlan = undefined;
+}
+
 export function truncateLiveSession(session: Session, newLength: number): void {
   const s = session as unknown as {
     log: SessionEvent[];
@@ -118,12 +142,7 @@ export function truncateLiveSession(session: Session, newLength: number): void {
     derived: unknown[];
     derivedNodes: number;
     derivedGeneration: number;
-    surfaceManager: {
-      _state: { nodes: number[]; replaceGeneration: number };
-      _lastProcessedSeq: number;
-      _pendingPlan?: unknown;
-      baseSeq: number;
-    };
+    surfaceManager: SurfaceManagerLike;
   };
   s.log.length = newLength;
   s.eventsSnapshot = undefined;
@@ -134,9 +153,7 @@ export function truncateLiveSession(session: Session, newLength: number): void {
   s.derived = [];
   s.derivedNodes = 0;
   s.derivedGeneration = 0;
-  s.surfaceManager._state = { nodes: [], replaceGeneration: 0 };
-  s.surfaceManager._lastProcessedSeq = s.surfaceManager.baseSeq - 1;
-  s.surfaceManager._pendingPlan = undefined;
+  resetSurfaceManager(s.surfaceManager);
 }
 
 export function replaceLiveSessionLog(session: Session, events: readonly SessionEvent[]): void {
@@ -150,12 +167,7 @@ export function replaceLiveSessionLog(session: Session, events: readonly Session
     derived: unknown[];
     derivedNodes: number;
     derivedGeneration: number;
-    surfaceManager: {
-      _state: { nodes: number[]; replaceGeneration: number };
-      _lastProcessedSeq: number;
-      _pendingPlan?: unknown;
-      baseSeq: number;
-    };
+    surfaceManager: SurfaceManagerLike;
   };
   s.log.length = 0;
   s.log.push(...events);
@@ -167,9 +179,7 @@ export function replaceLiveSessionLog(session: Session, events: readonly Session
   s.derived = [];
   s.derivedNodes = 0;
   s.derivedGeneration = 0;
-  s.surfaceManager._state = { nodes: [], replaceGeneration: 0 };
-  s.surfaceManager._lastProcessedSeq = s.surfaceManager.baseSeq - 1;
-  s.surfaceManager._pendingPlan = undefined;
+  resetSurfaceManager(s.surfaceManager);
 }
 
 export class SessionBranchRdbProvider implements SessionBranchProvider {
