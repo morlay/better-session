@@ -425,6 +425,7 @@ describe("rowToMeta", () => {
         fDelegationDepth: null,
         fIncarnation: "fractional",
         fRevision: 1,
+        fArchivedAt: null,
       } satisfies SessionRow),
     ).toThrow("stored session createdAt must be a non-negative safe integer");
   });

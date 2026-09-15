@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, notInArray, sql } from "drizzle-orm";
 import type { PgAsyncDatabase, PgAsyncTransaction } from "drizzle-orm/pg-core";
 import type { NodePgDatabase, NodePgQueryResultHKT } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -200,6 +200,7 @@ export class PostgresBackend implements Backend {
       refreshTitle: (id) => this.refreshTitle(tx, id),
       deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(tx, id, fromSequence),
       getPrevBridge: (id, sequence) => this.getPrevBridge(tx, id, sequence),
+      deleteSession: (id) => this.deleteSession(tx, id),
     };
   }
 
@@ -376,6 +377,34 @@ export class PostgresBackend implements Backend {
         and(
           eq(this.tables["t_session_events"].fSessionId, id),
           gte(this.tables["t_session_events"].fSequence, fromSequence),
+        ),
+      )
+      .execute();
+  }
+
+  private async deleteSession(
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
+    id: SessionId,
+  ): Promise<void> {
+    const tEvents = this.tables["t_events"];
+    const tSessionEvents = this.tables["t_session_events"];
+    await exec.delete(tSessionEvents).where(eq(tSessionEvents.fSessionId, id)).execute();
+    await exec
+      .delete(this.tables["t_workspace_sessions"])
+      .where(eq(this.tables["t_workspace_sessions"].fSessionId, id))
+      .execute();
+    await exec
+      .delete(this.tables["t_session_projcache_row"])
+      .where(eq(this.tables["t_session_projcache_row"].fSessionId, id))
+      .execute();
+    await exec.delete(this.tables["t_sessions"]).where(eq(this.tables["t_sessions"].fSessionId, id)).execute();
+    // 桥接已删：不再被任何会话引用的事件行是孤儿（fork 共享的事件仍被引用，保留）。
+    await exec
+      .delete(tEvents)
+      .where(
+        notInArray(
+          tEvents.fEventId,
+          exec.select({ fEventId: tSessionEvents.fEventId }).from(tSessionEvents),
         ),
       )
       .execute();

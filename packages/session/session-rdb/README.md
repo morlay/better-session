@@ -72,6 +72,19 @@ provider 抽象并**随插件自动注册 `ctx.sessionBranch`**（`SessionBranch
 `@morlay/ui-conversation-message-actions` 提供，或直接在 `ctx.sessionBranch` /
 `ctx.sessionEditor` 之上编程。
 
+## 会话删除（仅已归档）
+
+上游没有会话删除面（`SessionPersistence` 无 delete、workspace 服务无移除
+归属、UI 无会话级插槽），删除由本包自持：`deleteSession(id)` 在一个事务内删除
+桥接行、孤儿事件行（fork 子会话仍引用的事件保留）、投影 checkpoint、workspace
+归属行与会话行。只允许删除**已归档**会话（未归档报 `SESSION_NOT_ARCHIVED`）；
+live（有打开的 handle 或未 materialize）报 `SESSION_LIVE`；删除前经
+`ctx.workspaceRegistry.unarchiveSession` 取消归档，归档集与 feed 增量立即一致。
+
+web 模式经 `POST /api/session.delete`（body `{ sessionId }`）暴露，状态映射：
+200 已删除 / 404 不存在 / 409 未归档或 live。决策与边界见
+[docs/adr/0011](docs/adr/0011-会话删除仅限已归档且硬删.md)（UI 入口等官方插槽）。
+
 ## storages 接管（workspace 与投影缓存）
 
 `$DSH_HOME/storages` 不再产生文件：官方 `storage-json` 与

@@ -52,6 +52,7 @@ import { SqliteBackend } from "./sqlite.ts";
 import { PostgresBackend } from "./postgres.ts";
 import { SessionBranchRdb } from "./branch.ts";
 import { registerSessionImport } from "./import.ts";
+import { registerSessionDeletion } from "./deletion.ts";
 import { SessionQueryRdb } from "./session-query.ts";
 import { adoptLegacyRows, convertLegacyRows, isLegacyVersion } from "./legacy.ts";
 import { installStorageTakeover } from "./storage-takeover/index.ts";
@@ -117,9 +118,20 @@ export type Config =
       projectionCache?: ProjectionCacheOptions;
     };
 
+export type SessionDeletionErrorCode = "SESSION_NOT_FOUND" | "SESSION_NOT_ARCHIVED" | "SESSION_LIVE";
+
+export class SessionDeletionError extends Error {
+  constructor(
+    message: string,
+    readonly code: SessionDeletionErrorCode,
+  ) {
+    super(message);
+    this.name = "SessionDeletionError";
+  }
+}
+
 /** 一个已创建但未 materialize 的会话（本进程可见，其他进程不可见）。 */
-interface PendingSession {
-  readonly header: SessionHeader;
+interface PendingSession {  readonly header: SessionHeader;
   readonly revision: SessionPersistenceRevision;
   readonly inheritedEventCount: SessionLogOffset;
   /** 输入空间 cursor（全 delta 批次也推进）。 */
@@ -198,6 +210,14 @@ class RdbBackendTracker {
   writerOf(id: SessionId): RdbSessionHandle | undefined {
     const writer = this.writers.get(id);
     return writer === null ? undefined : writer;
+  }
+
+  /** 该会话是否有任一打开中的 handle（读或写）。 */
+  hasOpenHandle(id: SessionId): boolean {
+    for (const handle of this.openHandles) {
+      if (handle.id === id) return true;
+    }
+    return false;
   }
 
   async flushAll(): Promise<void> {
@@ -541,6 +561,8 @@ export class SessionPersistenceRdb extends SessionPersistence {
     this.ctx.plugin(SessionQueryRdb, {});
     // 导入端点：webServer + connection 就绪后注册 `/api/session.import`。
     registerSessionImport(this.ctx, this);
+    // 删除端点：同通道注册 `/api/session.delete`（仅已归档会话）。
+    registerSessionDeletion(this.ctx, this);
     // storages 接管：storage hub 的 `rdb` 后端（workspace 域）与
     // `ctx.sessionProjectionCache` 服务（替换上游插件）。
     installStorageTakeover(this.ctx, {
@@ -711,7 +733,54 @@ export class SessionPersistenceRdb extends SessionPersistence {
     return snapshots;
   }
 
-  // --- RDB 特有能力（rewind / fork / 导出 / 测试支撑） ---
+  // --- RDB 特有能力（rewind / fork / 导出 / 删除 / 测试支撑） ---
+
+  /**
+   * 硬删除一个已归档会话：桥接、事件、投影 checkpoint、workspace 归属与会话行
+   * 在一个事务里删除，不再被引用的事件行一并清理（fork 共享的事件保留）。
+   * 只有已归档会话可删；live（有打开的 handle 或未 materialize）fail loud。
+   * 删除前经上游 `workspaceRegistry` 取消归档，保持归档集与 feed 一致。
+   */
+  async deleteSession(id: SessionId, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    await this.ready;
+    signal?.throwIfAborted();
+    const row = await this.backend.getSession(id);
+    if (row === undefined) {
+      throw new SessionDeletionError(`session "${id}" not found`, "SESSION_NOT_FOUND");
+    }
+    if (row.fArchivedAt === null) {
+      throw new SessionDeletionError(
+        `session "${id}" is not archived; only archived sessions can be deleted`,
+        "SESSION_NOT_ARCHIVED",
+      );
+    }
+    if (this.tracker.hasPending(id) || this.tracker.hasOpenHandle(id)) {
+      throw new SessionDeletionError(
+        `session "${id}" is live; stop it before deleting`,
+        "SESSION_LIVE",
+      );
+    }
+    await this.unarchiveBeforeDeletion(id);
+    await this.backend.transaction(async (tx) => {
+      await tx.deleteSession(id);
+    });
+    this.liveBuffers.delete(id);
+    this.liveReady.delete(id);
+    this.reuseEventIds.delete(id);
+  }
+
+  private async unarchiveBeforeDeletion(id: SessionId): Promise<void> {
+    const registry = this.ctx.get("workspaceRegistry") as unknown as
+      | {
+          readonly archivedSessionIds: readonly SessionId[];
+          unarchiveSession(sessionId: SessionId): Promise<void>;
+        }
+      | undefined;
+    if (registry === undefined) return;
+    if (!registry.archivedSessionIds.includes(id)) return;
+    await registry.unarchiveSession(id);
+  }
 
   /** 导出当前世代的 jsonl artifact，视图只读不落库。 */
   async readRaw(

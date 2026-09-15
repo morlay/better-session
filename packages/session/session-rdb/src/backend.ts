@@ -18,6 +18,9 @@ export interface SessionRow {
   fIncarnation: string;
 
   fRevision: number;
+
+  /** 归档时间戳（毫秒）；NULL 表示未归档。 */
+  fArchivedAt: number | null;
 }
 
 export interface EventInsert {
@@ -88,6 +91,9 @@ export interface BackendTx {
     id: SessionId,
     sequence: number,
   ): Promise<{ fEventId: string; fSequence: number } | undefined>;
+
+  /** 删除一个会话的桥接、归属、投影 checkpoint 与会话行，并清理不再被任何会话引用的事件行。 */
+  deleteSession(id: SessionId): Promise<void>;
 }
 
 export interface Backend {

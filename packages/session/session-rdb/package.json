@@ -27,6 +27,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./artifact": "./src/artifact.ts",
+    "./deletion": "./src/deletion.ts",
     "./import": "./src/import.ts",
     "./invariant": "./src/invariant.ts",
     "./storage": "./src/storage.ts",
@@ -38,6 +39,7 @@
     "exports": {
       ".": "./dist/index.mjs",
       "./artifact": "./dist/artifact.mjs",
+      "./deletion": "./dist/deletion.mjs",
       "./import": "./dist/import.mjs",
       "./invariant": "./dist/invariant.mjs",
       "./storage": "./dist/storage.mjs",
@@ -89,16 +91,11 @@
   },
   "inlinedDependencies": {
     "@jridgewell/sourcemap-codec": "1.6.0",
-    "@vitest/expect": "4.1.11",
-    "@vitest/pretty-format": "4.1.11",
-    "@vitest/runner": "4.1.11",
-    "@vitest/snapshot": "4.1.11",
-    "@vitest/spy": "4.1.11",
-    "@vitest/utils": "4.1.11",
     "chai": "6.2.2",
-    "magic-string": "0.30.21",
-    "tinyrainbow": "3.1.1",
-    "vitest": "4.1.11",
+    "expect-type": "1.4.0",
+    "magic-string": "1.4.1",
+    "tinybench": "6.1.4",
+    "vitest": "5.0.0",
     "zod": "4.6.5"
   }
 }

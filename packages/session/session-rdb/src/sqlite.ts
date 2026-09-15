@@ -4,7 +4,7 @@ import { mkdir, open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, notInArray, sql } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { migrate } from "drizzle-orm/node-sqlite/migrator";
 import type { SessionId } from "@deepseek-ai/dsh-session";
@@ -357,6 +357,7 @@ export class SqliteBackend implements Backend {
     refreshTitle: (id) => this.refreshTitle(id),
     deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(id, fromSequence),
     getPrevBridge: (id, sequence) => this.getPrevBridge(id, sequence),
+    deleteSession: (id) => this.deleteSession(id),
   };
 
   // --- row primitives (transaction-internal or standalone) ---
@@ -487,6 +488,16 @@ export class SqliteBackend implements Backend {
       .from(tSessionEvents)
       .where(and(eq(tSessionEvents.fSessionId, id), eq(tSessionEvents.fSequence, sequence)))
       .get() as { fEventId: string; fSequence: number } | undefined;
+  }
+
+  private async deleteSession(id: SessionId): Promise<void> {
+    this.db.delete(tSessionEvents).where(eq(tSessionEvents.fSessionId, id)).run();
+    this.db.delete(tWorkspaceSessions).where(eq(tWorkspaceSessions.fSessionId, id)).run();
+    this.db.delete(tSessionProjcacheRows).where(eq(tSessionProjcacheRows.fSessionId, id)).run();
+    this.db.delete(tSessions).where(eq(tSessions.fSessionId, id)).run();
+    // 桥接已删：不再被任何会话引用的事件行是孤儿（fork 共享的事件仍被引用，保留）。
+    const referenced = this.db.select({ fEventId: tSessionEvents.fEventId }).from(tSessionEvents);
+    this.db.delete(tEvents).where(notInArray(tEvents.fEventId, referenced)).run();
   }
 
   private eventRows() {
