@@ -60,8 +60,15 @@ function installedElectron(): { readonly version: string; readonly dist?: string
  * manifest）。工具包自身的 package.json 声明了 electron / electron-builder
  * 等构建依赖，而 electron-builder 拒绝把它们当运行时依赖，因此壳以独立
  * 目录打包；app 版本取目标工作区的版本。
+ *
+ * 壳目录落在应用工作区的 `node_modules` 里：electron-builder 收集运行依赖时按
+ * `pnpm --workspace-root exec pwd` 找工作区根，会一路找到本仓库根，把仓库的
+ * （源码树 link: 形式的）依赖树当成壳的依赖打进 app.asar——那些路径在打包树
+ * 之外，只能报 "cannot find path for dependency" 后丢弃。壳产物只 import
+ * electron 与 node 内建模块，所以放一个独立 workspace 文件让收集器收敛到壳
+ * 自身：零运行依赖，asar 不再携带仓库依赖。
  */
-function prepareShellAppDirectory(options: DesktopBuildOptions): string {
+export function prepareShellAppDirectory(options: DesktopBuildOptions): string {
   const { appRoot, buildRoot, appConfig } = options;
   const appDir = join(buildRoot, "shell");
   rmSync(appDir, { recursive: true, force: true });
@@ -69,6 +76,7 @@ function prepareShellAppDirectory(options: DesktopBuildOptions): string {
   cpSync(join(appRoot, "dist"), join(appDir, "dist"), { recursive: true });
   const renderer = join(appRoot, "renderer");
   if (existsSync(renderer)) cpSync(renderer, join(appDir, "renderer"), { recursive: true });
+  writeFileSync(join(appDir, "pnpm-workspace.yaml"), "packages: []\n");
   const tool = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8")) as ToolManifest;
   writeFileSync(
     join(appDir, "package.json"),
