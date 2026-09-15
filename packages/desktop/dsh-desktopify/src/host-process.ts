@@ -110,12 +110,15 @@ export class DesktopHostProcess {
 
   /**
    * @param node - absolute bundled upstream Node.js executable.
+   * @param runtimeDir - immutable dsh package set the application carries (the
+   *   desktop host entry and the official packages resolve from here).
    * @param projectDir - active or staged desktop npm project.
    * @param inspectPort - optional loopback inspector port for workspace development.
    * @param options - launch customization (node args, environment, shell spawn).
    */
   constructor(
     private readonly node: string,
+    private readonly runtimeDir: string,
     private readonly projectDir: string,
     private readonly inspectPort?: number,
     private readonly options: DesktopHostOptions = {},
@@ -125,7 +128,7 @@ export class DesktopHostProcess {
   async start(): Promise<DesktopHostReady> {
     if (this.child !== undefined) return this.readyPromise;
     const entry = join(
-      this.projectDir,
+      this.runtimeDir,
       "node_modules",
       "@deepseek-ai",
       "dsh-desktop-host",
@@ -139,6 +142,7 @@ export class DesktopHostProcess {
         : [`--inspect=127.0.0.1:${String(this.inspectPort)}`]),
       ...(this.options.nodeArgs ?? []),
       entry,
+      this.runtimeDir,
       this.projectDir,
       ...(allowLinked ? ["--allow-linked-profile"] : []),
     ];

@@ -175,6 +175,10 @@ async function main(): Promise<void> {
   const resources = runtimeResources();
   const hostInspectPort = developmentHostInspectPort(development !== undefined);
   const activeProject = development ?? join(resolveDshHome(config) ?? "", "profiles", PROFILE_NAME);
+  // 上游桌面宿主按「不可变包集 + profile 项目」两个目录启动：宿主入口与官方包
+  // 从 runtimeDir 解析，profile 项目只承载装配。打包态 runtimeDir 是种子
+  // profile（应用自带、随安装不可变），开发态就是工作区本身。
+  const runtimeProject = development ?? join(resources.seed, "profiles", PROFILE_NAME);
   const dshHome = resolveDshHome(config);
 
   if (development === undefined) {
@@ -220,7 +224,7 @@ async function main(): Promise<void> {
   };
 
   const startHost = async (projectDir = activeProject): Promise<DesktopHostProcess> => {
-    const next = new DesktopHostProcess(resources.node, projectDir, hostInspectPort, {
+    const next = new DesktopHostProcess(resources.node, runtimeProject, projectDir, hostInspectPort, {
       nodeArgs: development === undefined ? [] : developmentNodeArgs(),
       // 显式设置 DSH_HOME：用户 shell 环境可能残留旧应用的 DSH_HOME
       // export，host 经 shell 注入启动时会继承它，导致数据落到错误目录。
