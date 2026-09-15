@@ -1,8 +1,10 @@
 import {
+  IMAGE_OFFLOAD_REQUIRED_CODE,
   LlmError,
   contentHasImage,
-  offloadRequestImagesWithPolicy,
-  textOnlyImageText,
+  offloadedImageText,
+  projectOffloadedImages,
+  requiredImageOffload,
 } from "@deepseek-ai/dsh-llm";
 import type { ContentBlock, GenerateOptions, Message } from "@deepseek-ai/dsh-llm";
 import { AttachmentError } from "@deepseek-ai/dsh-attachment";
@@ -90,6 +92,22 @@ function assertSupportedImageRoles(messages: readonly Message[]): void {
       );
     }
   }
+}
+
+// 图片以 base64 data URL 内联，预算按 base64 长度计；超出即 fail loud，
+// 由 compaction-image-offload 记录 durable offload 后重试，本适配器不自行裁剪。
+function assertRetainedImagesFit(messages: readonly Message[], maxRequestImageBytes: number): void {
+  const offloadImages = requiredImageOffload(
+    messages,
+    { representation: "base64", maxBytes: maxRequestImageBytes },
+    (block) => block.attachment.bytes,
+  );
+  if (offloadImages === 0) return;
+  throw new LlmError(
+    `OpenAI-compatible request images exceed the provider budget; ${offloadImages} more oldest occurrence(s) must be offloaded.`,
+    IMAGE_OFFLOAD_REQUIRED_CODE,
+    { offloadImages },
+  );
 }
 
 async function imagePart(
@@ -322,11 +340,8 @@ export async function serializeCallOptionsWithImages(
   model: ResolvedModelProfile | undefined,
   images: { attachments: AttachmentStore; maxRequestImageBytes: number; signal?: AbortSignal },
 ): Promise<OpenAICompatibleCallOptions> {
-  const requestMessages = offloadRequestImagesWithPolicy(options.messages, {
-    representation: "raw",
-    maxBytes: images.maxRequestImageBytes,
-    placeholder: (ref) => textOnlyImageText(ref),
-  });
+  assertRetainedImagesFit(options.messages, images.maxRequestImageBytes);
+  const requestMessages = projectOffloadedImages(options.messages, (ref) => offloadedImageText(ref));
   const resolveImage = (block: Extract<ContentBlock, { type: "image" }>, signal?: AbortSignal) =>
     imagePart(block, images.attachments, signal);
   const system =

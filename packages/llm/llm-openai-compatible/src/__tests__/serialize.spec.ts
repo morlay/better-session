@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  IMAGE_OFFLOAD_REQUIRED_CODE,
   ToolCallId,
   ReasoningEffortId,
   createAssistantMessage,
@@ -8,11 +9,17 @@ import {
   resolveRetryPolicy,
 } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, Message } from "@deepseek-ai/dsh-llm";
+import { AttachmentId } from "@deepseek-ai/dsh-attachment";
+import type { AttachmentStore, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import type {
   ResolvedModelProfile,
   ResolvedProviderProfile,
 } from "@morlay/dsh-llm-openai-compatible";
-import { resolveReasoningWire, serializeCallOptions } from "@morlay/dsh-llm-openai-compatible/wire";
+import {
+  resolveReasoningWire,
+  serializeCallOptions,
+  serializeCallOptionsWithImages,
+} from "@morlay/dsh-llm-openai-compatible/wire";
 
 function userMessage(text: string): Message {
   return createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } });
@@ -318,5 +325,71 @@ describe("resolveReasoningWire", () => {
       resolveReasoningWire(model({ reasoningEfforts: false }), "high"),
     );
     expect(error.code).toBe("UNSUPPORTED_REASONING_EFFORT");
+  });
+});
+
+function retainedImage(): ImageAttachmentRef {
+  return {
+    attachmentId: AttachmentId(`sha256:${"b".repeat(64)}`),
+    mediaType: "image/png",
+    bytes: 1024,
+    width: 1,
+    height: 1,
+  };
+}
+
+function attachments(): AttachmentStore {
+  return {
+    readImage: (ref: ImageAttachmentRef) =>
+      Promise.resolve({ ref, data: new Uint8Array([1, 2, 3]) }),
+  } as unknown as AttachmentStore;
+}
+
+function imageMessage(offloaded?: true): Message {
+  const attachment = retainedImage();
+  return createUserMessage({
+    content: [{ type: "image", attachment, ...(offloaded === undefined ? {} : { offloaded }) }],
+    source: { kind: "user" },
+  });
+}
+
+async function expectToReject(run: () => Promise<unknown>): Promise<LlmError> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof LlmError) return error;
+    throw new Error(`expected an LlmError, got ${String(error)}`);
+  }
+  throw new Error("expected the call to throw");
+}
+
+describe("serializeCallOptionsWithImages", () => {
+  const budget = 20 * 1024 * 1024;
+
+  function serialize(messages: readonly Message[], maxRequestImageBytes: number = budget) {
+    return serializeCallOptionsWithImages(
+      options({ messages: [...messages] }),
+      profile({ maxRequestImageBytes }),
+      model({ inputModalities: ["text", "image"] }),
+      { attachments: attachments(), maxRequestImageBytes },
+    );
+  }
+
+  it("inlines a retained image as a base64 data URL", async () => {
+    const result = await serialize([imageMessage()]);
+    expect(JSON.stringify(result.prompt)).toContain("data:image/png;base64,");
+  });
+
+  it("sends placeholder text for an occurrence the surface already offloaded", async () => {
+    const result = await serialize([imageMessage(true)]);
+    const serialized = JSON.stringify(result.prompt);
+    expect(serialized).toContain("image omitted to fit request image limits");
+    expect(serialized).not.toContain("data:image/png;base64,");
+  });
+
+  it("fails loud with IMAGE_OFFLOAD_REQUIRED instead of offloading on its own", async () => {
+    const error = await expectToReject(() => serialize([imageMessage()], 1));
+    expect(error.code).toBe(IMAGE_OFFLOAD_REQUIRED_CODE);
+    expect(error.failure.offloadImages).toBe(1);
   });
 });
