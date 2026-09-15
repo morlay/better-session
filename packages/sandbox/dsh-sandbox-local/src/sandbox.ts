@@ -41,10 +41,15 @@ export class ConfigurableSandboxProvider extends LocalSandboxProvider {
    * 官方拼装 + 规则追加。
    * @param argv - 调用方即将 spawn 的 argv。
    * @param policy - 本次调用的文件效果策略。
+   * @param signal - 上游策略解析与 runner 选择期间的取消信号。
    * @returns 追加规则后的 confined argv（空规则时与官方结果一致）。
    */
-  override confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
-    const confined = super.confine(argv, policy);
+  override async confine(
+    argv: readonly string[],
+    policy: SandboxPolicy,
+    signal?: AbortSignal,
+  ): Promise<ConfinedArgv> {
+    const confined = await super.confine(argv, policy, signal);
     const rules = this.rulesFor(policy.workspaceRoot);
     const effective = policy.mode === "workspace-write" ? rules : withoutAllowRoots(rules);
     if (isEmptyRules(effective)) return confined;

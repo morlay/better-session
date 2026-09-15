@@ -43,8 +43,11 @@ async function mount(config: Record<string, unknown>): Promise<Context> {
 }
 
 /** 用真实平台链 confine，然后真实执行。 */
-function run(ctx: Context, command: string): { status: number | null; stderr: string } {
-  const confined = ctx.sandbox.confine(["bash", "-c", command], {
+async function run(
+  ctx: Context,
+  command: string,
+): Promise<{ status: number | null; stderr: string }> {
+  const confined = await ctx.sandbox.confine(["bash", "-c", command], {
     mode: "workspace-write",
     workspaceRoot: workspace,
   });
@@ -75,14 +78,14 @@ describe.skipIf(!usable)("真实 Seatbelt 下的 allow / deny", () => {
     const ctx = await mount({ access: ["-- mise.*.toml"] });
     contexts.push(ctx);
 
-    expect(run(ctx, `cat ${workspace}/notes.md`).status).toBe(0);
-    expect(run(ctx, `echo hi > ${workspace}/out.txt`).status).toBe(0);
+    expect((await run(ctx, `cat ${workspace}/notes.md`)).status).toBe(0);
+    expect((await run(ctx, `echo hi > ${workspace}/out.txt`)).status).toBe(0);
 
-    const deniedRead = run(ctx, `cat ${workspace}/mise.local.toml`);
+    const deniedRead = await run(ctx, `cat ${workspace}/mise.local.toml`);
     expect(deniedRead.status).not.toBe(0);
     expect(deniedRead.stderr).toMatch(/operation not permitted/i);
 
-    const deniedWrite = run(ctx, `echo x > ${workspace}/mise.local.toml`);
+    const deniedWrite = await run(ctx, `echo x > ${workspace}/mise.local.toml`);
     expect(deniedWrite.status).not.toBe(0);
     expect(deniedWrite.stderr).toMatch(/operation not permitted/i);
   });
@@ -91,9 +94,9 @@ describe.skipIf(!usable)("真实 Seatbelt 下的 allow / deny", () => {
     const ctx = await mount({ access: ["r- protected"] });
     contexts.push(ctx);
 
-    expect(run(ctx, `cat ${workspace}/protected/note.md`).status).toBe(0);
+    expect((await run(ctx, `cat ${workspace}/protected/note.md`)).status).toBe(0);
 
-    const denied = run(ctx, `echo x > ${workspace}/protected/note.md`);
+    const denied = await run(ctx, `echo x > ${workspace}/protected/note.md`);
     expect(denied.status).not.toBe(0);
     expect(denied.stderr).toMatch(/operation not permitted/i);
   });
@@ -103,7 +106,7 @@ describe.skipIf(!usable)("真实 Seatbelt 下的 allow / deny", () => {
     const withoutRules = await mount({});
     contexts.push(withRules, withoutRules);
 
-    expect(run(withRules, `echo cached > ${cache}/data.txt`).status).toBe(0);
-    expect(run(withoutRules, `echo cached > ${cache}/data.txt`).status).not.toBe(0);
+    expect((await run(withRules, `echo cached > ${cache}/data.txt`)).status).toBe(0);
+    expect((await run(withoutRules, `echo cached > ${cache}/data.txt`)).status).not.toBe(0);
   });
 });

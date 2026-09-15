@@ -111,7 +111,7 @@ describe("进程沙箱侧规则", () => {
     const ctx = await mount({ access: ["rw /cache", "-- mise.*.toml"] });
     const provider = ctx.sandbox as ConfigurableSandboxProvider;
     provider.internals = { chain: ["seatbelt"], seatbeltExec: "/usr/bin/sandbox-exec" };
-    const confined = provider.confine(["bash", "-c", "echo hi"], {
+    const confined = await provider.confine(["bash", "-c", "echo hi"], {
       mode: "workspace-write",
       workspaceRoot: workspace,
     });
@@ -127,10 +127,12 @@ describe("进程沙箱侧规则", () => {
     const ctx = await mount({ access: ["rw /cache", "-- mise.local.toml"] });
     const provider = ctx.sandbox as ConfigurableSandboxProvider;
     provider.internals = { chain: ["seatbelt"], seatbeltExec: "/usr/bin/sandbox-exec" };
-    const profile = provider.confine(["bash", "-c", "echo hi"], {
-      mode: "read-only",
-      workspaceRoot: workspace,
-    }).argv[2] as string;
+    const profile = (
+      await provider.confine(["bash", "-c", "echo hi"], {
+        mode: "read-only",
+        workspaceRoot: workspace,
+      })
+    ).argv[2] as string;
     expect(profile).not.toContain("/cache");
     expect(profile).toContain(
       `(deny file-read* file-write* (subpath "${workspace}/mise.local.toml"))`,
@@ -141,10 +143,12 @@ describe("进程沙箱侧规则", () => {
     const ctx = await mount();
     const provider = ctx.sandbox as ConfigurableSandboxProvider;
     provider.internals = { chain: ["seatbelt"], seatbeltExec: "/usr/bin/sandbox-exec" };
-    const profile = provider.confine(["bash", "-c", "echo hi"], {
-      mode: "workspace-write",
-      workspaceRoot: workspace,
-    }).argv[2] as string;
+    const profile = (
+      await provider.confine(["bash", "-c", "echo hi"], {
+        mode: "workspace-write",
+        workspaceRoot: workspace,
+      })
+    ).argv[2] as string;
     expect(profile).not.toContain("(deny file-read*");
     expect(profile).not.toContain('(allow file-write* (subpath "/cache"))');
   });
