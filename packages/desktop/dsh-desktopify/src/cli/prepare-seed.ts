@@ -200,7 +200,8 @@ async function deployClosure(
   const copied = materializeOfficialClosure(modulesDir, input);
   console.log(`desktop seed: copied ${String(copied.length)} official source packages`);
   // deploy 不装 peerDependencies：上游新增 peer 包只会在运行期炸开，
-  // 这里提前失败并指名要补的白名单项。
+  // 这里提前失败并指名缺失项（注入面来自 bundle patch 生成器，通常意味着
+  // 生成清单过期或上游装配面改了形状）。
   const missing = missingOfficialPackages(modulesDir);
   if (missing.size > 0) {
     const detail = [...missing]
@@ -208,7 +209,7 @@ async function deployClosure(
       .join("; ");
     throw new Error(
       `desktop seed: deployed closure is missing official packages: ${detail}; ` +
-        "add them to OFFICIAL_PEER_PACKAGES (packages/desktop/dsh-desktopify/src/official.ts)",
+        "regenerate the injected surface with `pnpm --filter @morlay/dsh-desktopify run gen:official-packages`",
     );
   }
 }

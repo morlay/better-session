@@ -260,6 +260,9 @@ importers:
         specifier: 0.22.x
         version: 0.22.14(tsx@4.23.13)(typescript@7.0.2)
     devDependencies:
+      '@deepseek-ai/dsh-app-boot':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/boot/app-boot
       '@deepseek-ai/dsh-desktop-host':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/apps/desktop-host

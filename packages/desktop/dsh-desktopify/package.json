@@ -41,6 +41,7 @@
   },
   "scripts": {
     "build": "pnpm exec tsdown",
+    "gen:official-packages": "tsx scripts/gen-official-packages.ts",
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
@@ -54,6 +55,7 @@
     "tsdown": "0.22.x"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-app-boot": "workspace:^",
     "@deepseek-ai/dsh-desktop-host": "workspace:^",
     "@types/node": "^26.5.0"
   },
