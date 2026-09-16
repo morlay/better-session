@@ -86,4 +86,20 @@ export function apply(ctx: Context, config: Config): void {
       messages: decision.messages.toSpliced(claimedEnd + 1, 0, reminderMessage(reminder)),
     };
   });
+
+  // 压缩把 reminder 换进摘要 checkpoint 后，重试请求由 surface 历史重建、不再
+  // 经过 pre-step：补写一条让它仍带系统提示词。prepend 必需——压缩在 retry
+  // 分支短路、不调 next()，只有最外层等得到它的完成。
+  ctx.on(
+    "agent/request-error",
+    async ({ agent, signal }, next) => {
+      const action = await next();
+      if (action?.kind !== "retry" || signal.aborted) return action;
+      const reminder = captured.get(agent);
+      if (reminder === undefined || latestReminderText(agent) === reminder) return action;
+      agent.session.append("user/message", reminderMessage(reminder), { surfaceOp: "append" });
+      return action;
+    },
+    { prepend: true },
+  );
 }

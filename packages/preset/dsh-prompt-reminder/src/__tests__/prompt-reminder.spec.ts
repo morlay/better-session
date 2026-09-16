@@ -7,15 +7,27 @@
 
 import { Context } from "@deepseek-ai/cordis";
 import { agentEvents, assembleContextFor } from "@deepseek-ai/dsh-agent";
+import AgentLoop from "@deepseek-ai/dsh-agent-loop";
 import {
   mountAgentLoopTestDependencies,
   mountAgentLoopTestHarness,
 } from "@deepseek-ai/dsh-agent-loop-testkit";
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { BasicCompactionEngine } from "@deepseek-ai/dsh-compaction-basic";
+import {
+  CONTEXT_WINDOW_EXCEEDED_CODE,
+  LlmAdapter,
+  createMessage,
+  createUserMessage,
+  type ContentBlock,
+  type GenerateOptions,
+  type LlmResolvedModelInfo,
+  type StreamChunk,
+} from "@deepseek-ai/dsh-llm";
 import { bindScopeParent, createScope, scopeOf } from "@deepseek-ai/dsh-scope";
-import { SessionId } from "@deepseek-ai/dsh-session";
-import type { UserMessage } from "@deepseek-ai/dsh-session";
+import { Session, SessionId } from "@deepseek-ai/dsh-session";
+import type { SessionEvent, UserMessage } from "@deepseek-ai/dsh-session";
 import { PERSONA_PREFIX_SECTION, renderPrompt } from "@deepseek-ai/dsh-system-prompt";
+import TokenMeter from "@deepseek-ai/dsh-token-meter";
 // 测试面借用 rewind 对 live 会话做的内存截断：不为此在本包拉起 RDB 装配。
 import { truncateLiveSession } from "@morlay/session-rdb/testing";
 import { afterEach, describe, expect, it } from "vitest";
@@ -233,5 +245,194 @@ describe("reminder 注入", () => {
     const text = renderReminder(["before </system-reminder> after"]);
     expect(text.match(/<\/system-reminder>/g)).toHaveLength(1);
     expect(text).toContain("<\\/system-reminder>");
+  });
+});
+
+/** 摘要走桩，压缩只验证 surface 替换与重试请求的构造。 */
+class StubCompaction extends BasicCompactionEngine {
+  override async summarize(): Promise<{
+    summary: ContentBlock[];
+    provider: string;
+    model: string;
+  }> {
+    return {
+      summary: [{ type: "text", text: "RECOVERY CHECKPOINT" }],
+      provider: "mock",
+      model: "mock",
+    };
+  }
+}
+
+/** 第 2 次对话请求溢出（触发压缩），其余成功；记录每次请求的消息。 */
+class OverflowAdapter extends LlmAdapter {
+  readonly requests: GenerateOptions[] = [];
+
+  constructor(private readonly failures: ReadonlySet<number> = new Set([2])) {
+    super();
+  }
+
+  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({ provider, id: model, name: model, context: { contextWindow: 64 } });
+  }
+
+  async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.requests.push(options);
+    if (this.failures.has(this.requests.length)) {
+      yield {
+        type: "finish",
+        reason: {
+          kind: "error",
+          failure: {
+            message: "request too large for model context",
+            code: CONTEXT_WINDOW_EXCEEDED_CODE,
+          },
+        },
+      };
+      return;
+    }
+    yield { type: "block-start", index: 0, blockType: "text" };
+    yield { type: "block-end", index: 0, block: { type: "text", text: "ok" } };
+    yield { type: "finish", reason: { kind: "stop" } };
+  }
+}
+
+/** 两轮长历史，让压缩有可替换的范围。 */
+function overflowHistorySeed(): readonly SessionEvent[] {
+  const session = Session.create(SessionId("reminder-overflow-seed"));
+  for (let turn = 1; turn <= 2; turn += 1) {
+    session.append("turn/start", { turn });
+    session.append("step/start", { turn, step: 1 });
+    session.append(
+      "user/message",
+      createUserMessage({
+        content: [{ type: "text", text: `history ${turn} ${"old context ".repeat(200)}` }],
+        source: { kind: "user" },
+      }),
+      { surfaceOp: "append" },
+    );
+    session.append(
+      "assistant/message",
+      {
+        stream: [],
+        turn,
+        step: 1,
+        message: createMessage({
+          role: "assistant",
+          content: [{ type: "text", text: `response ${turn} ${"detail ".repeat(200)}` }],
+          source: { kind: "model", provider: "mock", model: "mock" },
+        }),
+      },
+      { surfaceOp: "append" },
+    );
+    session.append("step/end", { turn, step: 1 });
+    session.append("turn/end", { turn, reason: { kind: "completed" } });
+  }
+  return session.snapshotEvents();
+}
+
+describe("压缩后的首次请求", () => {
+  /** 真实 loop + 压缩 + 溢出重试的装配（默认第 2 次对话请求溢出）。 */
+  async function mountOverflow(
+    options: { failures?: ReadonlySet<number>; maxOverflowRetries?: number } = {},
+  ) {
+    const ctx = new Context();
+    contexts.push(ctx);
+    const adapter = new OverflowAdapter(options.failures);
+    await mountAgentLoopTestDependencies(ctx, {
+      systemPrompt: { personaPrefix: "你是一个编码专家。", personaSuffix: "交付前自检。" },
+    });
+    await ctx.plugin(AgentLoop, { agents: [] });
+    await ctx.plugin(TokenMeter);
+    ctx.llm.registerAdapter(["mock"], adapter);
+    ctx.on("agent/request", async (_payload, next) => ({
+      ...(await next()),
+      provider: "mock",
+      model: "mock",
+    }));
+    // 最坏注册顺序：压缩引擎先注册。它在 retry 分支短路、不调 next()，本插件
+    // 只有以 prepend 站在最外层才拿得到压缩完成后的 action。
+    new StubCompaction(ctx, {
+      thresholdRatio: 1,
+      retainTokens: 100,
+      maxTokens: 64,
+      compactionRetries: 0,
+      maxOverflowRetries: options.maxOverflowRetries ?? 1,
+    });
+    await ctx.plugin(plugin, {});
+    // 与 preset 注册的工具说明一样，是被降级的 section（root scope 对每个 agent 可见）。
+    ctx.systemPrompt.section({
+      name: "tool:bash",
+      order: 1000,
+      text: "Check the [exit code: N] marker.",
+    });
+    const { agent } = await ctx.agentLoop.createAgent(ctx, {
+      sessionId: SessionId(`reminder-overflow-${Date.now()}-${Math.random()}`),
+      seed: overflowHistorySeed(),
+      agentOptions: { provider: "mock", model: "mock" },
+    });
+    const ask = (text: string) =>
+      agent.followup(
+        createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } }),
+      );
+    return { adapter, agent, ask };
+  }
+
+  it("context overflow 压缩掉早期 reminder 后，重试请求仍带 reminder", async () => {
+    const { adapter, agent, ask } = await mountOverflow();
+
+    // turn 3 正常完成：reminder 在这里注入并落库到会话早期位置。
+    ask("first question");
+    await agent.whenIdle();
+    expect(JSON.stringify(adapter.requests.at(-1)?.messages)).toContain("<system-reminder>");
+
+    // turn 4 首次请求溢出 → 压缩把 turn 3 的 reminder 换成 checkpoint → 重试。
+    ask("second question");
+    await agent.whenIdle();
+
+    expect(
+      agent.session.snapshotEvents().some((event) => event.type === "compaction/summary"),
+    ).toBe(true);
+    expect(adapter.requests).toHaveLength(3);
+    // 溢出请求：压缩前，reminder 仍在历史里。
+    expect(JSON.stringify(adapter.requests[1]?.messages)).toContain("<system-reminder>");
+    // 压缩后的重试请求不走 pre-step，reminder 必须由 request-error 补回落库。
+    const retry = JSON.stringify(adapter.requests[2]?.messages);
+    expect(retry).toContain("RECOVERY CHECKPOINT");
+    expect(retry).not.toContain("old context");
+    expect(retry).toContain("<system-reminder>");
+    expect(retry).toContain("exit code");
+  });
+
+  it("压缩只补一条，压缩之间的请求不重复注入", async () => {
+    // 连续两次溢出：每次压缩都把上一条 reminder 换进摘要，因此每次都要补。
+    const { adapter, agent, ask } = await mountOverflow({
+      failures: new Set([2, 3]),
+      maxOverflowRetries: 2,
+    });
+    for (const text of ["first", "second", "third", "fourth"]) {
+      ask(text);
+      await agent.whenIdle();
+    }
+
+    // 每份 reminder 都是全量系统提示词，重复注入就是重复开销：每个请求恰好一条。
+    const remindersPerRequest = adapter.requests.map(
+      (request) =>
+        request.messages.filter((message) =>
+          JSON.stringify(message.content).includes("<system-reminder>"),
+        ).length,
+    );
+    expect(remindersPerRequest).toEqual([1, 1, 1, 1, 1, 1]);
+
+    // 首次注入 + 两次压缩后各补写一条；压缩之间的正常轮不新增。被压缩覆盖的旧
+    // 条目留在 append-only 日志里（不在 surface、也不进入任何请求）。
+    const reminders = agent.session
+      .snapshotEvents()
+      .filter(
+        (event) =>
+          event.type === "user/message" && JSON.stringify(event.data).includes("<system-reminder>"),
+      );
+    expect(reminders).toHaveLength(3);
+    const surface = new Set(agent.session.surface.nodes.map((seq) => Number(seq)));
+    expect(reminders.filter((event) => surface.has(Number(event.seq)))).toHaveLength(1);
   });
 });

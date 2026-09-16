@@ -355,6 +355,9 @@ importers:
       '@deepseek-ai/dsh-agent-loop-testkit':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/test-support/agent-loop-testkit
+      '@deepseek-ai/dsh-compaction-basic':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/compaction/compaction-basic
       '@deepseek-ai/dsh-llm':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/llm/llm
@@ -367,6 +370,9 @@ importers:
       '@deepseek-ai/dsh-system-prompt':
         specifier: workspace:^
         version: link:../../../vendor/deepseek-harness/packages/core/system-prompt
+      '@deepseek-ai/dsh-token-meter':
+        specifier: workspace:^
+        version: link:../../../vendor/deepseek-harness/packages/llm/token-meter
       '@morlay/session-rdb':
         specifier: workspace:^
         version: link:../../session/session-rdb
