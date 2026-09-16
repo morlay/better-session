@@ -18,7 +18,7 @@ import SessionPersistenceSqlite, {
   locateTurnEnd,
 } from "@morlay/session-rdb";
 import { EmptySettings } from "@morlay/session-rdb/testing";
-import { meta, oneTurnLog } from "@morlay/session-rdb/testing";
+import { appendLog, meta, oneTurnLog } from "@morlay/session-rdb/testing";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -973,6 +973,101 @@ describe("rewind", () => {
       const meter = new TokenMeter(ctx);
       const session = Session.create(SessionId("s1"), [...after.events]);
       expect(() => meter.measure(session)).not.toThrow();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("invalidates the token meter fold so a rewound live session stays measurable", async () => {
+    const { ctx, dispose } = await harness();
+    try {
+      // harness 的 SessionPersistenceSqlite 构造即装配 SessionBranchRdb，
+      // rewind 的 live 失效钩子（投影单元 + token meter）都在它上面。
+      const meter = new TokenMeter(ctx);
+      // 三轮闭合日志（seq 0..17）+ 构造时自动补记的 session/end-seed（seq 18）。
+      const log = [
+        ...oneTurnLog(),
+        ...oneTurnLog().map(
+          (event) =>
+            ({
+              ...event,
+              seq: event.seq + 6,
+              time: event.time + 100,
+              data: { ...event.data, turn: 2 },
+            }) as SessionEvent,
+        ),
+        ...oneTurnLog().map(
+          (event) =>
+            ({
+              ...event,
+              seq: event.seq + 12,
+              time: event.time + 200,
+              data: { ...event.data, turn: 3 },
+            }) as SessionEvent,
+        ),
+      ];
+      ctx.sessions.create(SessionId("s1"), { meta: meta("s1"), seed: log });
+      const live = ctx.sessions.get(SessionId("s1"))!;
+      await ctx.sessions.flush(live);
+      meter.measure(live);
+      // meter 的折叠水位（上游私有状态）——续写必须越过它才暴露错位。
+      const inner = meter as unknown as { states: WeakMap<object, { consumedEvents: number }> };
+      const foldedWatermark = inner.states.get(live)!.consumedEvents;
+
+      // 编辑最后一轮的 user/message：rewind exclusive 截断到轮 2 末尾。
+      await ctx.sessionBranch.rewind(SessionId("s1"), 11);
+      expect(live.snapshotEvents().map((event) => event.seq)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+      ]);
+
+      // 续写：先填 user/message 到水位，再让水位正好落在一条 step/end 上——
+      // 失效遗漏时 meter 从水位继续折叠，step/end 找不到配对的 step/start。
+      const continuation: SessionEvent[] = [
+        { type: "turn/start", seq: SessionSeq(12), time: 500, data: { turn: 4 } } as SessionEvent,
+        {
+          type: "step/start",
+          seq: SessionSeq(13),
+          time: 501,
+          data: { turn: 4, step: 1 },
+        } as SessionEvent,
+      ];
+      for (let seq = 14; seq < foldedWatermark; seq += 1) {
+        continuation.push({
+          type: "user/message",
+          seq: SessionSeq(seq),
+          time: 600 + seq,
+          data: {
+            id: `rewound-fill-${seq}`,
+            role: "user",
+            content: [{ type: "text", text: `fill ${seq}` }],
+            source: { kind: "user" },
+          },
+          surfaceOp: "append",
+        } as unknown as SessionEvent);
+      }
+      continuation.push(
+        {
+          type: "step/end",
+          seq: SessionSeq(foldedWatermark),
+          time: 700,
+          data: { turn: 4, step: 1 },
+        } as SessionEvent,
+        {
+          type: "turn/end",
+          seq: SessionSeq(foldedWatermark + 1),
+          time: 701,
+          data: { turn: 4, reason: { kind: "completed" } },
+        } as SessionEvent,
+      );
+      appendLog(live, continuation);
+      await ctx.sessions.flush(live);
+
+      // 修复前：meter 从旧水位继续折叠，抛
+      // "token meter: step/end at seq N has no matching step/start event"
+      // （压缩测量即在此失败）。
+      expect(() => meter.measure(live)).not.toThrow();
+      // 被丢弃的折叠从零重放到截断后的新 tail。
+      expect(inner.states.get(live)?.consumedEvents).toBe(live.snapshotEvents().length);
     } finally {
       await dispose();
     }

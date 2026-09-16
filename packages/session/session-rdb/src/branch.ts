@@ -72,6 +72,12 @@ export interface LiveSessionHooks {
   // 跳过，重放输入永远进不了 inbox 投影。可选：纯持久化环境没有投影服务。
   resetProjections?(session: Session): void;
 
+  // 丢弃 token meter 对该会话的重放折叠：meter 只按 seq 前进，截断后的水位
+  // 停在被删除的 seq 空间，续写事件会被从错位处折叠——一条 `step/end` 找不到
+  // 配对的 `step/start` 时直接抛错（压缩测量即失败）。可选：纯持久化环境没有
+  // 测量服务。
+  resetTokenMeter?(session: Session): void;
+
   // 用截断后的 log 重写该会话的持久化投影检查点：rewind 不会产生事件，
   // 缓存行的水位（以及基于它折出的值）仍停在截断前。超前行不会被前端投影
   // store 的 higher-seq-wins 规则覆盖（rewind 后的正确值 seq 更小），表现为
@@ -95,6 +101,12 @@ export interface ProjectionCacheSession {
 // 投影 registry 的失效面（上游私有结构，duck-type 读取）。
 interface ProjectionRegistryLike {
   registrations?: Map<string, { cells: WeakMap<object, unknown> }>;
+}
+
+// 上游 TokenMeter 的 per-session 重放状态（私有结构，duck-type 读取）：删除
+// 该键即让下一次 measure 从零重放当前 log。
+interface TokenMeterLike {
+  states?: WeakMap<object, unknown>;
 }
 
 export interface LiveAgentLike {
@@ -367,6 +379,8 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       // 投影缓存同样停在截断前的水位，必须先失效，否则截断后的重放事件
       // （seq 回退）不会进入投影。
       this.live.resetProjections?.(live);
+      // token meter 的按 seq 折叠同样停在截断前的水位。
+      this.live.resetTokenMeter?.(live);
       const agent = this.live.getAgent(id);
       if (agent !== undefined) {
         agent.requestHeaderLogged = false;
@@ -468,6 +482,12 @@ export class SessionBranchRdb extends SessionBranch {
         for (const registration of registry.registrations.values()) {
           registration.cells.delete(session);
         }
+      },
+      resetTokenMeter: (session) => {
+        // tokenMeter 是可选服务（纯持久化环境无测量消费者）。上游字段名变化
+        // 时这里退化为空操作——回归测试（rewind 后同一 meter 可测量）守住契约。
+        const meter = this.ctx.get("tokenMeter") as TokenMeterLike | undefined;
+        meter?.states?.delete(session);
       },
       refreshProjectionCache: async (session) => {
         // sessionProjectionCache 是可选服务（纯持久化环境无投影缓存）。

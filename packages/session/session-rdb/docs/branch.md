@@ -62,10 +62,12 @@ rewind 直接操作后端事务的步骤：
    head 为基准；
 4. **live 会话同步**：截断内存 log 并重置派生缓存（`truncateLiveSession`）、
    失效 `ctx.sessionProjections` 的单元缓存（投影按 `observedSeq` 增量驱动，
-   水位不回退会让截断后的重放事件被 `drive()` 跳过）、重置 agent 轮次游标、
-   `resetAfterRewind()` 对齐 write handle 的 cursor 与继承前缀，最后强制
-   durable 取消 agent 的排队输入（`inbox.clear()`；落在保留区的 pending 同样
-   取消——否则 agent 会继续处理 rewind 已放弃的输入）；
+   水位不回退会让截断后的重放事件被 `drive()` 跳过）、丢弃 `ctx.tokenMeter`
+   对该会话的重放折叠（meter 只按 seq 前进，水位停在被删除的 seq 空间会让
+   续写事件从错位处折叠——压缩测量报 `step/end` 无配对 `step/start`）、重置
+   agent 轮次游标、`resetAfterRewind()` 对齐 write handle 的 cursor 与继承
+   前缀，最后强制 durable 取消 agent 的排队输入（`inbox.clear()`；落在保留区
+   的 pending 同样取消——否则 agent 会继续处理 rewind 已放弃的输入）；
 5. **刷新持久化投影检查点**（`ctx.sessionProjectionCache.write`）：rewind 不
    产生事件，缓存行（及其水位）仍停在截断前。超前行有两个危害：cold 读的
    `restore` 虽会因「行超出日志末尾」丢弃它，但列表 hints 的零 I/O 读
