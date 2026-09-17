@@ -1,20 +1,9 @@
-/**
- * Shared workspace resolution for the desktopify scripts: the workspace is
- * never hardcoded — it comes from `DSH_DESKTOP_WORKSPACE` (or the CLI
- * positional argument, which the CLI forwards through that variable) and
- * defaults to the current directory. Also carries the app-facing contract:
- * `dsh.desktop` identity and the merged profile bundle list.
- * @module @morlay/dsh-desktopify
- */
-
-import { existsSync, readFileSync } from "node:fs";
+import { access, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { OFFICIAL_PROFILE_BUNDLES } from "../official.ts";
 
-/** The dsh profile the desktop shell hosts (upstream desktop semantics). */
 export const PROFILE_NAME = "desktop";
 
-/** App-facing `dsh.desktop` configuration with tool defaults. */
 export interface DesktopConfig {
   readonly id: string;
   readonly version: string;
@@ -28,14 +17,12 @@ export interface DesktopConfig {
   readonly icon?: string;
 }
 
-/** The app workspace manifest (package.json). */
 export interface WorkspaceManifest {
   readonly name?: string;
   readonly version?: string;
   readonly files?: string[];
   readonly dependencies?: Record<string, string>;
   readonly dsh?: {
-    /** dsh runtime release the app targets (`dsh.version`). */
     readonly version?: string;
     readonly profile?: { readonly bundles?: unknown };
     readonly desktop?: {
@@ -43,24 +30,39 @@ export interface WorkspaceManifest {
       readonly dshHome?: string;
       readonly icon?: string;
       readonly window?: Record<string, number>;
-      /** Preset directories the desktop profile distributes (package specs). */
+
       readonly agentPresets?: unknown;
+    };
+
+    readonly dev?: {
+      readonly web?: {
+        readonly clientBundles?: {
+          readonly prefixes?: unknown;
+          readonly packages?: unknown;
+        };
+      };
     };
   };
 }
 
-/** A manifest whose required fields have been validated. */
 export type ResolvedWorkspaceManifest = WorkspaceManifest & { readonly name: string };
 
-/** Resolve the app workspace directory (default: the current directory). */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveWorkspace(): string {
   return resolve(process.cwd());
 }
 
-/** Read and validate the workspace manifest. */
-export function workspaceManifest(workspace: string): ResolvedWorkspaceManifest {
+export async function workspaceManifest(workspace: string): Promise<ResolvedWorkspaceManifest> {
   const value = JSON.parse(
-    readFileSync(join(workspace, "package.json"), "utf8"),
+    await readFile(join(workspace, "package.json"), "utf8"),
   ) as WorkspaceManifest;
   if (typeof value.name !== "string" || value.name === "") {
     throw new Error(`dsh-desktopify: workspace ${workspace} has no package name`);
@@ -68,11 +70,6 @@ export function workspaceManifest(workspace: string): ResolvedWorkspaceManifest 
   return { ...value, name: value.name };
 }
 
-/**
- * The `@deepseek-ai/dsh` dependency spec the app targets (`dsh.version`): a
- * concrete release (`0.1.5-rc.1`), a range, or the `workspace:` protocol when
- * the app lives in the same workspace as the vendored dsh.
- */
 export function dshVersion(manifest: WorkspaceManifest): string | undefined {
   const version = manifest.dsh?.version;
   if (version === undefined) return undefined;
@@ -85,7 +82,6 @@ export function dshVersion(manifest: WorkspaceManifest): string | undefined {
   return version;
 }
 
-/** The app's `dsh.desktop` configuration with tool defaults. */
 export function desktopConfig(manifest: WorkspaceManifest): DesktopConfig {
   const desktop = manifest.dsh?.desktop ?? {};
   const window = desktop.window ?? {};
@@ -103,10 +99,6 @@ export function desktopConfig(manifest: WorkspaceManifest): DesktopConfig {
   };
 }
 
-/**
- * The app's desktop-distributed agent preset directories: package specs such
- * as `@scope/pkg/presets`, resolved inside the assembled profile's closure.
- */
 export function desktopAgentPresets(manifest: WorkspaceManifest): string[] {
   const value = manifest.dsh?.desktop?.agentPresets;
   if (value === undefined) return [];
@@ -119,7 +111,6 @@ export function desktopAgentPresets(manifest: WorkspaceManifest): string[] {
   return value as string[];
 }
 
-/** The app's declared profile bundles (validated). */
 export function appProfileBundles(manifest: WorkspaceManifest): string[] {
   const bundles = manifest.dsh?.profile?.bundles;
   if (!Array.isArray(bundles) || !bundles.every((bundle) => typeof bundle === "string")) {
@@ -130,16 +121,43 @@ export function appProfileBundles(manifest: WorkspaceManifest): string[] {
   return bundles as string[];
 }
 
-/** Official bundles merged ahead of the app's own bundles. */
 export function mergedProfileBundles(manifest: WorkspaceManifest): string[] {
   return [...OFFICIAL_PROFILE_BUNDLES, ...appProfileBundles(manifest)];
 }
 
-/** Find the pnpm workspace root above a directory. */
-export function findWorkspaceRoot(workspace: string): string {
+export interface DevWebConfig {
+  readonly prefixes: string[];
+
+  readonly packages: string[];
+}
+
+const DEFAULT_DEV_CLIENT_PREFIXES = ["@morlay/"];
+
+function devStringList(subject: string, value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item !== "")) {
+    throw new Error(`dsh-desktopify: ${subject} must be a non-empty string list`);
+  }
+  return value as string[];
+}
+
+export function devWebConfig(manifest: WorkspaceManifest): DevWebConfig | undefined {
+  const value = manifest.dsh?.dev?.web?.clientBundles;
+  if (value === undefined) return undefined;
+  const subject = `workspace ${String(manifest.name)} dsh.dev.web.clientBundles`;
+  return {
+    prefixes:
+      value.prefixes === undefined
+        ? [...DEFAULT_DEV_CLIENT_PREFIXES]
+        : devStringList(`${subject}.prefixes`, value.prefixes),
+    packages:
+      value.packages === undefined ? [] : devStringList(`${subject}.packages`, value.packages),
+  };
+}
+
+export async function findWorkspaceRoot(workspace: string): Promise<string> {
   let current = resolve(workspace);
   for (;;) {
-    if (existsSync(join(current, "pnpm-workspace.yaml"))) return current;
+    if (await pathExists(join(current, "pnpm-workspace.yaml"))) return current;
     const parent = dirname(current);
     if (parent === current)
       throw new Error(`dsh-desktopify: no pnpm-workspace.yaml found above ${workspace}`);
@@ -147,36 +165,15 @@ export function findWorkspaceRoot(workspace: string): string {
   }
 }
 
-/** The tool's build cache root inside the target workspace. */
 export function buildRoot(workspace: string): string {
   return join(workspace, "node_modules", ".dsh-desktopify");
 }
 
-/**
- * Strip pnpm's peer suffix from a spec `pnpm deploy` wrote into the deployed
- * project's manifest. The deploy writes the lockfile's resolved version —
- * `<version>(<peer>)(<peer>(<peer>))` — where a peer's own peers nest, so the
- * cut is at the first `(` rather than bracket matching: a leftover nested
- * suffix is not a version, and pnpm installs it as the relative link
- * `link:0.0.4(@scope/a@1)(@scope/b@2(@scope/c@3))`, leaving a dangling entry
- * with no package behind it (the bundle then fails to resolve at runtime).
- * Specs pnpm wrote without a suffix (`0.0.19`, `^1.0.2`) pass through.
- */
 export function cleanDeployedSpec(spec: string): string {
   const suffix = spec.indexOf("(");
   return suffix === -1 ? spec : spec.slice(0, suffix);
 }
 
-/**
- * Top-level `pnpm-workspace.yaml` keys the deployed project inherits from the
- * workspace. `pnpm deploy` only carries the settings that shape the closure
- * assembly (`allowBuilds`, `patchedDependencies`, `overrides`); the resolution
- * and supply-chain settings stay behind, so an install inside the deployed
- * project silently falls back to pnpm's defaults — under pnpm 12's
- * `minimumReleaseAge=1440` (strict) a freshly published dependency then fails
- * the lockfile supply-chain check. Whitelisted only: member globs (`packages`)
- * and workspace-topology settings stay with the workspace.
- */
 const DEPLOY_SETTINGS_KEYS = new Set([
   "minimumReleaseAge",
   "minimumReleaseAgeExclude",
@@ -186,18 +183,12 @@ const DEPLOY_SETTINGS_KEYS = new Set([
   "autoInstallPeers",
 ]);
 
-/** 顶层键行：行首无空白且以 `key:` 开头（不会把 `minimumReleaseAgeExclude` 认成 `minimumReleaseAge`）。 */
 const TOP_LEVEL_KEY = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]|$)/u;
 
-/** 文本行切分（CRLF 归一化；尾随换行留下一个空行，由输出端裁掉）。 */
 function splitLines(text: string): string[] {
   return text.replaceAll("\r\n", "\n").split("\n");
 }
 
-/**
- * 顶层键块：键行 + 紧随其后的缩进行（列表/映射都是缩进行）。空行不属于任何
- * 块，块内空行因此不会被搬走。
- */
 function topLevelBlocks(lines: readonly string[]): { key: string; start: number; end: number }[] {
   const blocks: { key: string; start: number; end: number }[] = [];
   for (let index = 0; index < lines.length; index += 1) {
@@ -211,15 +202,6 @@ function topLevelBlocks(lines: readonly string[]): { key: string; start: number;
   return blocks;
 }
 
-/**
- * Merge the workspace settings the deployed project must keep into the
- * manifest `pnpm deploy` generated for it: every whitelisted top-level key
- * declared in `source` (the key line plus its indented block — scalar, list or
- * mapping) replaces the same key in `destination`, or is appended at the end
- * when absent. Everything else in `destination` is preserved verbatim and no
- * duplicate key is ever produced. Returns the merged manifest with a single
- * trailing newline.
- */
 export function mergedDeploySettings(source: string, destination: string): string {
   const sourceLines = splitLines(source);
   const inherited = new Map<string, string[]>();
@@ -245,7 +227,7 @@ export function mergedDeploySettings(source: string, destination: string): strin
       merged.push(...replacement);
       replaced.add(block.key);
     }
-    // 重复出现的同名键：整块丢掉，保证输出里最多一个键。
+
     index = block.end;
   }
   while (merged.length > 0 && (merged[merged.length - 1] ?? "").trim() === "") merged.pop();
@@ -255,9 +237,8 @@ export function mergedDeploySettings(source: string, destination: string): strin
   return merged.length === 0 ? "" : `${merged.join("\n")}\n`;
 }
 
-/** Read a package's version from its manifest. */
-export function packageVersion(path: string, subject: string): string {
-  const manifest = JSON.parse(readFileSync(path, "utf8")) as { version?: string };
+export async function packageVersion(path: string, subject: string): Promise<string> {
+  const manifest = JSON.parse(await readFile(path, "utf8")) as { version?: string };
   if (typeof manifest.version !== "string")
     throw new Error(`dsh-desktopify: ${subject} has no version`);
   return manifest.version;

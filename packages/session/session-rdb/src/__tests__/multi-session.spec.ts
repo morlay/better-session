@@ -9,7 +9,6 @@ import { createMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { EmptySettings } from "@morlay/session-rdb/testing";
 import SessionPersistenceRdb from "@morlay/session-rdb";
 
-/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
 function rdb(ctx: import("@deepseek-ai/cordis").Context): SessionPersistenceRdb {
   return ctx.sessionPersistence as SessionPersistenceRdb;
 }
@@ -70,7 +69,7 @@ describe("multi-session repro (cold-path verification)", () => {
     const N = 12;
     const sessions: Session[] = [];
     for (let i = 0; i < N; i++) sessions.push(b.ctx.sessions.create(SessionId(`live-${i}`)));
-    // 两轮并发写（每个 session 两轮 turn），flush 交错进行。
+
     for (let round = 0; round < 2; round++) {
       for (const s of sessions) appendTurn(s, round);
       await Promise.all(sessions.map((s) => b.ctx.sessions.flush(s)));
@@ -82,7 +81,7 @@ describe("multi-session repro (cold-path verification)", () => {
       const loaded = await rdb(b2.ctx).load(SessionId(`live-${i}`));
       const seqs = loaded.events.map((e) => e.seq);
       expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, k) => k));
-      expect(seqs.length).toBe(12); // 每轮 6 个事件 × 2
+      expect(seqs.length).toBe(12);
     }
     await b2.dispose();
   });
@@ -95,7 +94,7 @@ describe("multi-session repro (cold-path verification)", () => {
     const s2 = b2.ctx.sessions.create(SessionId("inst-2"));
     appendTurn(s1, 0);
     appendTurn(s2, 0);
-    // 两个连接并发写两个不同 session。
+
     await Promise.all([b1.ctx.sessions.flush(s1), b2.ctx.sessions.flush(s2)]);
     await Promise.all([b1.dispose(), b2.dispose()]);
 
@@ -113,7 +112,7 @@ describe("multi-session repro (cold-path verification)", () => {
     const N = 20;
     const sessions: Session[] = [];
     for (let i = 0; i < N; i++) sessions.push(b.ctx.sessions.create(SessionId(`p-${i}`)));
-    // 完全并发：不按轮次，直接一次性 append 全部再 flush。
+
     for (const s of sessions) appendTurn(s, 0);
     await Promise.all(sessions.map((s) => b.ctx.sessions.flush(s)));
     await b.dispose();
@@ -130,7 +129,7 @@ describe("multi-session repro (cold-path verification)", () => {
     const path = await freshDbPath();
     const b = await mount(path);
     const s = b.ctx.sessions.create(SessionId("race"));
-    // 连续追加 turn 片段并频繁 load（live 路径不报错即可）。
+
     for (let k = 0; k < 4; k++) {
       appendTurn(s, k);
       await b.ctx.sessions.flush(s);
@@ -149,18 +148,16 @@ describe("multi-session repro (cold-path verification)", () => {
   it("subagent-style: MANY parallel fork children (seeded, delta-heavy) persist dense-intact", async () => {
     const path = await freshDbPath();
     const b = await mount(path);
-    // parent 先跑一个完整 turn（含 delta），作为 fork 的 seed 来源。
+
     const parent = b.ctx.sessions.create(SessionId("parent"));
     appendTurn(parent, 0);
     await b.ctx.sessions.flush(parent);
 
-    // 并行 fork 8 个 child：每个 child 继承 parent 的完整前缀（上游 seq 含 delta）。
     const N = 8;
     const children = Array.from({ length: N }, (_, i) =>
       b.ctx.sessions.fork(parent, undefined, SessionId(`child-${i}`)),
     );
-    // 并行 append：每个 child 再跑一轮含 delta 的 turn，不逐个 flush——模拟
-    // subagent 并行唤起时多个 session 同时经事件驱动写路径持久化。
+
     for (const c of children) appendTurn(c, 0);
     await Promise.all(children.map((c) => b.ctx.sessions.flush(c)));
     await b.dispose();
@@ -169,8 +166,7 @@ describe("multi-session repro (cold-path verification)", () => {
     for (let i = 0; i < N; i++) {
       const loaded = await rdb(b2.ctx).load(SessionId(`child-${i}`));
       const seqs = loaded.events.map((e) => e.seq);
-      // child log = parent 前缀（6）+ session/end-seed（1）+ 自身 turn（6）= 13：
-      // 稠密连续、无跨 session 拼接。
+
       expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, k) => k));
       expect(seqs.length).toBe(13);
     }
@@ -185,7 +181,7 @@ describe("multi-session repro (cold-path verification)", () => {
     const children = Array.from({ length: N }, (_, i) =>
       b.ctx.sessions.create(SessionId(`sib-${i}`)),
     );
-    // parent 与所有 child 同时并发写（交错事件循环）。
+
     appendTurn(parent, 0);
     for (const c of children) appendTurn(c, 0);
     await Promise.all([

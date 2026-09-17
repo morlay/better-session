@@ -24,8 +24,6 @@ async function createTestDatabase(): Promise<{
   return {
     connectionString: url.toString(),
     drop: async () => {
-      // FORCE severs any residual connection (e.g. a fiber the contract case
-      // disposed only via ctx.fiber.dispose) before the database can be dropped.
       await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
       await admin.end();
     },
@@ -60,8 +58,7 @@ describe.skipIf(!process.env.TEST_PG_URL)("PostgreSQL backend", () => {
         }
         return await ctx.plugin(SessionPersistenceRdb, { type: "postgres", connectionString });
       },
-      // No corruptTail: PG appends are single-transaction (atomic commit), so a
-      // never-committed tail cannot exist — the torn-tail case asserts this.
+
       cleanup: async () => {
         await drop();
       },

@@ -8,7 +8,6 @@ export const SESSION_PERSISTENCE_SQLITE_APPLICATION_ID = 0x44534850;
 
 export const EVENT_ENCODING = "json";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sqliteTables: Record<string, any> = toSqliteSchema(sqliteTableDefs);
 
 export const tPersistenceState = sqliteTables["t_persistence_state"]!;
@@ -82,7 +81,7 @@ export function eventKind(event: { type: string; data?: unknown }): EventKind | 
     case "tool/result":
     case "tool/ptc-dispatch-start":
     case "tool/ptc-dispatch":
-    case "tool/code-dispatch-start": // v2 旧名（读路径归一为 ptc）
+    case "tool/code-dispatch-start":
     case "tool/code-dispatch":
       return "tool";
     case "request/header":
@@ -139,7 +138,7 @@ export function eventKind(event: { type: string; data?: unknown }): EventKind | 
     case "web/deepseek-search-llm-request":
       return "web";
     default:
-      return ""; // unknown plugin-merged type
+      return "";
   }
 }
 
@@ -150,7 +149,7 @@ export function eventDimensions(event: SessionEvent): {
   actionId: string;
 } {
   const kind = eventKind(event);
-  // 插件合并类型不在 core 的判别联合内，type/data 经结构化视图访问。
+
   const type = event.type as string;
   const data = event.data as Record<string, unknown>;
   switch (type) {
@@ -159,7 +158,6 @@ export function eventDimensions(event: SessionEvent): {
     case "assistant/message":
       return { kind, role: "assistant", name: "", actionId: "" };
     case "tool/result": {
-      // append 可能携带旧形状（无 message）；可选链容忍。
       const message = data["message"] as { content?: Array<{ toolCallId?: string }> } | undefined;
       return { kind, role: "tool", name: "", actionId: message?.content?.[0]?.toolCallId ?? "" };
     }
@@ -172,7 +170,7 @@ export function eventDimensions(event: SessionEvent): {
       };
     case "tool/ptc-dispatch-start":
     case "tool/ptc-dispatch":
-    case "tool/code-dispatch-start": // v2 旧名（读路径归一为 ptc）
+    case "tool/code-dispatch-start":
     case "tool/code-dispatch":
       return {
         kind,

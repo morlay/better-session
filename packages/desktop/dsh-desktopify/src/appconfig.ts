@@ -1,21 +1,8 @@
-/**
- * Runtime configuration contract between the bundle step and the Electron shell.
- * Written beside the shell executable as `appconfig.json`; the shell reads it at
- * startup. `dshHome` follows the reference desktop semantics:
- *   - `xdg` (default) — XDG data home (`~/Library/Application Support` on
- *     macOS, `$XDG_DATA_HOME` on Linux) joined with the application name;
- *   - `env` — leave `DSH_HOME` unset and inherit the environment;
- *   - an absolute path — pin `DSH_HOME` to that directory.
- * @module @morlay/dsh-desktopify
- */
-
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-/** The dsh profile the desktop shell hosts (upstream desktop semantics). */
 export const PROFILE_NAME = "desktop";
 
-/** Window geometry carried from the workspace `dsh.desktop.window` field. */
 export interface AppWindowConfig {
   readonly width: number;
   readonly height: number;
@@ -23,13 +10,12 @@ export interface AppWindowConfig {
   readonly minHeight: number;
 }
 
-/** One complete shell runtime configuration. */
 export interface AppConfig {
   readonly name: string;
   readonly id: string;
   readonly version: string;
   readonly profile: typeof PROFILE_NAME;
-  /** `xdg` / `env` 或绝对路径（见 dshhome.ts 的解析语义）。 */
+
   readonly dshHome: string;
   readonly window: AppWindowConfig;
 }
@@ -52,10 +38,9 @@ function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-/** Read and validate the shell configuration beside the executable. */
-export function loadAppConfig(exeDir: string): AppConfig {
+export async function loadAppConfig(exeDir: string): Promise<AppConfig> {
   const path = join(exeDir, "appconfig.json");
-  const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+  const value: unknown = JSON.parse(await readFile(path, "utf8"));
   if (
     !isRecord(value) ||
     typeof value.name !== "string" ||
@@ -79,9 +64,8 @@ export function loadAppConfig(exeDir: string): AppConfig {
   };
 }
 
-/** Write the shell configuration beside the executable (bundle step). */
-export function writeAppConfig(exeDir: string, config: AppConfig): void {
-  writeFileSync(join(exeDir, "appconfig.json"), `${JSON.stringify(config, undefined, 2)}\n`, {
+export async function writeAppConfig(exeDir: string, config: AppConfig): Promise<void> {
+  await writeFile(join(exeDir, "appconfig.json"), `${JSON.stringify(config, undefined, 2)}\n`, {
     mode: 0o600,
   });
 }

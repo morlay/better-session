@@ -1,12 +1,5 @@
-/**
- * storages 接管的集成覆盖：
- * - workspace 域经 rdb KV 后端落语义专用表（不再产生 JSON 文件）；
- * - 旧 storages JSON 的显式导入写入同一批表。
- */
-
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -32,7 +25,6 @@ async function tempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-/** 等待可选依赖链收敛后解析一个服务。 */
 async function waitFor<T>(read: () => T | undefined, timeoutMs = 3000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -68,7 +60,7 @@ describe("workspace domain on the rdb storage backend", () => {
             | undefined,
       );
       const workspace = await registry.create(project);
-      // workspace path 是 create 时 fs.realpath 归一后的目录（macOS 的 /var → /private/var）。
+
       const canonical = await realpath(project);
       expect(workspace.path).toBe(canonical);
 
@@ -84,11 +76,10 @@ describe("workspace domain on the rdb storage backend", () => {
         }>;
         expect(rows).toHaveLength(1);
         expect(rows[0]!.f_path).toBe(canonical);
-        // 显示顺序是数据：workspaceIds 由 f_position 承载。
+
         expect(rows[0]!.f_position).toBe(0);
         expect(db.prepare("SELECT f_session_id FROM t_workspace_sessions").all()).toEqual([]);
 
-        // 归档状态是数据：直接落在会话行的 f_archived_at 标记上。
         const sessionId = SessionId("archive-me");
         ctx.sessions.create(sessionId, { meta: meta("archive-me", canonical) });
         await ctx.sessions.flush(ctx.sessions.get(sessionId)!);
@@ -111,8 +102,7 @@ describe("workspace domain on the rdb storage backend", () => {
         db.close();
       }
 
-      // JSON 介质已禁用：不会产生 storages 文件树。
-      expect(existsSync(join(root, "storages"))).toBe(false);
+      await expect(stat(join(root, "storages"))).rejects.toThrow();
     } finally {
       await fiber.dispose();
     }
@@ -149,13 +139,12 @@ describe("rdb KV backend contract", () => {
   it("rejects a concurrent double-open before the medium read", async () => {
     const { backend, dispose } = await harness();
     try {
-      // 名字必须在同步段预留：第二个 open 不得穿过去等 readUnitVersion。
       const first = backend.kv!.open({ ...descriptor });
       const second = backend.kv!.open({ ...descriptor });
       await expect(second).rejects.toThrow(/already open/);
       const unit = await first;
       await unit.close();
-      // unit 关闭后名字释放，可再次打开。
+
       const reopened = await backend.kv!.open({ ...descriptor });
       await reopened.close();
     } finally {
@@ -248,7 +237,6 @@ describe("legacy storages import", () => {
       "utf8",
     );
     await writeFile(
-      // 版本不在 accepted 集合内的 stale 文档：缓存语义要求丢弃。
       join(dshHome, "storages", "session_projcache", "sessions", "sess-2.json"),
       JSON.stringify({ version: 1, record: { identity: { createdAt: 1 }, rows: {} } }),
       "utf8",
@@ -261,7 +249,6 @@ describe("legacy storages import", () => {
     });
     await backend.open();
     try {
-      // checkpoint 行与归档标记都挂在会话行上：先造出这两行会话元数据。
       const seed = new DatabaseSync(join(dshHome, "sessions.sqlite"));
       try {
         for (const sessionId of ["s1", "sess-1"]) {
@@ -280,7 +267,7 @@ describe("legacy storages import", () => {
       const listed = await backend.storage.listWorkspaces();
       expect(listed.map((entry) => entry.id)).toEqual(["w1"]);
       expect(listed[0]!.record.title).toBe("w1");
-      // 会话归属拆表后按位置拼回数组。
+
       expect(listed[0]!.record.sessionIds).toEqual(["s1"]);
       expect(await backend.storage.readWorkspaceState()).toMatchObject({
         initialized: true,

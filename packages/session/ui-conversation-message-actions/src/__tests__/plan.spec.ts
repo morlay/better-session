@@ -18,7 +18,6 @@ import {
   userMessage,
 } from "@morlay/ui-conversation-message-actions/testing";
 
-/** 空轮：turn/start 后直接 turn/end（早期重放缺陷的遗留形状）。 */
 function emptyTurn(base: number, turn: number): SessionEvent[] {
   return [
     { type: "turn/start", seq: SessionSeq(base), time: base, data: { turn } },
@@ -30,8 +29,6 @@ function emptyTurn(base: number, turn: number): SessionEvent[] {
     },
   ] as SessionEvent[];
 }
-
-// —— 底层纯函数（plan.ts）全矩阵：不落库、无 IO，直接断言计划输出。 ——
 
 describe("closedTurns", () => {
   it("folds two complete turns", () => {
@@ -57,13 +54,11 @@ describe("closedTurns", () => {
     });
     const [turn] = closedTurns(log);
     expect(turn?.users.map((u) => (u.data as { id: string }).id)).toEqual(["u1", "u2"]);
-    expect(turn?.user?.seq).toBe(2); // 轮首输入
+    expect(turn?.user?.seq).toBe(2);
     expect(turn?.users).toHaveLength(2);
   });
 
   it("ignores non-user-sourced messages", () => {
-    // open turn 中先出现一条 source.kind !== "user" 的 user/message，
-    // 再出现真正的用户输入——只有后者进入 users。
     const log = turnLog(0, 1, { closed: false });
     const steering: SessionEvent = {
       type: "user/message",
@@ -77,7 +72,7 @@ describe("closedTurns", () => {
       },
     } as unknown as SessionEvent;
     const [turn] = closedTurns([...log, steering]);
-    expect(turn?.users).toHaveLength(1); // 只记录真用户输入
+    expect(turn?.users).toHaveLength(1);
     expect((turn!.users[0]!.data as { id: string }).id).toBe("t1-u1");
   });
 });
@@ -153,7 +148,7 @@ describe("editPlan", () => {
       closedTurns(log),
     );
     expect(plan.anchorSeq).toBe(0);
-    expect(plan.rewindBoundary).toBeUndefined(); // 整轮截断语义
+    expect(plan.rewindBoundary).toBeUndefined();
     expect(plan.queuedUsers).toHaveLength(1);
     expect((plan.queuedUsers[0] as { content: Array<{ text: string }> }).content[0]?.text).toBe(
       "edited q",
@@ -167,8 +162,7 @@ describe("editPlan", () => {
         { id: "u2", text: "followup" },
       ],
     });
-    // followup user seq：base 0 + turn/start(0) + step/start(1) + u1(2) + a1(3)
-    // + step/end(4) + step/start(5) + u2(6)
+
     const followupSeq = log.find(
       (e) => e.type === "user/message" && (e.data as { id: string }).id === "u2",
     )!.seq;
@@ -183,8 +177,8 @@ describe("editPlan", () => {
       },
       closedTurns(log),
     );
-    expect(plan.rewindBoundary).toBe(followupSeq); // 消息级 rewind
-    expect(plan.queuedUsers).toHaveLength(1); // 只有编辑版 followup（无后续同轮输入）
+    expect(plan.rewindBoundary).toBe(followupSeq);
+    expect(plan.queuedUsers).toHaveLength(1);
     expect((plan.queuedUsers[0] as { content: Array<{ text: string }> }).content[0]?.text).toBe(
       "edited f",
     );
@@ -203,7 +197,7 @@ describe("editPlan", () => {
       },
       closedTurns(log),
     );
-    // 未闭合轮的轮首输入同样整轮截断：保留悬空 turn/start 会让重放开到下一轮。
+
     expect(plan.rewindBoundary).toBeUndefined();
   });
 
@@ -220,7 +214,7 @@ describe("editPlan", () => {
       },
       closedTurns(log),
     );
-    // 轮 1 整轮截断重放：q1 + 轮 2 q2 + 轮 3 q3
+
     expect(plan.queuedUsers).toHaveLength(3);
   });
 
@@ -244,7 +238,6 @@ describe("editPlan", () => {
   });
 
   it("rejects an eventSeq beyond the last turn (no matching turn)", () => {
-    // 空日志：无任何轮 → turn 定位失败。
     expect(() =>
       editPlan(
         { action: "edit", sessionId, eventSeq: 0, blockIndex: 0, text: "x", cascade: "truncate" },
@@ -254,7 +247,6 @@ describe("editPlan", () => {
   });
 
   it("rejects an unknown eventSeq inside an open turn", () => {
-    // 未闭合轮（startSeq 0，无 endSeq）中 99 落在轮范围，但轮内无此消息。
     const log = turnLog(0, 1, { closed: false });
     expect(() =>
       editPlan(
@@ -265,8 +257,6 @@ describe("editPlan", () => {
   });
 
   it("rejects an eventSeq that matches no message inside a turn", () => {
-    // 闭合轮 turn/start(0)…turn/end(7)；seq 7 = turn/end 不是可编辑消息，
-    // 且 > turn.startSeq、== turn.endSeq 不满足（< endSeq）→ 定位到下一轮失败。
     const log = [...turnLog(0, 1), ...turnLog(8, 2)];
     expect(() =>
       editPlan(
@@ -315,7 +305,6 @@ describe("retryPlan", () => {
   });
 
   it("rejects retry of a turn without a user message", () => {
-    // 只有 turn/start + turn/end 的轮
     const emptyTurn: SessionEvent[] = [
       { type: "turn/start", seq: 0 as never, time: 1, data: { turn: 1 } },
       {
@@ -372,7 +361,7 @@ describe("precedingContentIndex", () => {
 describe("recallBoundary", () => {
   it("rewinds a later turn's first user to the previous turn/end", () => {
     const log = twoTurnLog();
-    // 轮 2 的轮首 user（7）→ 轮 1 的 turn/end（5）。
+
     expect(recallBoundary(log, closedTurns(log), 7)).toBe(5);
   });
 
@@ -395,7 +384,6 @@ describe("recallBoundary", () => {
   });
 
   it("rewinds a message before every turn to the message itself", () => {
-    // 排队输入在首个 turn/start 之前落成 user/message（无轮归属）。
     const outside = userMessage(0, "outside", "queued then stopped");
     const log = [outside, ...turnLog(1, 1)];
     expect(closedTurns(log)).toHaveLength(1);
@@ -420,7 +408,7 @@ describe("recallBoundary", () => {
 
   it("rejects an eventSeq inside a turn that is not a turn user", () => {
     const log = oneTurnLog();
-    // seq 3 是轮内 assistant/message：定位到轮，但不在 turn.users。
+
     expect(() => recallBoundary(log, closedTurns(log), 3)).toThrow(/不存在或不可撤回/);
   });
 });

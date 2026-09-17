@@ -1,20 +1,3 @@
-# @morlay/better-session bundle patch：把 storages 一并接管到 session-rdb。
-#
-# - `session-persistence-jsonl`：官方 JSONL 持久化禁用，由 session-rdb 提供
-#   `ctx.sessionPersistence`。
-# - `session-projection-cache`：官方投影缓存插件禁用，由 session-rdb 提供同名
-#   `ctx.sessionProjectionCache` 服务（`t_session_projcache*` 语义表）。
-# - `session-query-sqlite`：官方查询后端（FTS5 派生索引库）禁用，由 session-rdb
-#   提供同名 `ctx.sessionQuery`——精确读 / 过滤 / 血缘复用上游基类（数据面走
-#   ctx.sessionPersistence），全文检索维持 disabled，不引入派生索引库。
-# - `storage-json`：JSON 介质禁用，storages 目录不再产生文件。
-# - `storage-domain`：改为把域路由到 session-rdb 注册的 `rdb` KV 后端
-#   （workspace 域 → `t_workspaces` / `t_workspace_state`）。
-# - `session-telemetry-otel`：官方遥测后端禁用的默认值（用户提交反馈时才向
-#   官方端点 OTLP 外发）；需要该通路时删除本行即可。
-# - `session-log-deepseek`：官方请求日志上传扩展禁用（默认即 `enabled: false`，
-#   显式禁用让默认部署零官方外发）；需要时删除本行并在 settings 打开。
-
 - id: session-persistence-jsonl
   disabled: true
 
@@ -37,6 +20,20 @@
   config:
     backend: rdb
 
+# 对话 UI 的 client 半 fork（见 docs/debt/0001）：官方 input-trigger 的引用域
+# 词表是封闭联合，改由本仓库的包接管（宿主半一并接管，行整体禁用）。
+- id: ui-input-trigger
+  disabled: true
+
+# 官方对话外壳与 chat 渲染同样由 fork 接管：
+# - ui-conversation：composer 草稿要改成块序列、队列行去掉 inline edit；
+# - ui-chat：用户气泡 / assistant 渲染（思考块 Markdown、资源 chip、文件卡片）。
+- id: ui-conversation
+  disabled: true
+
+- id: ui-chat
+  disabled: true
+
 - insert:
     - id: session-branch
       name: "@morlay/session-branch"
@@ -49,3 +46,16 @@
 
     - id: ui-conversation-message-actions
       name: "@morlay/ui-conversation-message-actions"
+
+    - id: ui-conversation-fork
+      name: "@morlay/dsh-client-ui-conversation"
+
+    - id: ui-chat-fork
+      name: "@morlay/dsh-client-ui-chat"
+
+    - id: ui-input-trigger-fork
+      name: "@morlay/dsh-client-ui-input-trigger"
+
+    # css-in-js 样式层（styled / Token / 官方 token 消费）：fork 包的样式基础。
+    - id: ui-primitives-fork
+      name: "@morlay/dsh-client-ui-primitives"

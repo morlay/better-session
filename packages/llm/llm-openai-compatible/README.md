@@ -86,7 +86,7 @@ llm-openai-compatible:
 - 图片请求预算 `maxRequestImageBytes` 按 base64 长度计：合计超限抛
   `LlmError('IMAGE_OFFLOAD_REQUIRED')`（携带还需 offload 的最旧出现次数），
   由上游 `compaction-image-offload` 记录 durable offload 后重试同一请求，
-  本适配器不自行裁剪（[ADR 0007](./docs/adr/0007-图片超预算报错交由durable-offload重试.md)）。
+  本适配器不自行裁剪（[ADR 0007](./.agents/adrs/0007-图片超预算报错交由durable-offload重试.md)）。
 
 ### 凭据
 

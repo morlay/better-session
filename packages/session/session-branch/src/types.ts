@@ -1,9 +1,6 @@
 import type { SessionEvent, SessionId } from "@deepseek-ai/dsh-session";
 import type { SessionEventMap } from "@deepseek-ai/dsh-session";
 
-// 编译期诊断：module augmentation 后 `keyof SessionEventMap` 可见，但
-// dsh-session 内已解析的 `SessionEventType` 别名不会重求值——因此
-// `SessionEvent<"session-branch/version">` 泛型不可用，守卫/消费走结构化。
 type _BranchKeyCheck = "session-branch/version" extends keyof SessionEventMap ? true : false;
 export const _branchKeyVisible: _BranchKeyCheck = true as const;
 

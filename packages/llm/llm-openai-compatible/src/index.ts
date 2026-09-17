@@ -61,7 +61,7 @@ export interface ProviderProfileSource {
   baseURL: string;
 
   headers?: Record<string, string>;
-  // === sampling defaults (request-level values win) ===
+
   temperature?: number;
   topP?: number;
   topK?: number;

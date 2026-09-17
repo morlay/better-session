@@ -63,7 +63,7 @@ export interface ResolvedProviderProfile {
 
   baseURL: string;
   headers?: Readonly<Record<string, string>>;
-  // === sampling defaults (request-level values win) ===
+
   temperature?: number;
   topP?: number;
   topK?: number;
@@ -72,11 +72,11 @@ export interface ResolvedProviderProfile {
   seed?: number;
 
   reasoning?: ReasoningEffort;
-  // === model catalog ===
+
   models: readonly ResolvedModelProfile[];
   defaultContextWindow: number;
   defaultMaxTokens: number;
-  // === transport ===
+
   maxRequestImageBytes: number;
   streamIdleTimeoutMs: number;
 
@@ -157,9 +157,7 @@ function reasoningInfo(
   return {
     reasoning: {
       efforts,
-      // A configured default the model does not declare is silently dropped
-      // here (describing a model must never throw); the request path still
-      // refuses it, which is where a bad deployment default belongs.
+
       ...(defaultEffort !== void 0 && declaration[defaultEffort] !== void 0
         ? { defaultEffort: ReasoningEffortId(defaultEffort) }
         : {}),
@@ -390,9 +388,7 @@ export class OpenAICompatibleAdapter extends LlmAdapter {
         if (!exhausted) {
           try {
             await iterator.return(void 0);
-          } catch {
-            // The transport already aborted; teardown is best-effort.
-          }
+          } catch {}
         }
       }
     } finally {

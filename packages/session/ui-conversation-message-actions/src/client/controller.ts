@@ -16,7 +16,6 @@ import {
   type VersionOperation,
 } from "../shared.ts";
 
-/** desktop 壳（官方 dsh-desktop-host）注入的 transport 标记：ownsHost 时 API 走 /api 前缀。 */
 function editorApiPath(): string {
   const transport = (globalThis as { __DSH_TRANSPORT__?: { ownsHost?: boolean } })
     .__DSH_TRANSPORT__;
@@ -53,8 +52,6 @@ function messageOf(error: unknown): string {
 }
 
 function conversationRevision(snapshot: SessionSnapshot): string {
-  // 新版 SessionSnapshot 已无 turnEnds（会话级事件窗口不再暴露轮次边界）；
-  // 用生命周期字段作为会话变化指纹即可。
   return [snapshot.openState, snapshot.removed, snapshot.hasMore].join("|");
 }
 
@@ -109,7 +106,7 @@ export class SessionEditorController {
       recall: (message) =>
         this.mutate(
           { action: "recall", sessionId: this.sessionId, eventSeq: message.eventSeq },
-          () => this.setComposerDraft(message.text),
+          () => this.setComposerDraft(this.messageTexts(message)),
         ),
       importSession: (file) => this.importSession(file),
       openVersion: (sessionId) => this.openWhenListed(sessionId as SessionId),
@@ -138,7 +135,7 @@ export class SessionEditorController {
 
   private invalidate(): void {
     if (this.disposed || this.store.getSnapshot().status === "idle") return;
-    // 会话状态变化 → 刷新投影（debounce 由调用方按需）。
+
     void this.load();
   }
 
@@ -206,8 +203,6 @@ export class SessionEditorController {
     operation: SessionEditorOperation,
     onApplied?: () => void,
   ): Promise<boolean> {
-    // 只拦截并发操作；不要求 status === "ready"——编辑/重试的数据来自客户端
-    // conversation 节点，与 timeline 加载无关，status 为 idle 时也可发起请求。
     const current = this.store.getSnapshot();
     if (current.pending !== null) return false;
     this.store.update((state) => {
@@ -231,27 +226,21 @@ export class SessionEditorController {
       this.store.update((state) => {
         state.pending = null;
       });
-      // recall 的草稿回填必须在刷新（resync / 整页重载）之前：草稿经会话级
-      // 持久化 mirror 落 store，整页重载后仍能恢复。
+
       onApplied?.();
       const result = value as SessionEditorOperationResult;
-      // 仅 fork 产生新 id 时需要等列表发布并打开新版本；就地编辑不改 id。
+
       if (String(result.sessionId) !== String(this.sessionId)) {
         await this.openWhenListed(result.sessionId as SessionId);
         return true;
       }
-      // 就地编辑：rewind 删除事件，append-only 事件流无法表达删除——seq
-      // 回退只做增量，被剪掉的旧节点残留。优先会话级刷新（resync 重置窗口
-      // 并重新拉取历史）；不可用时回退整页重载。
+
       const face = this.sessions.binding(this.sessionId)?.session;
       const resync = (face as unknown as { resync?: () => Promise<void> }).resync;
       if (resync !== undefined) {
         try {
           await resync.call(face);
-          // resync 只重建事件窗口；投影 store 按 higher-seq-wins 保留 rewind
-          // 前的高 seq 旧值（截断后的正确值 seq 更小，永远覆盖不上），轮次
-          // 导航会残留已删除的轮次。丢弃全部投影行，等 host 推送重建；拿不到
-          // 丢弃入口时整页重载兜底。
+
           const projections = (
             face as unknown as { projections?: { truncate?(lastSeq: number): void } }
           ).projections;
@@ -262,9 +251,7 @@ export class SessionEditorController {
           projections.truncate(-1);
           void this.load();
           return true;
-        } catch {
-          // fall through to full reload
-        }
+        } catch {}
       }
       location.reload();
       return true;
@@ -278,20 +265,27 @@ export class SessionEditorController {
     }
   }
 
-  /**
-   * 把撤回的消息文本回填到该会话的 composer 草稿（`conversation.input` 的
-   * `setDraft`，即主输入框的整段替换语义）。会话 scope / binding / conversation
-   * 服务缺失时静默跳过——撤回本身已成功，草稿回填失败不应回滚会话状态。
-   */
-  private setComposerDraft(text: string): void {
-    // binding 缺失时 input.for 会抛（会话 scope 已拆除），先短路。
+  private messageTexts(message: EditableMessageBlock): readonly string[] {
+    const prefix = `${String(message.eventSeq)}:`;
+    const blocks = (this.store.getSnapshot().timeline?.messages ?? [])
+      .filter((row) => row.kind === "user" && row.key.startsWith(prefix))
+      .sort((left, right) => left.blockIndex - right.blockIndex)
+      .map((row) => row.text);
+    return blocks.length === 0 ? [message.text] : blocks;
+  }
+
+  private setComposerDraft(texts: readonly string[]): void {
     if (this.sessions.binding(this.sessionId) === undefined) return;
     const scoped = this.sessions.scope(this.sessionId);
     if (scoped === undefined) return;
     const conversation = scoped.get("conversation") as
-      | { input?: { for(ctx: ClientContext): { setDraft(text: string): void } } }
+      | {
+          input?: {
+            for(ctx: ClientContext): { restoreDraft(draft: string): void };
+          };
+        }
       | undefined;
-    conversation?.input?.for(scoped).setDraft(text);
+    conversation?.input?.for(scoped).restoreDraft(texts.join("\n\n"));
   }
 
   private async importSession(file: File): Promise<boolean> {
@@ -329,9 +323,7 @@ export class SessionEditorController {
       this.store.update((state) => {
         state.pending = null;
       });
-      // 覆盖成功但**不能**走 resync：resync 重开事件流时 observeSession 仍
-      // 优先读 live session（rewind 已截断其内存 log，append 只写 DB），会
-      // 再读到空/截断数据。整页重载让会话从 live 卸载，冷读 DB 完整数据。
+
       location.reload();
       return true;
     } catch (error) {

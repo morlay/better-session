@@ -51,13 +51,13 @@ import {
 import { SqliteBackend } from "./sqlite.ts";
 import { PostgresBackend } from "./postgres.ts";
 import { SessionBranchRdb } from "./branch.ts";
+import { balanceRewindPrefix } from "@morlay/session-branch";
 import { registerSessionImport } from "./import.ts";
 import { registerSessionDeletion } from "./deletion.ts";
 import { SessionQueryRdb } from "./session-query.ts";
 import { adoptLegacyRows, convertLegacyRows, isLegacyVersion } from "./legacy.ts";
 import { installStorageTakeover } from "./storage-takeover/index.ts";
 
-/** 投影缓存默认写节流（与上游 base 装配的部署值一致）。 */
 const DEFAULT_PROJECTION_WRITE_EVERY_EVENTS = 200;
 const DEFAULT_PROJECTION_WRITE_INTERVAL_MS = 5000;
 
@@ -88,11 +88,9 @@ export interface SessionPersistenceRdbInternals {
   registerReuseEventIds(childId: SessionId, map: ReadonlyMap<number, string>): void;
 }
 
-/** 投影 checkpoint 写节流（替换上游 `session-projection-cache` 的 Config）。 */
 export interface ProjectionCacheOptions {
-  /** 两次强制点之间累积多少已提交事件强制落盘（默认 200）。 */
   writeEveryEvents?: number;
-  /** 脏 checkpoint 在强制点之间允许滞留的最长毫秒数（默认 5000）。 */
+
   writeIntervalMs?: number;
 }
 
@@ -118,7 +116,10 @@ export type Config =
       projectionCache?: ProjectionCacheOptions;
     };
 
-export type SessionDeletionErrorCode = "SESSION_NOT_FOUND" | "SESSION_NOT_ARCHIVED" | "SESSION_LIVE";
+export type SessionDeletionErrorCode =
+  | "SESSION_NOT_FOUND"
+  | "SESSION_NOT_ARCHIVED"
+  | "SESSION_LIVE";
 
 export class SessionDeletionError extends Error {
   constructor(
@@ -130,19 +131,17 @@ export class SessionDeletionError extends Error {
   }
 }
 
-/** 一个已创建但未 materialize 的会话（本进程可见，其他进程不可见）。 */
-interface PendingSession {  readonly header: SessionHeader;
+interface PendingSession {
+  readonly header: SessionHeader;
   readonly revision: SessionPersistenceRevision;
   readonly inheritedEventCount: SessionLogOffset;
-  /** 输入空间 cursor（全 delta 批次也推进）。 */
+
   readonly cursor: number;
-  /** 是否调用过 append（close 时保留 pending）。 */
+
   readonly everAppended: boolean;
 }
 
-/** 会话级写所有权与 live 路由簿记。 */
 class RdbBackendTracker {
-  /** 每个 id 的活跃 write handle；`null` 表示 claim 构造中。 */
   private readonly writers = new Map<SessionId, RdbSessionHandle | null>();
   private readonly pending = new Map<SessionId, PendingSession>();
   private readonly openHandles = new Set<RdbSessionHandle>();
@@ -162,7 +161,6 @@ class RdbBackendTracker {
     });
   }
 
-  /** 更新 pending 的 cursor / everAppended（handle append 后同步）。 */
   updatePending(id: SessionId, cursor: number, everAppended: boolean): void {
     const entry = this.pending.get(id);
     if (entry === undefined) return;
@@ -212,7 +210,6 @@ class RdbBackendTracker {
     return writer === null ? undefined : writer;
   }
 
-  /** 该会话是否有任一打开中的 handle（读或写）。 */
   hasOpenHandle(id: SessionId): boolean {
     for (const handle of this.openHandles) {
       if (handle.id === id) return true;
@@ -248,21 +245,20 @@ class RdbBackendTracker {
   }
 }
 
-/** 一个打开会话的存储句柄：read / append / flush / close。 */
 class RdbSessionHandle implements SessionHandle {
   private chain: Promise<unknown> = Promise.resolve();
   private closing: Promise<void> | undefined;
-  /** 稠密 next-seq（输入空间计数，与旧版 coordinator cursor 同语义）。 */
+
   private cursor: number;
   private materialized: boolean;
-  /** live 路由缓冲（上游 seq 事件，drain 时过滤 delta 后重编号稠密）。 */
+
   private buffered: SessionEvent[] = [];
   private batchTimer: ReturnType<typeof setTimeout> | undefined;
   private drainPaused = false;
   private draining: Promise<void> | undefined;
-  /** write open 时发现的 torn tail 起点（append 前先截断）。 */
+
   private tornTruncateTo: number | undefined;
-  /** 是否调用过 append（即使全 delta 未落库）——close 时保留 pending。 */
+
   private everAppended = false;
 
   constructor(
@@ -286,7 +282,6 @@ class RdbSessionHandle implements SessionHandle {
     return this.state.inheritedEventCount;
   }
 
-  /** 输入空间 cursor（下一个待落库的上游 seq）。 */
   get cursorValue(): number {
     return this.cursor;
   }
@@ -311,9 +306,7 @@ class RdbSessionHandle implements SessionHandle {
       }
       throw new SessionPersistenceNotFoundError(this.id);
     }
-    // 读取时修复（视图只读，不落库）：结算字段补全、非法 surface 替换降级
-    // 或按 metering 数量夹取、metering range 对齐、provenance 重算、孤儿
-    // inbox splice 改写。
+
     repairReadView(log.events);
     return { eventState: "detached", events: log.events.slice(offset, offset + length) };
   }
@@ -337,7 +330,7 @@ class RdbSessionHandle implements SessionHandle {
         this.tornTruncateTo,
       );
       this.tornTruncateTo = undefined;
-      // 原样存储（与上游 JSONL 一致）：cursor 推进 batch.length，全部落库。
+
       this.cursor += batch.length;
       this.materialized = true;
       this.persistence.tracker.updatePending(this.id, this.cursor, true);
@@ -385,7 +378,6 @@ class RdbSessionHandle implements SessionHandle {
     return this.close();
   }
 
-  /** live 路由：缓冲一个已发布事件（持久化自有副本），并启动批量窗口。 */
   enqueueLive(event: SessionEvent, reportBackgroundFailure: (error: unknown) => void): void {
     this.buffered.push(structuredClone(event));
     if (this.batchTimer !== undefined || this.drainPaused) return;
@@ -395,7 +387,6 @@ class RdbSessionHandle implements SessionHandle {
     }, RdbSessionHandle.LIVE_WRITE_BATCH_MAX_DELAY_MS);
   }
 
-  /** rewind 截断后对齐 handle 的稠密 cursor 与继承前缀（DB 已截断）。 */
   resetAfterRewind(cursor: number, inheritedEventCount?: number): void {
     this.cursor = cursor;
     if (inheritedEventCount !== undefined) {
@@ -404,7 +395,6 @@ class RdbSessionHandle implements SessionHandle {
     }
   }
 
-  /** 排空 live 缓冲（过滤 delta + 重编号稠密 + append）。 */
   drainLive(): Promise<void> {
     return (this.draining ??= this.drainBuffered().finally(() => {
       this.draining = undefined;
@@ -421,9 +411,6 @@ class RdbSessionHandle implements SessionHandle {
       await this.enqueueChain(async () => {
         const batch = this.buffered.splice(0);
         try {
-          // 过滤已由 ensureLiveHandle 落库的 seed 前缀（上游 seq 空间，
-          // 与 public append 的 cursor 同空间）。直接走持久化原语（本函数
-          // 已在 chain 内，走 public append 会自锁）。
           const fresh = batch.filter((event) => event.seq >= this.cursor);
           if (fresh.length === 0) return;
           for (const [index, event] of fresh.entries()) {
@@ -521,7 +508,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
 
   private readonly reuseEventIds = new Map<SessionId, Map<number, string>>();
 
-  /** live 路由：session/created 后 handle 就绪前的缓冲。 */
   private readonly liveBuffers = new Map<SessionId, SessionEvent[]>();
   private readonly liveReady = new Map<SessionId, Promise<void>>();
 
@@ -531,8 +517,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
 
     injectedBackend?: Backend,
   ) {
-    // settings.yaml 的 `session-rdb` namespace 覆盖 cordis 层 entry config；
-    // settings 服务缺失时（纯 cordis 装配/测试）退化为 entry config。
     let resolved: Config = config;
     const settings = ctx.reflect.get("settings") as unknown as SettingsProvider | undefined;
     if (settings !== undefined) {
@@ -543,28 +527,24 @@ export class SessionPersistenceRdb extends SessionPersistence {
       );
       resolved = scope.get();
       scope.watch(() => {
-        // 后端在构造时建成，settings 变更后需重启 dsh 生效。
         ctx.logger.warn("session-rdb: settings changed; restart to apply the new configuration");
       });
     }
     super(ctx);
-    // 异步打开连接，避免阻塞插件 apply；存储钩子统一 await 同一个 readiness。
+
     this.config = resolved;
     this.backend = injectedBackend ?? createBackend(resolved);
     this.ready = this.init();
     this.installLiveRouting(ctx);
-    // 分支 provider 服务（rewind / forkFrom / timeline），随 fiber 卸载自动回滚。
+
     new SessionBranchRdb(this.ctx);
-    // 会话查询服务：接管官方 session-query-sqlite（同名 provide 会 fail loud，
-    // 其装配行由 better-session patch 禁用）；class-plugin 装载以复用基类的
-    // 精确读 / 过滤 / 血缘实现。
+
     this.ctx.plugin(SessionQueryRdb, {});
-    // 导入端点：webServer + connection 就绪后注册 `/api/session.import`。
+
     registerSessionImport(this.ctx, this);
-    // 删除端点：同通道注册 `/api/session.delete`（仅已归档会话）。
+
     registerSessionDeletion(this.ctx, this);
-    // storages 接管：storage hub 的 `rdb` 后端（workspace 域）与
-    // `ctx.sessionProjectionCache` 服务（替换上游插件）。
+
     installStorageTakeover(this.ctx, {
       repository: this.backend.storage,
       ready: this.ready,
@@ -581,8 +561,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     await this.backend.open();
     this.storeIdentity = this.backend.storeIdentity;
   }
-
-  // --- SessionPersistence service surface ---
 
   async create(
     header: SessionHeader,
@@ -636,11 +614,9 @@ export class SessionPersistenceRdb extends SessionPersistence {
       }
       const log = await this.readLog(id, {}, options?.signal);
       if (log === undefined) throw new SessionPersistenceNotFoundError(id);
-      // 读取视图修复必须先于校验：越界 replace（旧写入器重编号遗留的旧坐标）
-      // 降级/夹取、request/header 归一，否则上游事件校验 fail loud 拒绝整个
-      // 会话（load / open 是历史会话的加载入口，不能只依赖 handle.read）。
+
       repairReadView(log.events);
-      // fail-closed：未知事件类型（非 ignorable）拒绝解释。
+
       validateStoredEvents(log.meta, log.events);
       return this.tracker.adopt(
         new RdbSessionHandle(this, id, log.meta, "read", {
@@ -652,7 +628,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     }
     this.tracker.claimWrite(id);
     try {
-      // pending（created 未 materialize）会话：write open 接管其所有权。
       if (pending !== undefined) {
         return this.tracker.adopt(
           new RdbSessionHandle(this, id, pending.header, "write", {
@@ -666,13 +641,11 @@ export class SessionPersistenceRdb extends SessionPersistence {
       if (log === undefined) throw new SessionPersistenceNotFoundError(id);
       repairReadView(log.events);
       validateStoredEvents(log.meta, log.events);
-      // 迁移链会生成/合并事件（end-seed / attempt / chunk 合并），事件坐标与
-      // 存储桥接行数不再相等——写打开时把迁移视图整体落库，使读写同坐标；
-      // 否则 append 按存储 head 重编号会撞上已有行或写坏 log。
+
       if (log.migrated && log.events.length !== log.storedCount) {
         await this.rewriteMigratedLog(id, log);
       }
-      // 确认 head：本实例已读该会话，后续 append 的并发校验以此为基准。
+
       this.writeGuard.confirmHead(id, log.events.at(-1)?.seq ?? -1);
       return this.tracker.adopt(
         new RdbSessionHandle(this, id, log.meta, "write", {
@@ -733,14 +706,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     return snapshots;
   }
 
-  // --- RDB 特有能力（rewind / fork / 导出 / 删除 / 测试支撑） ---
-
-  /**
-   * 硬删除一个已归档会话：桥接、事件、投影 checkpoint、workspace 归属与会话行
-   * 在一个事务里删除，不再被引用的事件行一并清理（fork 共享的事件保留）。
-   * 只有已归档会话可删；live（有打开的 handle 或未 materialize）fail loud。
-   * 删除前经上游 `workspaceRegistry` 取消归档，保持归档集与 feed 一致。
-   */
   async deleteSession(id: SessionId, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     await this.ready;
@@ -782,7 +747,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     await registry.unarchiveSession(id);
   }
 
-  /** 导出当前世代的 jsonl artifact，视图只读不落库。 */
   async readRaw(
     id: SessionId,
     signal?: AbortSignal,
@@ -796,17 +760,18 @@ export class SessionPersistenceRdb extends SessionPersistence {
     const log = await this.readLog(id, {}, signal);
     if (log === undefined) return undefined;
     repairReadView(log.events);
-    const inheritedEventCount = Math.min(log.inheritedEventCount, log.events.length);
+    // 整段日志导出：只丢弃「已不平衡」之后的尾部（尾部未闭合的 step 是中断运行的正常形状，由上游 resume 补 closers）
+    const events = balanceRewindPrefix(log.events, { keepOpenTail: true });
+    const inheritedEventCount = Math.min(log.inheritedEventCount, events.length);
     return {
       meta: log.meta,
       inheritedEventCount,
-      // 内容按当前世代编码，文件名必须声明同一世代（上游导出用 session.vN.jsonl）。
+
       filename: sessionFormatLogFilename(SESSION_FORMAT_VERSION),
-      content: toJsonlArtifact(log.meta, inheritedEventCount, log.events),
+      content: toJsonlArtifact(log.meta, inheritedEventCount, events),
     };
   }
 
-  /** 空会话 materialize（flush 的持久化屏障）。 */
   async materializeEmpty(
     meta: SessionHeader,
     inheritedEventCount: SessionLogOffset,
@@ -820,10 +785,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     this.writeGuard.confirmHead(meta.id, -1);
   }
 
-  /** 原样 append 落库（handle 已校验 contiguity；torn tail 先截断）。
-   *  与上游 JSONL 一致：ignorable 事件原样存储，不做过滤。写路径校验当前
-   *  格式形状（fail-closed）：未知类型（非 ignorable）与非法消息形状拒绝入库；
-   *  非当前格式（v0/v1/v2）数据只在读取时经 legacy 转换链动态转换，不落新库。 */
   async appendBatch(
     meta: SessionHeader,
     inheritedEventCount: SessionLogOffset,
@@ -832,10 +793,9 @@ export class SessionPersistenceRdb extends SessionPersistence {
   ): Promise<boolean> {
     await this.ready;
     if (events.length === 0) return false;
-    // 写路径当前格式校验：与读路径同契约（validateStoredEvents），保证新入库
-    // 数据只能是当前格式形状。拷贝避免 adopt 替换污染调用方数组。
+
     validateStoredEvents(meta, [...events]);
-    // fork 派生会话的 seed 复用源会话事件行（不复制）；消费后清除。
+
     const reuse = this.reuseEventIds.get(meta.id);
     if (reuse !== undefined) this.reuseEventIds.delete(meta.id);
     let confirmedHead = -1;
@@ -851,9 +811,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
       }
       await tx.upsertSession({ meta, inheritedEventCount }, randomUUID());
       const head = await tx.getHead(meta.id);
-      // 重编号前拒绝第二个写入者：多实例共享数据库时，第二个写入者经陈旧
-      // 视图 append 会把事件静默重编号到对方尾部、损坏 log。磁盘 head 必须
-      // 等于本实例确认过的最后一个 head。
+
       this.writeGuard.assertNoConcurrentWriter(meta.id, head.fHeadSequence);
       const { headEventId, headSequence } = await appendEventTail(
         tx,
@@ -866,13 +824,12 @@ export class SessionPersistenceRdb extends SessionPersistence {
       await tx.bumpRevision(meta.id);
       confirmedHead = headSequence;
     });
-    // 提交后才确认新 head：回滚不得留下本实例实际未写的已确认 head。
+
     this.writeGuard.confirmHead(meta.id, confirmedHead);
     this.tracker.materialized(meta.id);
     return true;
   }
 
-  /** 读取一个会话的稠密 log（含 torn tail 检测，不含修复改写）。 */
   async readLog(
     id: SessionId,
     options: { fromSeq?: number } = {},
@@ -889,10 +846,8 @@ export class SessionPersistenceRdb extends SessionPersistence {
 
         revision: number;
 
-        /** 存储桥接行数（迁移链可能生成/合并事件，与 `events.length` 不同）。 */
         storedCount: number;
 
-        /** 是否经上游迁移链转换（非当前格式 → 当前格式）。 */
         migrated: boolean;
       }
     | undefined
@@ -908,11 +863,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
         ? await this.backend.getEventRows(id)
         : await this.backend.getEventRows(id, options.fromSeq);
     signal?.throwIfAborted();
-    // 非当前格式（v0/v1/v2）历史数据：行重建为物理记录，经上游迁移链转
-    // 当前逻辑事件。迁移链自带 seq gap / torn tail 校验（strict recovery），
-    // 无需 scanRows。混合世代 log（旧写入器跨上游版本追加）不是任何单一已
-    // 发布格式，迁移链必然拒绝——回退为当前格式视图（header 版本归一 +
-    // 读取视图修复）。
+
     if (isLegacyVersion(row.fVersion)) {
       try {
         const converted = convertLegacyRows(row, eventRows);
@@ -955,15 +906,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     };
   }
 
-  /**
-   * 把迁移链读出的当前格式视图整体落库（非当前格式会话写打开时的一次性迁移）。
-   *
-   * 迁移链会生成/合并事件（end-seed / attempt / chunk 合并），事件 seq 空间
-   * 与存储桥接行数不再相等；写路径以存储 head 为锚点重编号，二者不一致会让
-   * append 撞上已有行。这里在同一事务内删光本会话桥接行、按迁移视图重建
-   * （新事件行，完整信封），并更新 head 与 revision；旧事件行保留（可能被
-   * fork 子会话引用，孤儿由惰性 GC 处理）。
-   */
   private async rewriteMigratedLog(
     id: SessionId,
     log: { meta: SessionHeader; inheritedEventCount: number; events: SessionEvent[] },
@@ -1024,7 +966,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     return this.rowRevision(row);
   }
 
-  /** 便捷：create + append + close（测试与导入路径共用）。 */
   async createAndAppend(
     header: SessionHeader,
     events: readonly SessionEvent[],
@@ -1043,7 +984,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     }
   }
 
-  /** 便捷：open(read) + read 全量 + close。 */
   async load(
     id: SessionId,
     signal?: AbortSignal,
@@ -1057,8 +997,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
       );
       const row = await this.backend.getSession(id);
       if (row === undefined) throw new SessionPersistenceNotFoundError(id);
-      // 非当前格式会话：meta 与继承前缀来自转换链（handle.header 已是转换后的
-      // 当前格式 header）；当前格式会话用存储行。
+
       if (isLegacyVersion(row.fVersion)) {
         return {
           meta: handle.header,
@@ -1076,7 +1015,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     }
   }
 
-  /** 便捷：open(write) + append + close。 */
   async append(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
     const handle = await this.open(id, "write");
     try {
@@ -1086,7 +1024,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     }
   }
 
-  /** 便捷：readFrom（稠密后缀）。 */
   async readFrom(
     id: SessionId,
     fromSeq: number,
@@ -1141,8 +1078,6 @@ export class SessionPersistenceRdb extends SessionPersistence {
     );
   }
 
-  // --- live 路由：session/created → create/adopt handle；event → 缓冲；flush → drain ---
-
   private installLiveRouting(ctx: Context): void {
     ctx.on("session/created", (session: Session) => {
       this.liveBuffers.set(session.id, []);
@@ -1154,7 +1089,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
         );
       });
     });
-    // HMR：插件 apply 时已存在的 live 会话不重放 session/created——补种。
+
     for (const session of ctx.sessions.list()) {
       this.liveBuffers.set(session.id, []);
       const ready = this.ensureLiveHandle(session);
@@ -1207,24 +1142,20 @@ export class SessionPersistenceRdb extends SessionPersistence {
         closeHandle();
         return;
       }
-      // handle 可能仍在构造（ensureLiveHandle 异步）：等就绪后再 close。
+
       void ready.then(closeHandle, closeHandle);
     });
     ctx.effect(
       () => async () => {
-        // 先等所有 live handle 就绪（ensureLiveHandle 异步），再统一关闭。
         await Promise.allSettled(this.liveReady.values());
         await this.tracker.closeAll();
-        // 等 init（异步 open）settle 后关闭后端连接：dispose 返回后调用方
-        // 可能立即释放存储（pg 测试 drop 数据库），未完成的 open 会以
-        // 无人处理的 rejection 泄漏。
+
         await this.close();
       },
       `${this.name} open handles`,
     );
   }
 
-  /** session/created 后为 live 会话建立 write handle（create 或 adopt）。 */
   private async ensureLiveHandle(session: Session): Promise<void> {
     const id = session.header.id;
     if (this.tracker.writerOf(id) !== undefined) return;
@@ -1232,15 +1163,12 @@ export class SessionPersistenceRdb extends SessionPersistence {
     const stored = await this.readLog(id, {});
     let handle: RdbSessionHandle;
     if (stored === undefined) {
-      // 新会话：注册 pending 并返回 write handle；构造 seed 事件不发布
-      // session/event，须在此一次性落库（与旧版 onCreated 同语义）。
       handle = (await this.create(session.header, {
         inheritedEventCount: session.inheritedEventCount,
       })) as RdbSessionHandle;
       const seed = session.snapshotEvents();
       if (seed.length > 0) await handle.append(seed);
     } else {
-      // adopt：校验 cwd / inheritedEventCount / seed 前缀匹配后接管写所有权。
       if (stored.meta.cwd !== session.header.cwd) {
         throw new Error(
           `session "${id}" is already persisted at a different cwd (persisted: ${String(stored.meta.cwd)}, live: ${String(session.header.cwd)}) (id collision)`,
@@ -1252,8 +1180,7 @@ export class SessionPersistenceRdb extends SessionPersistence {
         );
       }
       assertVersion(stored.meta);
-      // adopt 比较必须与读取视图同源：live seed 来自修复后的读取视图（补
-      // stream、surface 修复），未修复的存储视图会把修复差异误判为 id 冲突。
+
       repairReadView(stored.events);
       const seed = session.snapshotEvents();
       if (!seedCoversPrefix(seed, stored.events)) {
@@ -1262,11 +1189,11 @@ export class SessionPersistenceRdb extends SessionPersistence {
         );
       }
       handle = (await this.open(id, "write")) as RdbSessionHandle;
-      // 持久化 seed 后缀（构造 seed 事件不发布 session/event，缓冲看不到）。
+
       const suffix = seed.slice(stored.events.length);
       if (suffix.length > 0) await handle.append(suffix);
     }
-    // 把 handle 就绪前缓冲的事件移交。
+
     const buffered = this.liveBuffers.get(id);
     if (buffered !== undefined && buffered.length > 0) {
       this.liveBuffers.set(id, []);
@@ -1296,8 +1223,7 @@ function createBackend(config: Config): Backend {
     });
   }
   const pool = new Pool({ connectionString: config.connectionString });
-  // node-postgres 要求 Pool 必须监听 error：未监听的 idle client error 会
-  // 以 uncaughtException 崩溃进程；池级错误在下次查询处可见，这里只消费。
+
   pool.on("error", () => {});
   const db = drizzlePg({ client: pool });
   const identityBase = [
@@ -1323,7 +1249,7 @@ async function appendEventTail(
 ): Promise<{ headEventId: string; headSequence: number }> {
   let parentId = anchor.parentId;
   let nextSeq = anchor.nextSeq;
-  // 两个批次一次性多行 INSERT（N 事件 2 条语句，而非 2N）。
+
   const eventRows: EventInsert[] = [];
   const bridgeRows: Array<{
     fSessionId: SessionId;
@@ -1336,9 +1262,7 @@ async function appendEventTail(
     const eventId = reusedId ?? randomUUID();
     if (reusedId === undefined) {
       const { kind, role, name, actionId } = eventDimensions(event);
-      // fData 存完整事件（含 ignorable 信封，与 JSONL 每行同构）：data 部分
-      // 与信封字段在同一 JSON 记录里，读回时整体解析。surfaceOp 走桥接行
-      // 列（f_surface_op），sourceEventSeqs 不落库（读取时重计算）。
+
       const raw = event as SessionEvent & {
         ignorable?: unknown;
         surfaceOp?: unknown;
@@ -1373,9 +1297,7 @@ async function appendEventTail(
   }
   if (eventRows.length > 0) await tx.insertEvents(eventRows);
   await tx.insertBridges(bridgeRows);
-  // 标题是会话数据的一部分：批内出现 session/title 时同步刷新会话行，
-  // 列表消费直接取列（sessions.title 直取）。
-  // 插件合并类型不在 core 的判别联合内，按字符串比较（同 eventDimensions）。
+
   if (events.some((event) => (event.type as string) === "session/title")) {
     await tx.refreshTitle(meta.id);
   }

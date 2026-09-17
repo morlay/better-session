@@ -12,14 +12,44 @@ import {
   SessionBranchError,
   balanceRewindPrefix,
   buildTimeline,
+  rewindKeepLength,
   type BranchAnchorMode,
   type BranchBoundary,
   type ForkFromOptions,
   type SessionBranchProvider,
 } from "@morlay/session-branch";
 import { randomUUID } from "node:crypto";
+import type { Backend } from "./backend.ts";
 import type { SessionPersistenceRdb } from "./index.ts";
+import { isLegacyVersion } from "./legacy.ts";
 import { rowToMeta } from "./log.ts";
+
+function assertRewindBoundary(
+  id: SessionId,
+  toBoundary: number,
+  boundaryType: string | undefined,
+  head: number,
+): void {
+  if (toBoundary === -1) return;
+  if (toBoundary > head) {
+    throw new SessionBranchError(
+      `rewind boundary ${toBoundary} is beyond the stored head ${head}`,
+      "INVALID_BOUNDARY",
+    );
+  }
+  if (boundaryType === undefined) {
+    throw new SessionBranchError(
+      `rewind boundary ${toBoundary} does not exist in session "${id}"`,
+      "INVALID_BOUNDARY",
+    );
+  }
+  if (boundaryType !== "turn/end" && boundaryType !== "user/message") {
+    throw new SessionBranchError(
+      `rewind boundary ${toBoundary} is not a turn/end or user/message (${boundaryType})`,
+      "INVALID_BOUNDARY",
+    );
+  }
+}
 
 export function locateTurnEnd(
   events: readonly SessionEvent[],
@@ -42,7 +72,7 @@ export function locateTurnEnd(
   }
   const firstAfter = ends.find((seq) => seq >= atSeq);
   if (firstAfter !== undefined) return firstAfter;
-  // atSeq 越过末尾：若其落在未闭合轮内则拒绝，否则回退最后一个闭合轮。
+
   const lastStart = [...events].reverse().find((event) => event.type === "turn/start");
   if (lastStart !== undefined && lastStart.seq <= atSeq) {
     throw new SessionBranchError(`anchor ${atSeq} lies inside an open turn`, "OPEN_TURN");
@@ -67,44 +97,29 @@ export interface LiveSessionHooks {
 
   flush(session: Session): Promise<boolean>;
 
-  // 丢弃 live 会话已缓存的投影单元：rewind 直接截断内存 log，投影 registry
-  // 的 observedSeq 仍停在截断前，后续 append 的事件（seq 更小）会被 drive()
-  // 跳过，重放输入永远进不了 inbox 投影。可选：纯持久化环境没有投影服务。
+  warn?(message: string): void;
+
   resetProjections?(session: Session): void;
 
-  // 丢弃 token meter 对该会话的重放折叠：meter 只按 seq 前进，截断后的水位
-  // 停在被删除的 seq 空间，续写事件会被从错位处折叠——一条 `step/end` 找不到
-  // 配对的 `step/start` 时直接抛错（压缩测量即失败）。可选：纯持久化环境没有
-  // 测量服务。
   resetTokenMeter?(session: Session): void;
 
-  // 用截断后的 log 重写该会话的持久化投影检查点：rewind 不会产生事件，
-  // 缓存行的水位（以及基于它折出的值）仍停在截断前。超前行不会被前端投影
-  // store 的 higher-seq-wins 规则覆盖（rewind 后的正确值 seq 更小），表现为
-  // 轮次导航残留被删除的旧轮次。可选：纯持久化环境没有投影缓存服务。
   refreshProjectionCache?(session: ProjectionCacheSession): Promise<void>;
 }
 
-/**
- * 投影检查点刷新所需的最小会话面：cold rewind 没有 live Session 可复用，
- * 而截断后的前缀未必是合法的独立会话（surface 引用可能悬空），不能走
- * `Session.create` 的校验；缓存服务只读 id / header / inheritedEventCount
- * 与事件前缀，用普通对象承载即可。
- */
 export interface ProjectionCacheSession {
   readonly id: SessionId;
   readonly header: SessionHeader;
   readonly inheritedEventCount: SessionLogOffset;
+
+  // 没有 live 会话时（cold rewind）缓存按这个新水位截断，不 fold 日志
+  readonly headSeq?: number;
   snapshotEvents(): readonly SessionEvent[];
 }
 
-// 投影 registry 的失效面（上游私有结构，duck-type 读取）。
 interface ProjectionRegistryLike {
   registrations?: Map<string, { cells: WeakMap<object, unknown> }>;
 }
 
-// 上游 TokenMeter 的 per-session 重放状态（私有结构，duck-type 读取）：删除
-// 该键即让下一次 measure 从零重放当前 log。
 interface TokenMeterLike {
   states?: WeakMap<object, unknown>;
 }
@@ -114,13 +129,9 @@ export interface LiveAgentLike {
 
   requestHeaderLogged?: boolean;
 
-  // 上游 Agent 的 inbox 契约面（ReactLoopInbox.clear）：rewind 后残留的排队
-  // 输入必须 durable 取消，否则 agent 会继续处理它们。可选：测试替身可能没有。
   inbox?: { clear(): void };
 }
 
-// 上游 SurfaceManager 私有结构（duck-type 读取）：重置折叠状态，保留
-// borrowed 的 projections 定义，截断后重放的事件才带得动插件消息投影。
 interface SurfaceManagerLike {
   _state: {
     nodes: number[];
@@ -239,7 +250,12 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
     if (source === undefined)
       throw new SessionBranchError(`session "${sourceId}" not found`, "SESSION_NOT_FOUND");
     const boundary = locateTurnEnd(source.events, atSeq, anchorMode);
-    const prefix = source.events.slice(0, boundary + 1);
+    const prefix = balanceRewindPrefix(source.events.slice(0, boundary + 1));
+    if (prefix.length <= boundary) {
+      this.live.warn?.(
+        `session-rdb: fork "${sourceId}" dropped ${boundary + 1 - prefix.length} trailing event(s) from seq ${prefix.length} to keep the seed's step pairs balanced`,
+      );
+    }
     const childId = childSessionId ?? mintSessionId();
     const childMeta: SessionHeader = {
       version: SESSION_FORMAT_VERSION,
@@ -261,9 +277,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
     };
     const seed = [...renumber(prefix, 0), ...renumber(seedSuffix, prefix.length)];
-    // 事件行复用：前缀事件（稠密 seq → 源会话已存在事件行 id）注册到写路径，
-    // appendBatch 消费时复用事件行、不复制。seedSuffix 的 manualTurn 事件是
-    // 新事件（无源行），不注册。
+
     const internals = this.persistence.internals();
     const sourceRows = await internals.backend.getEventRows(sourceId);
     const sourceEventIds = new Map(sourceRows.map((row) => [row.fSequence, row.fEventId]));
@@ -297,44 +311,49 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
       );
     }
     const live = this.live.getSession(id);
-    // live 会话先落盘 write-behind 缓冲，保证后续读取与后端事务同视图。
+
     if (live !== undefined) await this.live.flush(live);
-    // 边界校验用原始事件（readLog，不补 closers）——inspect 会给未闭合
-    // log 补合成 closers，把 user/message 边界掩盖成 turn/end，丢失 exclusive
-    // 语义。cold 分支同时取回 inheritedEventCount：刷新投影检查点时要用它
-    // 重建与存储一致的会话身份。
-    const raw = live === undefined ? await this.persistence.readLog(id, {}, signal) : undefined;
-    if (live === undefined && raw === undefined) {
-      throw new SessionBranchError(`session "${id}" not found`, "SESSION_NOT_FOUND");
-    }
-    const inspection =
-      live === undefined ? undefined : await this.persistence.internals().inspect(id, signal);
-    const events = live === undefined ? raw!.events : inspection!.events;
-    const meta = live === undefined ? raw!.meta : inspection!.meta;
-    const boundaryEvent = events[toBoundary];
-    if (toBoundary === -1) {
-      // 空前缀：清空整个 log（head 归 -1），与 commitRepair 的初始状态一致。
-    } else if (boundaryEvent === undefined) {
-      throw new SessionBranchError(
-        `rewind boundary ${toBoundary} does not exist in session "${id}"`,
-        "INVALID_BOUNDARY",
-      );
-    } else if (boundaryEvent.type !== "turn/end" && boundaryEvent.type !== "user/message") {
-      throw new SessionBranchError(
-        `rewind boundary ${toBoundary} is not a turn/end or user/message (${boundaryEvent.type})`,
-        "INVALID_BOUNDARY",
-      );
-    }
-    // 保留前缀长度：turn/end inclusive；user/message exclusive（边界消息由
-    // 编辑版替换）。exclusive 截断可能残留孤儿 step/start，经平衡化剔除。
-    const rawKeepLength =
-      toBoundary === -1 ? 0 : boundaryEvent!.type === "turn/end" ? toBoundary + 1 : toBoundary;
-    const kept = balanceRewindPrefix(events.slice(0, rawKeepLength));
-    const keepLength = kept.length;
 
     const internals = this.persistence.internals();
-    // 原样存储（无过滤）：live 视图与 RDB head 同空间（上游 seq），
-    // 边界即保留前缀长度 - 1。
+
+    // SessionBranch 是「先停止、再操作」的排他面（ADR 0003）：rewind 直连 DB 做最小工作，
+    // 不走持久化抽象的全量读路径（readLog 会拉全部事件 + legacy 转换 + 读视图修复）。
+    const row = await internals.backend.getSession(id);
+    if (row === undefined) {
+      throw new SessionBranchError(`session "${id}" not found`, "SESSION_NOT_FOUND");
+    }
+    const meta = rowToMeta(row);
+
+    let rawKeepLength: number;
+    let kept: readonly SessionEvent[] | undefined;
+    if (isLegacyVersion(row.fVersion)) {
+      // 旧格式的持久化坐标与当前视图 seq 不一致：只有这条路径需要读日志（含格式转换与读视图修复）
+      const log = await this.persistence.readLog(id, {}, signal);
+      if (log === undefined) {
+        throw new SessionBranchError(`session "${id}" not found`, "SESSION_NOT_FOUND");
+      }
+      const boundaryType = log.events[toBoundary]?.type;
+      assertRewindBoundary(id, toBoundary, boundaryType, log.events.length - 1);
+      rawKeepLength =
+        toBoundary === -1 ? 0 : boundaryType === "turn/end" ? toBoundary + 1 : toBoundary;
+      kept = balanceRewindPrefix(log.events.slice(0, rawKeepLength));
+    } else {
+      const boundaryType =
+        toBoundary === -1 ? undefined : await internals.backend.getEventTypeAt(id, toBoundary);
+      assertRewindBoundary(id, toBoundary, boundaryType, row.fHeadSequence);
+      rawKeepLength =
+        toBoundary === -1 ? 0 : boundaryType === "turn/end" ? toBoundary + 1 : toBoundary;
+    }
+    const keepLength =
+      kept === undefined
+        ? await this.rewindKeepLength(id, rawKeepLength, internals.backend)
+        : kept.length;
+    if (keepLength < rawKeepLength) {
+      this.live.warn?.(
+        `session-rdb: rewind "${id}" dropped ${rawKeepLength - keepLength} trailing event(s) from seq ${keepLength} to keep the retained prefix's step pairs balanced`,
+      );
+    }
+
     const denseBoundary = keepLength - 1;
     const newSeedLength = await internals.backend.transaction(async (tx) => {
       signal?.throwIfAborted();
@@ -354,111 +373,153 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
           await tx.updateHead(id, prev.fEventId, prev.fSequence);
         }
       }
-      // 截断进入继承前缀后收缩 f_seed_length（只收缩、不扩张），防止存储
-      // 出现「继承前缀超过存储事件数」的矛盾（上游 load 判损坏）。
+
       const storedSeedLength = await tx.getSeedLength(id);
       let shrunk = storedSeedLength;
       if (storedSeedLength !== null && storedSeedLength > denseBoundary + 1) {
         await tx.updateSeedLength(id, denseBoundary + 1);
         shrunk = denseBoundary + 1;
       }
-      // 截断可能删掉最新的 session/title：标题随保留前缀重算。
+
       await tx.refreshTitle(id);
       await tx.bumpRevision(id);
       return shrunk;
     });
 
-    // 更新确认 head（下一次 append 的并发校验基准），与 appendBatch 同语义。
     internals.writeGuard.confirmHead(id, denseBoundary);
 
     if (live !== undefined) {
-      // live 分支：截断内存 log 并重置派生缓存；同步 handle cursor 与
-      // agent 轮次游标。不调用 load——live 时 load 会先 flush 把旧内存写回，
-      // 撤销本次截断。
       truncateLiveSession(live, keepLength);
-      // 投影缓存同样停在截断前的水位，必须先失效，否则截断后的重放事件
-      // （seq 回退）不会进入投影。
+
       this.live.resetProjections?.(live);
-      // token meter 的按 seq 折叠同样停在截断前的水位。
+
       this.live.resetTokenMeter?.(live);
       const agent = this.live.getAgent(id);
       if (agent !== undefined) {
         agent.requestHeaderLogged = false;
-        // 重置 agent 的轮次游标，使重放（followup）复用目标轮号而非递增。
+
         const lastTurn =
           live.snapshotEvents().findLast((e) => e.type === "turn/start")?.data.turn ?? 0;
         const phase = (agent as unknown as { phase?: { lastTurn?: number } }).phase;
         if (phase !== undefined) phase.lastTurn = lastTurn;
       }
-      // DB 已截断：同步 live write handle 的 cursor 与继承前缀，使下一次
-      // append 从截断后的位置续接。handle cursor 是**上游空间**（live 内存
-      // log 截断后的长度，与 drainBuffered 的过滤/contiguity 校验同空间）。
+
       const handle = this.persistence.tracker.writerOf(id);
       if (handle !== undefined) {
         handle.resetAfterRewind(keepLength, newSeedLength === null ? undefined : newSeedLength);
       }
-      // 截断后强制清空排队输入：保留区里未被截断的 pending（`agent/inbox/spliced`）
-      // 仍会被 agent 处理，必须 durable 取消。cursor 已对齐，取消事件从截断点续接。
+
       agent?.inbox?.clear();
-      // 取消事件先经 coordinator 缓冲，落盘后 rewind 才真正 durable（调用方
-      // 可能在 rewind 返回后直接读后端）。
+
       await this.live.flush(live);
-      // 持久化投影检查点也要退到截断后的水位：rewind 不产生事件，缓存行
-      // 会停在截断前；超前行锁死前端（higher-seq-wins），轮次导航残留旧轮次。
+
       await this.refreshProjectionCache(live);
     } else {
-      // cold：用截断后的前缀 + 存储身份构造最小会话面，让缓存服务按截断后
-      // 的 log 重写检查点（没有 live 会话可复用，也不为此 resume 一个 agent）。
+      // rewind 不读日志：缓存行按新水位截断（保留下来的投影单元仍在截断前缀内）
       await this.refreshProjectionCache({
         id,
         header: meta,
-        inheritedEventCount: SessionLogOffset(raw!.inheritedEventCount),
-        snapshotEvents: () => kept,
+        inheritedEventCount: SessionLogOffset(newSeedLength ?? row.fSeedLength ?? 0),
+        headSeq: keepLength - 1,
+        snapshotEvents: () => [],
       });
     }
 
-    const row = await internals.backend.getSession(id);
-    if (row === undefined) {
-      // 空会话（toBoundary = -1 且从未有行）：返回「已确认缺席」快照。
-      return {
-        header: {
-          version: SESSION_FORMAT_VERSION,
-          id,
-          createdAt: meta.createdAt,
-          ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
-          ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
-          isSeeded: meta.isSeeded,
-          ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
-          ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
-          ...(meta.agentPreset !== undefined ? { agentPreset: meta.agentPreset } : {}),
-        },
-        revision:
-          (await internals.readStoredRevision(id)) ??
-          (await this.persistence.readStoredRevision(id))!,
-      };
-    }
     return { header: rowToMeta(row), revision: (await internals.readStoredRevision(id))! };
   }
 
-  /**
-   * 让持久化投影检查点跟随截断后的 log（见 {@link LiveSessionHooks.refreshProjectionCache}）。
-   * 缓存是派生数据：刷新失败只让缓存多滞后一轮，不能让 rewind 失败。
-   */
+  // 保留长度只依赖尾部窗口：从 rawKeepLength 往回读类型（有界），窗口没覆盖到最近一个 turn/end
+  // 就翻倍重读，直到覆盖或到达前缀开头。
+  private async rewindKeepLength(
+    id: SessionId,
+    rawKeepLength: number,
+    backend: Backend,
+  ): Promise<number> {
+    if (rawKeepLength === 0) return 0;
+    let limit = 64;
+    for (;;) {
+      const rows = await backend.getEventTypesBefore(id, rawKeepLength, limit);
+      const types = [...rows].reverse().map((row) => row.fType);
+      const windowStart = rawKeepLength - types.length;
+      if (types.includes("turn/end") || windowStart === 0 || types.length >= rawKeepLength) {
+        return rewindKeepLength(types, rawKeepLength);
+      }
+      limit *= 4;
+    }
+  }
+
   private async refreshProjectionCache(session: ProjectionCacheSession): Promise<void> {
     if (this.live.refreshProjectionCache === undefined) return;
     try {
       await this.live.refreshProjectionCache(session);
-    } catch {
-      // 实现方（SessionBranchRdb）已记日志；此处只保证 rewind 不因派生数据失败。
-    }
+    } catch {}
   }
 }
 
 export class SessionBranchRdb extends SessionBranch {
   static inject = ["sessionPersistence", "sessions"];
 
+  private readonly warned = new Set<string>();
+
   constructor(ctx: import("@deepseek-ai/cordis").Context) {
     super(ctx);
+  }
+
+  // 覆盖导入等整段替换内存 log 的路径复用 rewind 的失效钩子（token-meter 水位是位置不是事件身份）
+  resetLiveDerivedState(session: Session): void {
+    this.resetProjectionCells(session);
+    this.resetTokenMeterFold(session);
+  }
+
+  private warnOnce(key: string, message: string): void {
+    if (this.warned.has(key)) return;
+    this.warned.add(key);
+    this.ctx.logger.warn(message);
+  }
+
+  private resetProjectionCells(session: Session): void {
+    const registry = (this.ctx as unknown as { get(name: string): unknown }).get(
+      "sessionProjections",
+    ) as ProjectionRegistryLike | undefined;
+    const registrations = registry?.registrations;
+    if (!(registrations instanceof Map)) {
+      this.warnOnce(
+        "sessionProjections.registrations",
+        `session-rdb: ctx.sessionProjections.registrations is not a Map (upstream field shape changed); rewind leaves the projection cell caches of "${session.id}" stale, so replayed events can be skipped`,
+      );
+      return;
+    }
+    for (const registration of registrations.values()) {
+      const cells = registration?.cells;
+      if (!(cells instanceof WeakMap)) {
+        this.warnOnce(
+          "sessionProjections.cells",
+          `session-rdb: ctx.sessionProjections registration cells are not a WeakMap (upstream field shape changed); rewind leaves the projection cell caches of "${session.id}" stale, so replayed events can be skipped`,
+        );
+        continue;
+      }
+      cells.delete(session);
+    }
+  }
+
+  private resetTokenMeterFold(session: Session): void {
+    const meter = this.ctx.get("tokenMeter") as TokenMeterLike | undefined;
+    if (meter === undefined) {
+      this.warnOnce(
+        "tokenMeter",
+        `session-rdb: ctx.tokenMeter is not mounted; after rewind the token-meter fold watermark of "${session.id}" may stay stale, so compaction can report "step/end ... has no matching step/start event"`,
+      );
+      return;
+    }
+    const states = meter.states;
+    if (!(states instanceof WeakMap)) {
+      this.warnOnce(
+        "tokenMeter.states",
+        `session-rdb: ctx.tokenMeter.states is not a WeakMap (upstream field shape changed); after rewind the token-meter fold watermark of "${session.id}" may stay stale, so compaction can report "step/end ... has no matching step/start event"`,
+      );
+      return;
+    }
+    states.delete(session);
   }
 
   private readonly provider = new SessionBranchRdbProvider(
@@ -466,36 +527,34 @@ export class SessionBranchRdb extends SessionBranch {
     {
       getSession: (id) => this.ctx.sessions.get(id),
       getAgent: (id) => {
-        // agents 服务可选（纯持久化环境无 agent-loop）：经 ctx.get 动态访问。
         const agents = this.ctx.get("agents") as
           | { get(id: SessionId): LiveAgentLike | undefined }
           | undefined;
         return agents?.get(id);
       },
       flush: (session) => this.ctx.sessions.flush(session),
-      resetProjections: (session) => {
-        // sessionProjections 是可选服务（纯持久化环境无 agent-loop/投影）。
-        const registry = (this.ctx as unknown as { get(name: string): unknown }).get(
-          "sessionProjections",
-        ) as ProjectionRegistryLike | undefined;
-        if (registry?.registrations === undefined) return;
-        for (const registration of registry.registrations.values()) {
-          registration.cells.delete(session);
-        }
+      warn: (message) => {
+        this.ctx.logger.warn(message);
       },
-      resetTokenMeter: (session) => {
-        // tokenMeter 是可选服务（纯持久化环境无测量消费者）。上游字段名变化
-        // 时这里退化为空操作——回归测试（rewind 后同一 meter 可测量）守住契约。
-        const meter = this.ctx.get("tokenMeter") as TokenMeterLike | undefined;
-        meter?.states?.delete(session);
-      },
+      resetProjections: (session) => this.resetProjectionCells(session),
+      resetTokenMeter: (session) => this.resetTokenMeterFold(session),
       refreshProjectionCache: async (session) => {
-        // sessionProjectionCache 是可选服务（纯持久化环境无投影缓存）。
         const cache = this.ctx.get("sessionProjectionCache") as
-          | { write(session: ProjectionCacheSession): Promise<void> }
+          | {
+              write(session: ProjectionCacheSession): Promise<void>;
+              truncateTo?(
+                header: SessionHeader,
+                inheritedEventCount: SessionLogOffset,
+                headSeq: number,
+              ): Promise<void>;
+            }
           | undefined;
         if (cache === undefined) return;
         try {
+          if (session.headSeq !== undefined && cache.truncateTo !== undefined) {
+            await cache.truncateTo(session.header, session.inheritedEventCount, session.headSeq);
+            return;
+          }
           await cache.write(session);
         } catch (error: unknown) {
           this.ctx.logger.warn(
@@ -541,8 +600,7 @@ export class SessionBranchRdb extends SessionBranch {
   async timeline(sessionId: SessionId, signal?: AbortSignal) {
     const persistence = this.ctx.sessionPersistence as SessionPersistenceRdb;
     const snapshots = await persistence.listSnapshots(signal);
-    // live 会话从内存 log 读自有后缀（含 ignorable 版本效果事件）；cold 会话
-    // 走持久化 readFrom（版本效果不落 canonical log，timeline 为 lineage 骨架）。
+
     const readOwnEvents = async (id: SessionId, fromSeq: number, s?: AbortSignal) => {
       const live = this.ctx.sessions.get(id);
       if (live !== undefined) return live.snapshotEvents().slice(fromSeq);

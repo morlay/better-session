@@ -1,7 +1,7 @@
 {
   "name": "@morlay/dsh-desktopify",
   "version": "0.1.7",
-  "description": "Desktop packaging tool for dsh workspaces: hosts the upstream dsh-desktop-host child over framed byte pipes, with dev (workspace-linked) and bundle (static, unsigned) modes.",
+  "description": "Desktop packaging tool for dsh workspaces: hosts the upstream dsh-desktop-host child over framed byte pipes, with dev (workspace-linked, client bundles served from source) and bundle (static, unsigned) modes.",
   "keywords": [
     "desktop",
     "dsh",
@@ -26,6 +26,7 @@
   "module": "./dist/index.mjs",
   "exports": {
     ".": "./src/index.ts",
+    "./dev-client-bundles": "./src/dev-client/index.ts",
     "./package.json": "./package.json",
     "./desktop-host": "./dist/desktop-host/lib/index.js"
   },
@@ -35,6 +36,7 @@
     },
     "exports": {
       ".": "./dist/index.mjs",
+      "./dev-client-bundles": "./dist/dev-client-bundles.mjs",
       "./package.json": "./package.json",
       "./desktop-host": "./dist/desktop-host/lib/index.js"
     }
@@ -47,9 +49,11 @@
   "dependencies": {
     "@deepseek-ai/dsh": "workspace:^",
     "commander": "^15.0.0",
+    "devkit": "workspace:^",
     "electron": "^44.3.0",
     "electron-builder": "^26.16.1",
     "extract-zip": "^2.0.1",
+    "rolldown": "1.x",
     "sharp": "^0.35.4",
     "tar": "^7.5.0",
     "tsdown": "0.22.x"
@@ -58,6 +62,11 @@
     "@deepseek-ai/dsh-app-boot": "workspace:^",
     "@deepseek-ai/dsh-desktop-host": "workspace:^",
     "@types/node": "^26.5.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-client-modules": "workspace:^",
+    "@deepseek-ai/dsh-host-webserver": "workspace:^"
   },
   "engines": {
     "node": ">=24.11.0"

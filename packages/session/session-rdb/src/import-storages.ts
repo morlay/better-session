@@ -1,14 +1,3 @@
-/**
- * 一次性导入：把旧 `$DSH_HOME/storages` 的 JSON 数据搬进 session-rdb 的
- * 语义专用表（显式命令触发，不做启动隐式导入）。旧文件保留不删，便于对账与
- * 回退。
- *
- * 支持两种来源布局：
- * - `workspace.json`：single 文档（`{unit, global, tables}`）；
- * - `session_projcache/sessions/*.json`：v7 per-record 文档；目录缺失时回退
- *   读旧 single 文档 `session_projcache.json`。
- */
-
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -19,41 +8,30 @@ import type {
 } from "./storage-takeover/types.ts";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
-/** 一条待导入的投影 checkpoint：identity 不落库（复用会话行），只导行。 */
 interface ImportedProjcache {
   sessionId: SessionId;
   rows: ProjectionCheckpoint;
 }
 
-/** 导入统计（按记录数）。 */
 export interface StoragesImportResult {
-  /** 导入的 workspace 记录数。 */
   workspaces: number;
-  /** 是否导入了 workspace global 单例。 */
+
   workspaceState: boolean;
-  /** 导入的投影 checkpoint 记录数。 */
+
   projcache: number;
 }
 
-/** 导入参数。 */
 export interface StoragesImportOptions {
-  /** Harness home（含 `storages/` 的目录）。 */
   dshHome: string;
 }
 
 const WORKSPACE_UNIT = "workspace";
-/** 旧 workspace 文档可接受的域版本集（对齐上游 `workspaceDomainSpec`，见对齐测试）。 */
+
 export const WORKSPACE_UNIT_VERSIONS: ReadonlySet<number> = new Set([2]);
 const PROJCACHE_UNIT = "session_projcache";
-/** 旧投影缓存文档可接受的域版本集（对齐上游 spec 的 version ∪ compatibleVersions）。 */
+
 export const PROJCACHE_UNIT_VERSIONS: ReadonlySet<number> = new Set([7, 3, 4, 5, 6]);
 
-/**
- * Import the legacy storages documents into the rdb tables.
- * @param repository - storages takeover access layer (medium already open).
- * @param options - harness home holding the legacy `storages/` tree.
- * @returns per-record import counts.
- */
 export async function importStorages(
   repository: StorageRepository,
   options: StoragesImportOptions,
@@ -85,8 +63,6 @@ export async function importStorages(
       PROJCACHE_UNIT_VERSIONS.values().next().value as number,
     );
     for (const entry of projcacheEntries) {
-      // 只导行：checkpoint 的 identity 由 t_sessions 的行承载（会话不存在时
-      // 外键拒绝写入，导入 fail loud）。
       await repository.putProjcache(entry.sessionId, entry.rows);
       result.projcache += 1;
     }
@@ -95,7 +71,6 @@ export async function importStorages(
   return result;
 }
 
-/** Read one JSON document; a missing file is `undefined`, malformed JSON fails loud. */
 async function readJson(path: string): Promise<Record<string, unknown> | undefined> {
   let text: string;
   try {
@@ -107,7 +82,6 @@ async function readJson(path: string): Promise<Record<string, unknown> | undefin
   return JSON.parse(text) as Record<string, unknown>;
 }
 
-/** Validate one legacy single document's unit identity and return its tables map. */
 function unitTables(
   document: Record<string, unknown>,
   name: string,
@@ -129,10 +103,6 @@ function unitTables(
   return tables as Record<string, Record<string, unknown>>;
 }
 
-/**
- * Read projection checkpoints from the per-record directory, falling back to
- * the legacy whole-unit document when the directory is absent.
- */
 async function readProjcacheEntries(storagesRoot: string): Promise<ImportedProjcache[]> {
   const entries: ImportedProjcache[] = [];
   const sessionsDir = join(storagesRoot, PROJCACHE_UNIT, "sessions");
@@ -149,8 +119,6 @@ async function readProjcacheEntries(storagesRoot: string): Promise<ImportedProjc
       | undefined;
     if (document === undefined) continue;
     if (typeof document.version !== "number" || !PROJCACHE_UNIT_VERSIONS.has(document.version)) {
-      // Stale per-record document: the cache reads it as absent, so the import
-      // discards it too instead of stamping it current.
       continue;
     }
     const record = document.record as { identity?: unknown; rows?: unknown } | undefined;
@@ -163,7 +131,6 @@ async function readProjcacheEntries(storagesRoot: string): Promise<ImportedProjc
   return entries;
 }
 
-/** Read the legacy whole-unit projection cache document (`{unit, tables:{sessions}}`). */
 async function readLegacyProjcache(path: string): Promise<ImportedProjcache[]> {
   const document = await readJson(path);
   if (document === undefined) return [];

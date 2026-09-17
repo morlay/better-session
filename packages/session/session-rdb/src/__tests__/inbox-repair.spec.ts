@@ -35,30 +35,29 @@ describe("orphanInboxSpliceSeqs", () => {
   });
 
   it("flags an insert beyond the empty queue (rewind dropped the prior queued message)", () => {
-    // 真实损坏：622 在空 next-turn 上 start:1 插入（依赖已被截断的排队消息）。
     const events = [
-      splice(0, "next-turn", 0, 0, [{ id: "queued-before-rewind" }]), // 将被 rewind 删除
-      splice(1, "next-turn", 1, 0, [{ id: "b" }]), // 依赖上面消息在队首
-      splice(2, "next-turn", 0, 1, []), // 消费（依赖上面消息）
-      splice(3, "next-step", 0, 0, [{ id: "b" }]), // b 转 next-step
+      splice(0, "next-turn", 0, 0, [{ id: "queued-before-rewind" }]),
+      splice(1, "next-turn", 1, 0, [{ id: "b" }]),
+      splice(2, "next-turn", 0, 1, []),
+      splice(3, "next-step", 0, 0, [{ id: "b" }]),
     ];
-    // rewind 删除了第一条插入后的流：
+
     const afterRewind = events.slice(1);
     const orphan = orphanInboxSpliceSeqs(afterRewind);
-    // start:1 越界（队列空）→ 孤儿；后续消费/操作依赖同一消息也成孤儿。
+
     expect(orphan.has(1)).toBe(true);
   });
 
   it("rewrites orphans to no-op so the stream replays from empty", () => {
     const events = [
-      splice(0, "next-turn", 1, 0, [{ id: "b" }]), // 越界插入
-      splice(1, "next-turn", 0, 1, []), // 越界消费
-      splice(2, "next-step", 0, 0, [{ id: "c" }]), // 独立合法操作
-      splice(3, "next-step", 0, 1, []), // 消费 c
+      splice(0, "next-turn", 1, 0, [{ id: "b" }]),
+      splice(1, "next-turn", 0, 1, []),
+      splice(2, "next-step", 0, 0, [{ id: "c" }]),
+      splice(3, "next-step", 0, 1, []),
     ];
     repairOrphanInboxSplices(events);
     expect(orphanInboxSpliceSeqs(events).size).toBe(0);
-    // no-op：target 保留、空操作。
+
     const fixed = events[0] as unknown as {
       data: { target: string; start: number; removedCount: number; inserted: unknown[] };
     };
@@ -71,7 +70,7 @@ describe("orphanInboxSpliceSeqs", () => {
     };
     expect(fixed1.data.target).toBe("next-turn");
     expect(fixed1.data.removedCount).toBe(0);
-    // 独立合法操作不受影响。
+
     const kept = events[2] as unknown as { data: { start: number; inserted: unknown[] } };
     expect(kept.data.start).toBe(0);
     expect(kept.data.inserted).toHaveLength(1);
@@ -80,7 +79,7 @@ describe("orphanInboxSpliceSeqs", () => {
   it("flags a duplicate id across pending lists", () => {
     const events = [
       splice(0, "next-turn", 0, 0, [{ id: "x" }]),
-      splice(1, "next-step", 0, 0, [{ id: "x" }]), // x 已在 next-turn
+      splice(1, "next-step", 0, 0, [{ id: "x" }]),
     ];
     expect(orphanInboxSpliceSeqs(events).has(1)).toBe(true);
   });
@@ -105,8 +104,6 @@ describe("loadStored repairs orphan inbox splices", () => {
   it("returns a stream the upstream Inbox can replay after a rewind dropped the queued insert", async () => {
     const { persistence, dispose } = await harness();
     try {
-      // 构造：turn 1 完整 + 被 rewind 破坏的 inbox 序列（排队插入被删，
-      // 残留 start:1 插入与消费）——模拟真实损坏（f7b23e56 的 622 场景）。
       const turn: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
         {
@@ -145,10 +142,10 @@ describe("loadStored repairs orphan inbox splices", () => {
           time: 6,
           data: { turn: 1, reason: { kind: "completed" } },
         },
-        // 损坏区：空 next-turn 上的 start:1 插入（原排队消息已被 rewind 删）
+
         splice(6, "next-turn", 1, 0, [{ id: "queued-after" }]),
         splice(7, "next-turn", 0, 1, []),
-        // 后续正常轮
+
         { type: "turn/start", seq: SessionSeq(8), time: 8, data: { turn: 2 } },
         splice(9, "next-turn", 0, 0, [{ id: "turn2-input" }]),
         {
@@ -168,15 +165,13 @@ describe("loadStored repairs orphan inbox splices", () => {
       const m = meta("bad");
       await persistence.createAndAppend(m, turn);
 
-      // handle.read（resume/prepare 的读取路径）应内存修复孤儿 splice。
       const handle = await persistence.open(SessionId("bad"), "read");
       const { events } = await handle.read();
       await handle.close();
       expect(events).toHaveLength(turn.length);
-      // 孤儿 splice 被改写为 no-op：修复后按上游 Inbox 相同的增量规则
-      // （start/removedCount 越界 + 跨列表重复 id）扫描无孤儿——等价可重放。
+
       expect(orphanInboxSpliceSeqs(events).size).toBe(0);
-      // 未修复的原始流（绕过 loadStored）仍含孤儿——修复确实发生。
+
       const raw = await persistence.internals().backend.getEventRows(SessionId("bad"));
       const rawEvents = raw.map((row) => ({
         type: row.fType,

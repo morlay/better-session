@@ -94,8 +94,6 @@ function assertSupportedImageRoles(messages: readonly Message[]): void {
   }
 }
 
-// 图片以 base64 data URL 内联，预算按 base64 长度计；超出即 fail loud，
-// 由 compaction-image-offload 记录 durable offload 后重试，本适配器不自行裁剪。
 function assertRetainedImagesFit(messages: readonly Message[], maxRequestImageBytes: number): void {
   const offloadImages = requiredImageOffload(
     messages,
@@ -341,7 +339,9 @@ export async function serializeCallOptionsWithImages(
   images: { attachments: AttachmentStore; maxRequestImageBytes: number; signal?: AbortSignal },
 ): Promise<OpenAICompatibleCallOptions> {
   assertRetainedImagesFit(options.messages, images.maxRequestImageBytes);
-  const requestMessages = projectOffloadedImages(options.messages, (ref) => offloadedImageText(ref));
+  const requestMessages = projectOffloadedImages(options.messages, (ref) =>
+    offloadedImageText(ref),
+  );
   const resolveImage = (block: Extract<ContentBlock, { type: "image" }>, signal?: AbortSignal) =>
     imagePart(block, images.attachments, signal);
   const system =

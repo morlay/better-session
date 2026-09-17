@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,15 +6,15 @@ import { seedFingerprint } from "../cli/prepare-seed.ts";
 
 const roots: string[] = [];
 
-function workDir(): string {
-  const root = mkdtempSync(join(tmpdir(), "dsh-desktopify-fingerprint-"));
+async function workDir(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "dsh-desktopify-fingerprint-"));
   roots.push(root);
   return root;
 }
 
-function write(path: string, content = ""): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content);
+async function write(path: string, content = ""): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
 }
 
 interface Fixture {
@@ -23,28 +23,27 @@ interface Fixture {
   readonly closureModulesDir: string;
 }
 
-/** One workspace plus one closure: an installed package and a local source package. */
-function fixture(): Fixture {
-  const root = workDir();
+async function fixture(): Promise<Fixture> {
+  const root = await workDir();
   const workspace = join(root, "app");
   const closureModulesDir = join(root, "closure", "node_modules");
-  write(join(workspace, "package.json"), "{}\n");
-  write(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-  // 本地源码包：仓库树里（路径不含 node_modules），靠内容入指纹。
-  write(join(root, "vendor", "local-pkg", "package.json"), '{ "name": "local-pkg" }\n');
-  write(join(root, "vendor", "local-pkg", "dist", "index.js"), "");
-  write(join(closureModulesDir, "local-pkg", "package.json"), '{ "name": "local-pkg" }\n');
-  write(join(closureModulesDir, "local-pkg", "dist", "index.js"), "");
-  // 安装产物：路径含 node_modules 段，靠文件清单入指纹。
-  write(
+  await write(join(workspace, "package.json"), "{}\n");
+  await write(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+
+  await write(join(root, "vendor", "local-pkg", "package.json"), '{ "name": "local-pkg" }\n');
+  await write(join(root, "vendor", "local-pkg", "dist", "index.js"), "");
+  await write(join(closureModulesDir, "local-pkg", "package.json"), '{ "name": "local-pkg" }\n');
+  await write(join(closureModulesDir, "local-pkg", "dist", "index.js"), "");
+
+  await write(
     join(closureModulesDir, "installed-pkg", "package.json"),
     '{ "name": "installed-pkg", "version": "1.0.0" }\n',
   );
-  write(join(closureModulesDir, "installed-pkg", "index.js"), "");
+  await write(join(closureModulesDir, "installed-pkg", "index.js"), "");
   return { workspace, workspaceRoot: root, closureModulesDir };
 }
 
-function fingerprint(input: Fixture): string {
+async function fingerprint(input: Fixture): Promise<string> {
   return seedFingerprint({
     workspace: input.workspace,
     workspaceRoot: input.workspaceRoot,
@@ -53,21 +52,20 @@ function fingerprint(input: Fixture): string {
   });
 }
 
-afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+afterEach(async () => {
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
 describe("seed fingerprint", () => {
-  it("changes when an installed package gains a file, at an unchanged version", () => {
-    const workspace = fixture();
-    const before = fingerprint(workspace);
+  it("changes when an installed package gains a file, at an unchanged version", async () => {
+    const workspace = await fixture();
+    const before = await fingerprint(workspace);
 
-    // 工具侧这次多选了文件进闭包（版本、包名、lockfile 都没变）。
-    write(join(workspace.closureModulesDir, "installed-pkg", "index.cjs"), "");
+    await write(join(workspace.closureModulesDir, "installed-pkg", "index.cjs"), "");
 
-    expect(fingerprint(workspace)).not.toBe(before);
+    expect(await fingerprint(workspace)).not.toBe(before);
 
-    rmSync(join(workspace.closureModulesDir, "installed-pkg", "index.cjs"));
-    expect(fingerprint(workspace)).toBe(before);
+    await rm(join(workspace.closureModulesDir, "installed-pkg", "index.cjs"));
+    expect(await fingerprint(workspace)).toBe(before);
   });
 });

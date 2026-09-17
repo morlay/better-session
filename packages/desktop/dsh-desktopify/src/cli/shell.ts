@@ -1,39 +1,40 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { access, readdir, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
-/** 工具包根（源码形态 `src/cli` 与构建形态 `dist/cli` 同深度）。 */
 const APP_ROOT = resolve(import.meta.dirname, "..", "..");
 
-/** 壳入口产物（Electron 加载的主进程）。 */
 export const SHELL_ENTRY = join(APP_ROOT, "dist", "index.mjs");
 
-/** Every file under a directory (the shell sources live in `src/`). */
-function filesUnder(dir: string): string[] {
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function filesUnder(dir: string): Promise<string[]> {
   const found: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
-      // 测试不是壳源码：改了用例不该说壳产物过期。
       if (entry.name === "__tests__") continue;
-      found.push(...filesUnder(path));
+      found.push(...(await filesUnder(path)));
     } else if (entry.isFile()) found.push(path);
   }
   return found;
 }
 
-/**
- * Verify the shell build dev and bundle reuse. The build comes from
- * `pnpm build` (tsdown), never from these commands; a build older than its
- * sources is how a fixed shell silently fails to reach a packaged app — the app
- * then keeps the old behaviour and the fix looks broken. Say it out loud
- * instead of packaging the stale artifact.
- */
-function checkShellBuild(): void {
-  if (!existsSync(SHELL_ENTRY)) {
+async function checkShellBuild(): Promise<void> {
+  if (!(await pathExists(SHELL_ENTRY))) {
     throw new Error(`dsh-desktopify: shell build is missing ${SHELL_ENTRY}; run pnpm build`);
   }
-  const built = statSync(SHELL_ENTRY).mtimeMs;
-  const stale = filesUnder(join(APP_ROOT, "src")).filter((file) => statSync(file).mtimeMs > built);
+  const built = (await stat(SHELL_ENTRY)).mtimeMs;
+  const stale: string[] = [];
+  for (const file of await filesUnder(join(APP_ROOT, "src"))) {
+    if ((await stat(file)).mtimeMs > built) stale.push(file);
+  }
   if (stale.length > 0) {
     console.warn(
       `dsh-desktopify: shell build is older than ${String(stale.length)} source file(s) ` +
@@ -43,14 +44,13 @@ function checkShellBuild(): void {
   }
 }
 
-/** 构建壳产物；发布形态没有源码时直接使用随包构建结果。 */
 export async function buildShell(): Promise<void> {
-  if (!existsSync(join(APP_ROOT, "src", "index.ts"))) {
-    if (!existsSync(SHELL_ENTRY)) {
+  if (!(await pathExists(join(APP_ROOT, "src", "index.ts")))) {
+    if (!(await pathExists(SHELL_ENTRY))) {
       throw new Error(`dsh-desktopify: packaged shell build is missing ${SHELL_ENTRY}`);
     }
     console.log("dsh-desktopify: using the packaged shell build");
     return;
   }
-  checkShellBuild();
+  await checkShellBuild();
 }

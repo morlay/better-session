@@ -42,7 +42,6 @@ function turnsOf(events: readonly SessionEvent[]): number[] {
 function inboxPending(session: Session): UserMessage[] {
   let pending: UserMessage[] = [];
   for (const event of session.snapshotEvents()) {
-    // agent-loop 的事件类型未并入本包的类型图，按类型名比较。
     if (String(event.type) !== "agent/inbox/spliced") continue;
     const data = (
       event as unknown as {
@@ -60,11 +59,6 @@ function inboxPending(session: Session): UserMessage[] {
   return pending;
 }
 
-/**
- * 迷你 agent：复刻真实 agent-loop 的关键行为——轮号取 phase.lastTurn + 1
- * （rewind 会通过 duck-type 重置该游标），followup 产生完整轮次事件，
- * inbox.clear 按保留区 pending 落一条 canceled splice。
- */
 function miniAgent(session: Session) {
   const lastTurn = session.snapshotEvents().findLast((event) => event.type === "turn/start")
     ?.data.turn;
@@ -149,7 +143,6 @@ const threeTurns = (): SessionEvent[] => [
   ...turnLog(13, 3),
 ];
 
-/** 空轮：turn/start 后直接 turn/end（早期重放缺陷的遗留形状）。 */
 function emptyTurn(base: number, turn: number): SessionEvent[] {
   return [
     { type: "turn/start", seq: SessionSeq(base), time: base, data: { turn } },
@@ -240,7 +233,7 @@ describe("SessionEditor replay turn numbering", () => {
         cascade: "preserve",
       });
       expect(agent.received).toEqual(["turn 3 input"]);
-      // manualTurn 写入 turn 2，重放必须接 turn 3，不得重复。
+
       expect(turnsOf(live.snapshotEvents())).toEqual([1, 2, 3]);
       disposeAgents();
     } finally {
@@ -279,7 +272,7 @@ describe("SessionEditor replay turn numbering", () => {
         cascade: "truncate",
       });
       expect(agent.received).toEqual(["open edited"]);
-      // 悬空 turn/start 不得残留：整轮截断后重放仍是 turn 4。
+
       expect(turnsOf(live.snapshotEvents())).toEqual([1, 2, 3, 4]);
       disposeAgents();
     } finally {
@@ -362,8 +355,6 @@ describe("SessionEditor replay turn numbering", () => {
   it("retry after an empty turn absorbs it and replays continuously", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // turn1（内容）→ turn2（空轮）→ turn3（内容）：重试 turn3 应把空轮
-      // 一并截断，重放成 turn2，而不是留下 1,2,3 里的空 turn2。
       const live = await liveSession(ctx, "s", [
         header,
         ...turnLog(1, 1),
@@ -397,7 +388,7 @@ describe("SessionEditor replay turn numbering", () => {
       ]);
       const agent = miniAgent(live);
       const disposeAgents = provideAgents(ctx, agent);
-      // turnLog(9, 3) 的 assistant/message 在 seq 12。
+
       await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("s"),
@@ -426,7 +417,6 @@ describe("SessionEditor replay on cold sessions", () => {
       let resumed = 0;
       let resumedAgent: ReturnType<typeof miniAgent> | undefined;
       const disposeAgents = ctx.provide("agents", {
-        // 真实 resume 会把 agent 注册进 registry，rewind 才能重置其轮次游标。
         get: (id: string) =>
           resumedAgent !== undefined && id === String(resumedAgent.session.id)
             ? resumedAgent

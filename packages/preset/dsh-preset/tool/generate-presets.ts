@@ -1,30 +1,4 @@
-/**
- * 从上游 shipped preset 生成自定义 preset 到构建输出目录（`dist/presets/standard`
- * 与 `dist/presets/ptc`）。
- *
- * 为什么是生成而非复制：preset 是运行期被 discovery 扫描的 composition，
- * 必须随包发布；但手工维护副本会与上游 drift。这里把上游 `standard` / `ptc`
- * 当数据读入——`js-yaml` 用 include 的 `entryListSchema` 解析（`!!js` 标签
- * 因此保留为表达式节点）——在 JS 里改两处（删掉自带的 `persona` 行、把
- * `agent-instructions` 行的指令候选收紧为 AGENTS 系列），再 `dump` 回 YAML。
- * 上游任何结构性改动（新增/重命名 row、改字段）都自动跟随，不依赖易碎的文本锚点。
- *
- * `agent-instructions` 行是上游官方插件：工作区指令的 baseline 留在 user 消息通道，
- * 与「系统提示词只留 persona、其余走 reminder」的分层一致。
- *
- * 产物落在 `dist/` 而非源码树：dist 是构建输出（gitignore），既不会与 oxfmt
- * 互相改格式，也不会把派生文件混进源码。
- *
- * 代价：`dump` 不保留注释（上游 composition 的说明注释会丢）。
- *
- * 用法：由 `tsdown.config.ts` 的 `build:done` hook 在每次构建时调用
- * （见 {@link presetHooks}）；也可单独跑
- * `pnpm exec tsx packages/dsh-preset/tool/generate-presets.ts [outDir]`。
- * 校验：`packages/dsh-preset/src/__tests__/generated-presets.spec.ts`
- * @module @morlay/dsh-preset/tool/generate-presets
- */
-
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { entryListSchema } from "@deepseek-ai/cordis-plugin-include";
@@ -32,14 +6,11 @@ import yaml from "js-yaml";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// 上游 shipped preset 根目录：经上游包（devDependency）解析，不依赖仓库布局。
-// 子目录不在上游 exports 内，故从 `package.json`（exports 显式导出）起拼。
 export const UPSTREAM_PRESETS = join(
   dirname(fileURLToPath(import.meta.resolve("@deepseek-ai/dsh-agent-presets/package.json"))),
   "presets",
 );
 
-/** 每个自定义 preset：上游源 preset（同时是产物目录名）与展示元数据。 */
 export const PRESET_SOURCES = [
   {
     source: "standard",
@@ -57,13 +28,11 @@ export const PRESET_SOURCES = [
   },
 ] as const;
 
-/** 生成产物顶部的来源标注，插在文件最前，便于核对与追溯。 */
 function generatedHeader(): string {
   return `# 本文件由 packages/dsh-preset/tool/generate-presets.ts 生成，请勿手工编辑
 `;
 }
 
-/** 上游 composition 的一行；只用到 id 与 name。 */
 interface CompositionRow {
   id?: string;
   name?: string;
@@ -71,38 +40,20 @@ interface CompositionRow {
   [key: string]: unknown;
 }
 
-/** 上游 preset 里自带 persona 的行 id（本仓库的 persona 走部署级 system-prompt）。 */
 export const PERSONA_ROW_ID = "persona";
 
-/** 上游 preset 里承载工作区指令的行 id。 */
 export const INSTRUCTIONS_ROW_ID = "agent-instructions";
 
-/**
- * 工作区指令的候选文件：只要 AGENTS 系列，不要 CLAUDE 系列。
- *
- * 上游默认是 `['AGENTS.md','CLAUDE.md']` 与 `['AGENTS.local.md','CLAUDE.local.md']`；
- * 本部署不读 CLAUDE 系文件（覆盖上游 config 的这两个字段，其余字段如 `maxBytes`
- * 保持上游值）。行本身仍是官方 `@deepseek-ai/dsh-agent-instructions`——fork 暂未
- * 接入，见模块注释。
- */
 export const INSTRUCTIONS_CONFIG = {
   instructionFileCandidates: ["AGENTS.md"],
   localInstructionFileCandidates: ["AGENTS.local.md"],
 } as const;
 
-/**
- * 把上游 composition 文本渲染成产物文本：解析 → 删 persona 行、收紧指令候选 → dump。
- * @param upstream - 上游 composition 文本。
- * @returns 带 header 的产物文本。
- */
 export function renderComposition(upstream: string): string {
   const rows = yaml.load(upstream, {
     schema: entryListSchema,
   }) as CompositionRow[];
-  // 删掉 preset 自带的 `persona` 行：它会在 agent scope 注册
-  // `deployment:persona-prefix` 并**遮蔽**部署级 persona（system-prompt 的
-  // personaPrefix，见上游 system-prompt 的 Config 文档）。个人提示词只由
-  // `cordis.patch.yml` 的 system-prompt 行提供，这里不再复制一份。
+
   const persona = rows.findIndex((row) => row.id === PERSONA_ROW_ID);
   if (persona >= 0) rows.splice(persona, 1);
   const instructions = rows.find((row) => row.id === INSTRUCTIONS_ROW_ID);
@@ -113,9 +64,7 @@ export function renderComposition(upstream: string): string {
     );
   }
   instructions.config = { ...instructions.config, ...INSTRUCTIONS_CONFIG };
-  // `quotingType: '"'` 是刻意选择：yaml.dump 默认用单引号，而仓库的 oxfmt 会把
-  // YAML 单引号改成双引号——不显式指定就会 fmt 与生成器来回改。指定后产物与
-  // `oxfmt --check` 零差异（实测），故 `presets/**` 无需 fmt 忽略。
+
   const body = yaml.dump(rows, {
     schema: entryListSchema,
     lineWidth: -1,
@@ -124,54 +73,40 @@ export function renderComposition(upstream: string): string {
   return `${generatedHeader()}${body}`;
 }
 
-/** 渲染 preset.yml 展示元数据（自定义 id 不走内置文案 fold）。 */
 export function renderMetadata(entry: (typeof PRESET_SOURCES)[number]): string {
   return `name: ${entry.name}\ndescription: ${entry.description}\norder: ${String(entry.order)}\n`;
 }
 
-/** 生成目录相对包根的默认位置（构建输出，随 files 发布）。 */
 export const PRESETS_OUT_DIR = "dist/presets";
 
-/**
- * 生成全部自定义 preset 到 `outDir`。
- * @param outDir - 输出目录绝对路径；缺省为包根下的 {@link PRESETS_OUT_DIR}。
- * @returns 产物文件路径列表。
- */
-export function generatePresets(outDir: string = join(PACKAGE_ROOT, PRESETS_OUT_DIR)): string[] {
-  // 先整目录清空：产物完全派生自本脚本，残留目录（改过 source、旧命名）不该留下
-  // ——否则 discovery 会把它们当有效 preset 扫出来。
-  rmSync(outDir, { recursive: true, force: true });
+export async function generatePresets(
+  outDir: string = join(PACKAGE_ROOT, PRESETS_OUT_DIR),
+): Promise<string[]> {
+  await rm(outDir, { recursive: true, force: true });
   const written: string[] = [];
   for (const entry of PRESET_SOURCES) {
-    const upstream = readFileSync(join(UPSTREAM_PRESETS, entry.source, "agent.cordis.yml"), "utf8");
-    // 产物目录名 = 上游 preset id：canonical id 让展示名走客户端语言字典
-    // （`presetDisplayText` 对 trust=system 且 id 命中的行做本地化）。
+    const upstream = await readFile(
+      join(UPSTREAM_PRESETS, entry.source, "agent.cordis.yml"),
+      "utf8",
+    );
+
     const dir = join(outDir, entry.source);
-    mkdirSync(dir, { recursive: true });
+    await mkdir(dir, { recursive: true });
     const compositionPath = join(dir, "agent.cordis.yml");
-    writeFileSync(compositionPath, renderComposition(upstream));
+    await writeFile(compositionPath, renderComposition(upstream));
     const metadataPath = join(dir, "preset.yml");
-    writeFileSync(metadataPath, renderMetadata(entry));
+    await writeFile(metadataPath, renderMetadata(entry));
     written.push(compositionPath, metadataPath);
   }
   return written;
 }
 
-/**
- * tsdown hooks：构建完成后把 preset 生成到构建输出目录。
- *
- * 必须挂 `build:done` 而不是 `build:prepare`——tsdown 的时序是
- * `build:prepare` → `clean()`（清空 outDir）→ rolldown → `build:done`，
- * 在 clean 之前写会被删掉。挂在 done 上则产物与 JS/d.ts 同批产出。
- * @returns 供 `UserConfig.hooks` 使用的 hook 集合。
- */
 export function presetHooks(): {
-  "build:done": (ctx: { options: { outDir: string } }) => void;
+  "build:done": (ctx: { options: { outDir: string } }) => Promise<void>;
 } {
   return {
-    "build:done": (ctx) => {
-      // 用 tsdown 解析后的 outDir（尊重用户覆盖），而非硬编码 dist。
-      const written = generatePresets(join(ctx.options.outDir, "presets"));
+    "build:done": async (ctx) => {
+      const written = await generatePresets(join(ctx.options.outDir, "presets"));
       for (const path of written) process.stdout.write(`generated ${path}\n`);
     },
   };
@@ -179,7 +114,7 @@ export function presetHooks(): {
 
 if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
   const outDir = process.argv[2];
-  for (const path of generatePresets(outDir)) {
+  for (const path of await generatePresets(outDir)) {
     process.stdout.write(`generated ${path}\n`);
   }
 }

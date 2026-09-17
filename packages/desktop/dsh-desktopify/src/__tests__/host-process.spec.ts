@@ -1,7 +1,3 @@
-// 启动契约回归：上游桌面宿主按「不可变包集（runtimeDir）+ profile 项目
-// （projectDir）」两个目录启动，宿主入口也从 runtimeDir 解析。这里用 spawn
-// 替身锁住 argv，避免契约漂移后又变成"打包成功、启动即挂"。
-
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -15,7 +11,6 @@ interface SpawnCall {
   readonly cwd: string | undefined;
 }
 
-/** 最小子进程替身：byte pipes（fd 3/4）、stderr/stdout、IPC 事件面齐备。 */
 function fakeChild(): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
   const stdio: (PassThrough | null)[] = [null, null, null, new PassThrough(), new PassThrough()];
@@ -29,17 +24,25 @@ function fakeChild(): ChildProcess {
   return child;
 }
 
-function harness(
-  inspectPort?: number,
-): { calls: SpawnCall[]; child: ChildProcess; host: DesktopHostProcess } {
+function harness(inspectPort?: number): {
+  calls: SpawnCall[];
+  child: ChildProcess;
+  host: DesktopHostProcess;
+} {
   const calls: SpawnCall[] = [];
   const child = fakeChild();
-  const host = new DesktopHostProcess("/runtime/node/node", "/app/seed/profile", "/home/profile", inspectPort, {
-    spawn: ((command: string, args: readonly string[], options: { cwd?: string }) => {
-      calls.push({ command, args, cwd: options.cwd });
-      return child;
-    }) as never,
-  });
+  const host = new DesktopHostProcess(
+    "/runtime/node/node",
+    "/app/seed/profile",
+    "/home/profile",
+    inspectPort,
+    {
+      spawn: ((command: string, args: readonly string[], options: { cwd?: string }) => {
+        calls.push({ command, args, cwd: options.cwd });
+        return child;
+      }) as never,
+    },
+  );
   return { calls, child, host };
 }
 
@@ -57,7 +60,14 @@ describe("DesktopHostProcess launch contract", () => {
     const call = calls[0];
     expect(call?.command).toBe("/runtime/node/node");
     expect(call?.args).toEqual([
-      join("/app/seed/profile", "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "index.js"),
+      join(
+        "/app/seed/profile",
+        "node_modules",
+        "@deepseek-ai",
+        "dsh-desktop-host",
+        "lib",
+        "index.js",
+      ),
       "/app/seed/profile",
       "/home/profile",
     ]);

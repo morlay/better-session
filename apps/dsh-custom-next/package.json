@@ -1,6 +1,6 @@
 {
   "name": "dsh-custom-next",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "files": [
     "icon.svg",
@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@morlay/better-session": "workspace:^",
+    "@morlay/dsh-desktopify": "workspace:^",
     "@morlay/dsh-preset": "workspace:^"
   },
   "peerDependencies": {
@@ -25,6 +26,15 @@
         "@morlay/better-session",
         "@morlay/dsh-preset"
       ]
+    },
+    "dev": {
+      "web": {
+        "clientBundles": {
+          "prefixes": [
+            "@morlay/"
+          ]
+        }
+      }
     },
     "desktop": {
       "id": "ai.deepseek.dsh.custom-next",

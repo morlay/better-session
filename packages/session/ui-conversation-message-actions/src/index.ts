@@ -33,10 +33,12 @@ import {
 } from "./shared.ts";
 import {
   closedTurns,
+  droppedCompactions,
   editableMessages,
   editPlan,
   precedingContentIndex,
   recallBoundary,
+  restoreCompactions,
   retryPlan,
   rerollPlan,
   retryableTurns,
@@ -69,9 +71,9 @@ declare module "@deepseek-ai/cordis" {
 export interface EditorAgent {
   readonly session: Session;
   followup(message: UserMessage): void;
-  /** 等待 agent 到达 quiescence（当前 turn/任务结束后 resolve）。 */
+
   whenIdle(): Promise<void>;
-  // 停止运行中的 loop（上游 Agent.cancel 的 duck-typed 面）；缺省表示实现无取消能力。
+
   cancel?(cause: AgentCancelCause, options?: { keepInbox?: boolean }): void;
 }
 
@@ -154,23 +156,25 @@ function appendManualTurn(
   });
 }
 
+// 边界事件的保留语义（与 session-branch 的 rewind 一致）：turn/end 保留边界事件本身，user/message 丢掉它自己。
+function keepFromOf(events: readonly SessionEvent[], boundary: number): number {
+  if (boundary < 0) return 0;
+  return events[boundary]?.type === "turn/end" ? boundary + 1 : boundary;
+}
+
 async function appendSeedSuffixLive(
   session: Session,
   seedSuffix: readonly SessionEvent[],
   appendDirect: (events: readonly SessionEvent[]) => Promise<void>,
 ): Promise<void> {
   for (const event of seedSuffix) {
-    // 版本效果事件携带 ignorable 标记（上游类型无此字段，duck-type 读取）。
     const ignorable = (event as { ignorable?: boolean }).ignorable === true;
     if (ignorable) {
       const s = session as unknown as {
         log: SessionEvent[];
         eventsSnapshot?: unknown;
       };
-      // 原样存储语义：版本效果事件经 RDB write handle 直接落库（带
-      // ignorable 信封，与 JSONL 一致）。session.append 不保留 ignorable
-      // 标记且类型系统禁止 append 未知类型，因此不发布、直接 push 内存
-      // log（seq 按 log 续接重编号，与 handle cursor 同空间）。
+
       const seq = s.log.length;
       await appendDirect([{ ...event, seq } as SessionEvent]);
       s.log.push({ ...event, seq } as SessionEvent);
@@ -204,8 +208,7 @@ export class SessionEditor extends Service {
 
   constructor(ctx: Context) {
     super(ctx, "sessionEditor");
-    // HTTP 路由随类构造注册（dsh 用 default 类插件，apply 不被调用）；
-    // bundles 顺序保证 webserver 先于本类实例化。
+
     registerHttpRoutes(ctx);
   }
 
@@ -287,14 +290,12 @@ export class SessionEditor extends Service {
         : operation.action === "retry"
           ? retryPlan(operation, turns)
           : rerollPlan(operation, turns);
-    // rewind 前解析模型配置：就地编辑可能截断最后的 request/header
-    // （编辑第一轮 boundary = -1 清空全部），重放 agent 需要 provider/model。
+
     const headerConfig = events.findLast((event) => event.type === "request/header")?.data.header
       .config;
 
     const turnIndex = turns.findIndex((turn) => turn.startSeq === plan.anchorSeq);
-    // 空轮吸收：目标轮之前的空轮（早期重放缺陷的遗留）随截断一并删除，
-    // 重放按保留前缀续号——轮次导航不再出现点不开的空项与轮号空洞。
+
     const preceding = precedingContentIndex(turns, turnIndex);
     const boundary =
       plan.rewindBoundary !== undefined
@@ -302,21 +303,19 @@ export class SessionEditor extends Service {
         : preceding < 0
           ? -1
           : turns[preceding]!.endSeq!;
-    // manualTurn 的轮号同样按保留前缀续号：正常会话等于目标轮号，有空轮
-    // 时收敛为连续编号。
+    // 补回被截断丢掉、但在重放目标之前的压缩
+    const keepFrom = keepFromOf(events, boundary);
+    const compactions = droppedCompactions(events, keepFrom, plan.targetSeq);
+
     const replayTurn = preceding < 0 ? 1 : turns[preceding]!.turn + 1;
 
-    // 派生 seed 后缀：版本效果 + 可选手工回合。版本事件对核心是 ignorable，
-    // 保证非 branch 读者可安全跳过。
-    const seedSuffix: SessionEvent[] = [];
-    appendLogSeedEvent(seedSuffix, "session-branch/version", plan.version, true);
+    const versionSeed: SessionEvent[] = [];
+    appendLogSeedEvent(versionSeed, "session-branch/version", plan.version, true);
+    const manualSeed: SessionEvent[] = [];
     if (plan.manualTurn !== undefined) {
-      appendManualTurn(seedSuffix, { ...plan.manualTurn, turn: replayTurn });
+      appendManualTurn(manualSeed, { ...plan.manualTurn, turn: replayTurn });
     }
 
-    // 就地编辑：不创建新会话、不改变 id。需要重放排队输入时，先在 rewind
-    // 前确保 agent 就绪（cold 先 resume；live 复用驻留 agent）——rewind 截断后
-    // agent 无法再以完整会话 resume，且重放失败不应让截断静默丢弃内容。
     const replay = await this.prepareReplay(
       operation.sessionId,
       plan.queuedUsers,
@@ -324,64 +323,20 @@ export class SessionEditor extends Service {
       headerConfig,
     );
 
-    // rewind 前必须停止运行中的 loop：截断会重写 agent 的 session 内存 log。
     await this.stopLoop(operation.sessionId, signal);
     const live = this.ctx.sessions.get(operation.sessionId);
     await this.ctx.sessionBranch.rewind(operation.sessionId, boundary, signal);
-    if (seedSuffix.length > 0) {
-      if (live !== undefined) {
-        // live：版本效果经 RDB write handle 直接落库（带 ignorable 信封，
-        // 与 JSONL 一致）、manualTurn 走 append；同步 cursor 后显式 flush
-        // （直接落库不发布、不进缓冲，cursor 会落后）。
-        const persistence = this.ctx.sessionPersistence as unknown as {
-          tracker: {
-            writerOf(id: SessionId):
-              | {
-                  append(events: readonly SessionEvent[]): Promise<void>;
-                }
-              | undefined;
-          };
-        };
-        const handle = persistence.tracker.writerOf(operation.sessionId);
-        if (handle === undefined) {
-          throw new Error(
-            `session "${operation.sessionId}" has no live write handle for the version effect`,
-          );
-        }
-        // rewind 截断后可能已追加事件（如 inbox 取消 splice），它们仍在
-        // write-behind 缓冲里；直接对 handle 写版本效果前必须先把缓冲落盘，
-        // 否则 handle cursor 落后于 log 长度 → append seq mismatch。
-        await this.ctx.sessions.flush(live);
-        await appendSeedSuffixLive(live, seedSuffix, (events) => handle.append(events));
-        await this.ctx.sessions.flush(live);
-      } else {
-        // cold：续写 seq 从平衡后的保留前缀接续（exclusive 截断可能残留
-        // 孤儿 step/start，落盘 log 对 token meter 重放非法）。
-        const rawKeepLength = boundary + (plan.rewindBoundary === undefined ? 1 : 0);
-        const keepLength = balanceRewindPrefix(events.slice(0, rawKeepLength)).length;
-        const renumbered = seedSuffix.map(
-          (event, index) =>
-            ({
-              ...event,
-              seq: keepLength + index,
-            }) as SessionEvent,
-        );
-        const handle = await this.ctx.sessionPersistence.open(operation.sessionId, "write");
-        try {
-          await handle.append(renumbered);
-        } finally {
-          await handle.close();
-        }
-      }
-    }
+    // 补回的压缩落在版本效果之后、重放的输入之前
+    const seedStart = this.seedStart(live, events, keepFrom);
+    const seedSuffix: SessionEvent[] = [
+      ...versionSeed,
+      ...restoreCompactions(compactions, keepFrom, seedStart + versionSeed.length),
+      ...manualSeed,
+    ];
+    await this.appendSeedSuffix(operation.sessionId, live, seedSuffix, events, keepFrom);
 
-    // 发起新的 user prompt：把排队输入交给就绪的 agent（rewind 后其 session
-    // 已被截断，followup 基于截断后历史开新轮重放）。无 agent（agents 服务
-    // 缺失）时退化为已 durable 的就地版本。
     let queuedTurns = 0;
     if (replay.agent !== undefined && plan.queuedUsers.length > 0) {
-      // seedSuffix 里的 manualTurn 直接写入了 turn/start，而 agent 的轮次
-      // 游标仍停在 rewind 重置的位置；不同步就会把重放开成重复轮号。
       const lastSeedTurn = seedSuffix.findLast((event) => event.type === "turn/start")?.data.turn;
       if (lastSeedTurn !== undefined) {
         const phase = (replay.agent as unknown as { phase?: { lastTurn?: number } }).phase;
@@ -394,19 +349,11 @@ export class SessionEditor extends Service {
     return {
       sessionId: operation.sessionId,
       queuedTurns,
-      // 操作后是否仍有 live owner（prepareReplay 可能 resume 出 agent）。
+
       live: this.ctx.sessions.get(operation.sessionId) !== undefined,
     };
   }
 
-  /**
-   * 撤回（recall）：只 rewind 截断，不重写、不重放——被撤回的 user 消息文本
-   * 由客户端回填到输入框，交给用户修改后重新发送。
-   *
-   * 边界见 {@link recallBoundary}：轮首消息整轮截断到前一轮 `turn/end`
-   * （无前轮则 -1），轮内 followup 与轮外 user 消息只截断到该消息本身
-   * （exclusive drop），避免留下悬空 `turn/start` 让下一次发送开到错误轮号。
-   */
   private async recallOperation(
     operation: RecallOperation,
     signal?: AbortSignal,
@@ -414,9 +361,20 @@ export class SessionEditor extends Service {
     signal?.throwIfAborted();
     const events = await this.readEvents(operation.sessionId, signal);
     const boundary = recallBoundary(events, closedTurns(events), operation.eventSeq);
-    // rewind 前必须停止运行中的 loop：截断会重写 agent 的 session 内存 log。
+    // 撤回同样要补回被丢掉、但在撤回目标之前的压缩
+    const keepFrom = keepFromOf(events, boundary);
+    const compactions = droppedCompactions(events, keepFrom, operation.eventSeq);
+
     await this.stopLoop(operation.sessionId, signal);
+    const live = this.ctx.sessions.get(operation.sessionId);
     await this.ctx.sessionBranch.rewind(operation.sessionId, boundary, signal);
+    await this.appendSeedSuffix(
+      operation.sessionId,
+      live,
+      restoreCompactions(compactions, keepFrom, this.seedStart(live, events, keepFrom)),
+      events,
+      keepFrom,
+    );
     return {
       sessionId: operation.sessionId,
       queuedTurns: 0,
@@ -424,9 +382,62 @@ export class SessionEditor extends Service {
     };
   }
 
-  // rewind 前停止运行中的 loop：截断会重写 agent 的 session 内存 log；无
-  // live agent 时跳过，实现无取消能力时退化为等待其自然停下（keepInbox
-  // 保留排队输入，截断后由 rdb 的 live 钩子 durable 取消）。
+  // 种子后缀的起点 seq：live 会话是被截断后的日志长度，cold 会话是配平后的保留前缀长度
+  private seedStart(
+    live: Session | undefined,
+    events: readonly SessionEvent[],
+    keepFrom: number,
+  ): number {
+    return live === undefined
+      ? balanceRewindPrefix(events.slice(0, keepFrom)).length
+      : Number(live.seq);
+  }
+
+  private async appendSeedSuffix(
+    sessionId: SessionId,
+    live: Session | undefined,
+    seedSuffix: readonly SessionEvent[],
+    events: readonly SessionEvent[],
+    keepFrom: number,
+  ): Promise<void> {
+    if (seedSuffix.length === 0) return;
+    if (live !== undefined) {
+      const persistence = this.ctx.sessionPersistence as unknown as {
+        tracker: {
+          writerOf(id: SessionId):
+            | {
+                append(events: readonly SessionEvent[]): Promise<void>;
+              }
+            | undefined;
+        };
+      };
+      const handle = persistence.tracker.writerOf(sessionId);
+      if (handle === undefined) {
+        throw new Error(`session "${sessionId}" has no live write handle for the version effect`);
+      }
+
+      await this.ctx.sessions.flush(live);
+      await appendSeedSuffixLive(live, seedSuffix, (batch) => handle.append(batch));
+      await this.ctx.sessions.flush(live);
+      return;
+    }
+
+    const keepLength = balanceRewindPrefix(events.slice(0, keepFrom)).length;
+    const renumbered = seedSuffix.map(
+      (event, index) =>
+        ({
+          ...event,
+          seq: keepLength + index,
+        }) as SessionEvent,
+    );
+    const handle = await this.ctx.sessionPersistence.open(sessionId, "write");
+    try {
+      await handle.append(renumbered);
+    } finally {
+      await handle.close();
+    }
+  }
+
   private async stopLoop(sessionId: SessionId, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     const agents = this.ctx.get("agents") as EditorAgentRegistry | undefined;
@@ -443,8 +454,7 @@ export class SessionEditor extends Service {
   ): Promise<readonly SessionEvent[]> {
     const live = this.ctx.sessions.get(sessionId);
     if (live !== undefined) return live.snapshotEvents();
-    // cold：读原始事件（loadStored 不补 closers）——inspect 会把未闭合 log
-    // 补成闭合，编辑未闭合轮次的 user 消息会走错边界。
+
     const branch = this.ctx.sessionBranch as unknown as {
       readRawEvents(
         id: SessionId,
@@ -454,10 +464,6 @@ export class SessionEditor extends Service {
     return (await branch.readRawEvents(sessionId, signal)).events;
   }
 
-  // rewind 前确保 agent 可驱动重放：cold 会话先 resume 出驻留 agent（此时会话
-  // 完整，resume 的 prepare 不与截断冲突）；live 会话复用驻留 agent，停止其
-  // 运行中的 loop 由 rewind 前的 stopLoop 统一负责。agents 服务缺失或无需
-  // 重放时返回空——调用方退化为就地截断版本。
   private async prepareReplay(
     sessionId: SessionId,
     queuedUsers: readonly UserMessage[],
@@ -470,16 +476,12 @@ export class SessionEditor extends Service {
     if (agents === undefined) return { agent: undefined };
     const existing = agents.get(sessionId);
     if (existing !== undefined) {
-      // 排队输入由 rewind 在截断后强制 durable 取消（session-rdb 的
-      // LiveSessionHooks.inbox.clear），这里只需复用驻留 agent。
       return { agent: existing };
     }
-    // cold：resume 已持久化会话（create 会因「已存在持久化日志」失败）。
-    // resume 失败是硬错误：rewind 尚未发生，编辑保持原子（不截断不丢数据）。
+
     const provider = headerConfig?.provider ?? "";
     const model = headerConfig?.model ?? "";
     if (provider.length === 0 || model.length === 0) {
-      // 兜底：从当前会话 events 解析（headerConfig 未提供时）。
       const events = await this.readEvents(sessionId, signal);
       const config = events.findLast((event) => event.type === "request/header")?.data.header
         .config;
@@ -505,11 +507,6 @@ export class SessionEditor extends Service {
 }
 
 export default SessionEditor;
-
-// ---------------------------------------------------------------------------
-// HTTP 面（host）：GET /session-editor（timeline 投影）/ POST /session-editor
-// （edit | reroll | retry | rewind | fork）。
-// ---------------------------------------------------------------------------
 
 interface HttpRequestLike {
   method?: string;
@@ -733,8 +730,6 @@ async function handleRoute(
 }
 
 function registerHttpRoutes(ctx: Context): void {
-  // web 模式：注册到 webServer（dsh web 的 HTTP 面）。服务在构造期可能
-  // 尚未就绪，effect 回调在插件激活后执行，此时 ctx.get 才能取到。
   ctx.effect(() => {
     const webServer = ctx.get("webServer") as HttpServerLike | undefined;
     if (webServer === undefined) return () => {};
@@ -745,10 +740,7 @@ function registerHttpRoutes(ctx: Context): void {
       handler: (request, response) => handleRoute(editor, request, response),
     });
   }, "session-editor: HTTP route");
-  // desktop 模式：注册到 connection 的共享 /api 通道（官方 desktop 禁用
-  // webserver，走 connection 网关；路径带 /api 前缀）。connection 是可选
-  // 服务（web 模式无），且可能在 SessionEditor 构造前已 provide（事件已
-  // 错过）——监听 internal/service 事件并立即检查一次。
+
   const registerConnectionRoute = (): void => {
     const connection = ctx.get("connection", false) as
       | {
@@ -781,7 +773,6 @@ function registerHttpRoutes(ctx: Context): void {
   registerConnectionRoute();
 }
 
-/** connection.fetch 路由的 Fetch 形态处理（与 webServer 的 node:http 形态同语义）。 */
 async function handleFetchRoute(editor: SessionEditor, request: Request): Promise<Response> {
   try {
     if (request.method === "GET") {

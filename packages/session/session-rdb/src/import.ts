@@ -5,11 +5,11 @@ import type { Session, SessionEvent, SessionId, SessionHeader } from "@deepseek-
 import { parseSessionFormatLogFilename } from "@deepseek-ai/dsh-session-format";
 import { sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
-import { unzipSync } from "fflate";
+import { balanceRewindPrefix } from "@morlay/session-branch";
+import { unzip } from "fflate";
 import { replaceLiveSessionLog } from "./branch.ts";
 import type { SessionPersistenceRdb } from "./index.ts";
 
-/** 当前世代产物的文件名（读入侧接受任意 canonical 世代名，见 parseImportZip）。 */
 export const SESSION_LOG_ARTIFACT_FILENAME = "session.jsonl";
 
 export const SESSION_IMPORT_PATH = "/api/session.import";
@@ -29,7 +29,7 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
   } catch {
     throw new Error("imported session log has an unparsable header line");
   }
-  // 经 format catalog 恢复：v2 直接解码，历史版本走迁移链。
+
   let restore: ReturnType<typeof sessionFormatCatalog.createRestore>;
   try {
     restore = sessionFormatCatalog.createRestore(header, {
@@ -72,7 +72,7 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
   }
   const meta = artifact.header as SessionHeader;
   const events = artifact.events as SessionEvent[];
-  // 连续性校验：导入的 log 必须是从 0 开始的稠密 seq（落库前的最后一道闸）。
+
   for (let i = 0; i < events.length; i++) {
     if (events[i]!.seq !== i) {
       throw new Error(
@@ -80,8 +80,7 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
       );
     }
   }
-  // 继承前缀长度不得超过事件总数（上游 load 判损坏）；导出已收缩，此处
-  // 防御性收缩非自洽的 artifact。
+
   const inheritedEventCount = Math.min(artifact.inheritedEventCount, events.length);
   return {
     meta: {
@@ -100,17 +99,30 @@ export function parseJsonlArtifact(content: string): SessionStorageMetadata & {
   };
 }
 
-export function parseImportZip(zip: Uint8Array): SessionStorageMetadata & {
-  events: SessionEvent[];
-} {
+/**
+ * fflate 的 `unzip` 是回调式异步 API（node 侧内部走 worker_threads，浏览器侧走 Web Worker），
+ * 这里桥成 Promise。它与 `unzipSync` 的差异只在同步/异步：非法 zip 走的是同一段校验代码，
+ * 拒绝的错误对象与同步版一致，因此上层文案无需区分。
+ */
+function unzipAsync(data: Uint8Array): Promise<Record<string, Uint8Array>> {
+  return new Promise((resolve, reject) => {
+    unzip(data, (error, entries) => {
+      if (error === null) resolve(entries);
+      else reject(error);
+    });
+  });
+}
+
+export async function parseImportZip(
+  zip: Uint8Array,
+): Promise<SessionStorageMetadata & { events: SessionEvent[] }> {
   let entries: Record<string, Uint8Array>;
   try {
-    entries = unzipSync(zip);
+    entries = await unzipAsync(zip);
   } catch {
     throw new Error("imported zip is not a valid ZIP archive");
   }
-  // 上游导出按世代命名（`session.v3.jsonl`），早期 rdb 导出沿用 `session.jsonl`：
-  // 两者都接受，按 canonical 名字规则识别（临时/大写/压缩后缀名不视为产物）。
+
   const artifact = Object.entries(entries).find(
     ([name]) => parseSessionFormatLogFilename(name) !== undefined,
   );
@@ -123,14 +135,11 @@ export function parseImportZip(zip: Uint8Array): SessionStorageMetadata & {
   return parseJsonlArtifact(new TextDecoder().decode(artifact[1]));
 }
 
-// 上游 Agent 的取消面（duck-type）：停止运行中的 loop。
 interface ImportAgentLike {
   cancel?(cause: { kind: "user" }, options?: { keepInbox?: boolean }): void;
   whenIdle(): Promise<void>;
 }
 
-// persistImport 会先 rewind(-1) 截断 live 会话的内存 log，不能与 agent 写日志
-// 并发；keepInbox 保留排队输入（截断后由 rewind 的 live 钩子 durable 取消）。
 async function stopAgentLoop(ctx: Context, sessionId: SessionId): Promise<void> {
   const agents = ctx.get("agents") as
     | { get(id: SessionId): ImportAgentLike | undefined }
@@ -143,29 +152,37 @@ async function stopAgentLoop(ctx: Context, sessionId: SessionId): Promise<void> 
 
 export async function persistImport(
   persistence: SessionPersistenceRdb,
-  branch: { rewind(id: SessionId, toBoundary: number): Promise<unknown> } | undefined,
+  branch:
+    | {
+        rewind(id: SessionId, toBoundary: number): Promise<unknown>;
+
+        resetLiveDerivedState?(session: Session): void;
+      }
+    | undefined,
   imported: SessionStorageMetadata & { events: SessionEvent[] },
   targetId?: SessionId,
   sessions?: { get(id: SessionId): Session | undefined },
   stopLoop?: (id: SessionId) => Promise<void>,
 ): Promise<SessionId> {
   const id = targetId ?? (`session-${randomUUID()}` as SessionId);
+  // 整段导入的日志先配平：已不平衡的尾部会让接收会话的 token-meter 折叠在续写时报 step/end 无配对。
+  // 尾部未闭合的 step 是中断运行的正常形状，由上游 resume 补 closers，保持原样。
+  const events = balanceRewindPrefix(imported.events, { keepOpenTail: true });
   if (targetId !== undefined) {
     if (branch === undefined) {
       throw new Error("sessionBranch service is unavailable");
     }
-    // 覆盖语义先 rewind(-1) 截断：停止运行中的 loop（未注入端口时空操作）。
+
     if (stopLoop !== undefined) await stopLoop(targetId);
     await branch.rewind(targetId, -1);
-    // rewind 截断后追加导入事件（覆盖语义）。live 会话的 write handle 由
-    // live 路由持有——复用而非 open（open 会撞 SessionAlreadyOwnedError）。
+
     const liveHandle = persistence.tracker.writerOf(targetId);
     if (liveHandle !== undefined) {
-      if (imported.events.length > 0) await liveHandle.append(imported.events);
+      if (events.length > 0) await liveHandle.append(events);
     } else {
       const handle = await persistence.open(targetId, "write");
       try {
-        if (imported.events.length > 0) await handle.append(imported.events);
+        if (events.length > 0) await handle.append(events);
       } finally {
         await handle.close();
       }
@@ -173,24 +190,27 @@ export async function persistImport(
   } else {
     const handle = await persistence.create(
       { ...imported.meta, id },
-      { inheritedEventCount: imported.inheritedEventCount },
+      {
+        inheritedEventCount: SessionLogOffset(
+          Math.min(imported.inheritedEventCount, events.length),
+        ),
+      },
     );
-    if (imported.events.length > 0) await handle.append(imported.events);
+    if (events.length > 0) await handle.append(events);
     await handle.close();
   }
-  // 覆盖语义的 live 同步：rewind 截断的 live log 由同一批导入事件补回
-  // （不发布、不落库），使 observeSession 的 live 快照与 DB 一致。
+
   if (targetId !== undefined) {
     const live = sessions?.get(targetId);
-    if (live !== undefined) replaceLiveSessionLog(live, imported.events);
+    if (live !== undefined) {
+      replaceLiveSessionLog(live, events);
+      branch?.resetLiveDerivedState?.(live);
+    }
   }
   return id;
 }
 
 export function registerSessionImport(ctx: Context, persistence: SessionPersistenceRdb): void {
-  // webServer / connection 由其他插件注册，本后端构造早于它们——用
-  // ctx.inject 延迟到两个服务就绪后再注册 exact route（disposer 随 fiber
-  // 卸载自动回滚）；服务缺失（headless 装配、纯后端测试）时注入永不触发。
   ctx.inject(["webServer", "connection"] as const, (webCtx) => {
     const webServer = webCtx.webServer as unknown as {
       register(route: {
@@ -261,7 +281,7 @@ export function registerSessionImport(ctx: Context, persistence: SessionPersiste
             }
             let imported: SessionStorageMetadata & { events: SessionEvent[] };
             try {
-              imported = parseImportZip(zip);
+              imported = await parseImportZip(zip);
             } catch (error: unknown) {
               res.writeHead(400, { "content-type": "application/json" });
               res.end(
@@ -276,7 +296,10 @@ export function registerSessionImport(ctx: Context, persistence: SessionPersiste
                 ? (envelope.sessionId as SessionId)
                 : undefined;
             const branch = webCtx.get("sessionBranch") as unknown as
-              | { rewind(id: SessionId, toBoundary: number): Promise<unknown> }
+              | {
+                  rewind(id: SessionId, toBoundary: number): Promise<unknown>;
+                  resetLiveDerivedState?(session: Session): void;
+                }
               | undefined;
             try {
               const sessions = webCtx.get("sessions") as

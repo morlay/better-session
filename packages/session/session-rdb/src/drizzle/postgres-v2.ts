@@ -1,4 +1,3 @@
-// drizzle-kit 入口：v2 快照（PG，具名导出表对象）。
 import { toPostgresSchema } from "../adapters/to-postgres.ts";
 import { postgresTableDefsV2 } from "../entities/v2/index.ts";
 

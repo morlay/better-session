@@ -148,8 +148,6 @@ export async function* translate(
       case "file":
       case "reasoning-file":
       case "source":
-        // Provider-executed tools and generated files are not part of this
-        // adapter's client-executed tool loop; nothing to emit.
         break;
       case "finish":
         pendingUsage = mapUsage(part.usage);
@@ -189,7 +187,6 @@ function applyToolCall(part: LanguageModelV4ToolCall, toolQueue: OpenBlock[]): v
   if (block === void 0) return;
   block.callId = part.toolCallId;
   block.name = part.toolName;
-  // The provider emits the complete arguments on this part; the buffered
-  // deltas were a partial view.
+
   block.text = part.input;
 }

@@ -3,7 +3,7 @@
 RDB（SQLite / PostgreSQL）持久会话后端（`ctx.sessionPersistence`）：实现上游
 `SessionHandle` 模型（`create`/`open`/`flush`/`stat`/`list`），支持配置选择
 SQLite 或 PostgreSQL 后端。设计细节（表结构、原样存储、并发写、方言差异、
-仓库结构）见 [docs/design.md](docs/design.md)。
+仓库结构）见 [设计总览](.agents/designs/0001-设计总览.md)。
 
 ## 配置
 
@@ -50,7 +50,7 @@ type Config =
       type: "postgres";
       /** node-postgres 连接串；首次打开自动建表并写入 store 身份。 */
       connectionString: string;
-      /** 目标 schema（默认 public，必须已存在）；见 docs/schema.md。 */
+      /** 目标 schema（默认 public，必须已存在）；见 .agents/designs/0003-表结构.md。 */
       schema?: string;
     };
 ```
@@ -66,7 +66,7 @@ provider 抽象并**随插件自动注册 `ctx.sessionBranch`**（`SessionBranch
 - `timeline`：lineage 版本树投影。
 
 三个原语的完整语义（含 live 同步步骤、事件行复用机制、坐标论证与已知限制）
-见 [docs/branch.md](docs/branch.md)。
+见 [分支能力](.agents/designs/0002-分支能力.md)。
 
 上层编排（edit / reroll / retry / rewind / fork 完整功能）由
 `@morlay/ui-conversation-message-actions` 提供，或直接在 `ctx.sessionBranch` /
@@ -83,14 +83,14 @@ live（有打开的 handle 或未 materialize）报 `SESSION_LIVE`；删除前�
 
 web 模式经 `POST /api/session.delete`（body `{ sessionId }`）暴露，状态映射：
 200 已删除 / 404 不存在 / 409 未归档或 live。决策与边界见
-[docs/adr/0011](docs/adr/0011-会话删除仅限已归档且硬删.md)（UI 入口等官方插槽）。
+[ADR-0011](.agents/adrs/0011-会话删除仅限已归档且硬删.md)（UI 入口等官方插槽）。
 
 ## storages 接管（workspace 与投影缓存）
 
 `$DSH_HOME/storages` 不再产生文件：官方 `storage-json` 与
 `session-projection-cache` 由 `@morlay/better-session` 的 patch 禁用，数据落本包
-的语义专用表（表结构见 [docs/schema.md](docs/schema.md)，决策见
-[docs/adr/0009](docs/adr/0009-接管storages到rdb语义表.md)）：
+的语义专用表（表结构见 [表结构](.agents/designs/0003-表结构.md)，决策见
+[ADR-0009](.agents/adrs/0009-接管storages到rdb语义表.md)）：
 
 - **workspace 域**：官方 `workspace` 插件保留，本包在 storage hub 注册 `rdb`
   KV 后端（`storage-domain` 的 backend 路由为 `rdb`），记录、归属、显示顺序
@@ -114,9 +114,11 @@ session-rdb:
     writeIntervalMs: 5000
 ```
 
-旧 `storages` JSON 用显式命令导入（先停掉 dsh，旧文件保留不删）：
+旧 `storages` JSON 导入是**包内 API**（先停掉 dsh，旧文件保留不删）——目前没有 CLI
+入口、也不在 `exports` 里，用法见 `src/import-storages.ts` 与
+`src/__tests__/storage-takeover.spec.ts`：
 
-```sh
-just import-storages --dsh-home apps/dsh-custom-next/.dsh-store \
-  --path apps/dsh-custom-next/.dsh-store/sessions/sessions.sqlite
+```ts
+const result = await importStorages(backend.storage, { dshHome });
+// { workspaces: 1, workspaceState: true, projcache: 1 }
 ```

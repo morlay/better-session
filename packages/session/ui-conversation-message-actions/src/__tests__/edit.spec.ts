@@ -15,7 +15,6 @@ import {
   type SessionEvent,
 } from "@morlay/ui-conversation-message-actions/testing";
 
-/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
 function rdb(ctx: import("@deepseek-ai/cordis").Context): SessionPersistenceSqlite {
   return ctx.sessionPersistence as SessionPersistenceSqlite;
 }
@@ -29,9 +28,6 @@ describe("SessionEditor edit", () => {
   it("edits after an interrupted run (open turn with streamed output) without misreading the stored head", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // 轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 流式输出中途停止：
-      // turn/start + user/message + step/start + assistant/message（stream
-      // 内嵌 delta，原样落库）+ step/end，没有 turn/end。
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         {
@@ -86,8 +82,6 @@ describe("SessionEditor edit", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
 
-      // live 上游 head = 17（含构造时自动补记的 session/end-seed）；
-      // RDB 稠密 head = 17（原样落库，与 JSONL 一致）。
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -98,9 +92,6 @@ describe("SessionEditor edit", () => {
       expect(live.snapshotEvents().at(-1)?.seq).toBe(17);
       expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(17);
 
-      // 编辑轮 2 的助手文本 → boundary = 轮 1 的 turn/end（上游 seq 5）。
-      // 修复前：上游 seq 与稠密 head 直接比较 → 误报
-      // "rewind boundary 5 is beyond the stored head 17"。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("live"),
@@ -112,16 +103,14 @@ describe("SessionEditor edit", () => {
       expect(result.sessionId).toBe(SessionIdBrand("live"));
       expect(result.queuedTurns).toBe(0);
 
-      // live 内存 log：截断前缀（0..5）+ ignorable 版本效果（6）+ 手工闭合轮（7..12）。
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
       ]);
       expect(live.snapshotEvents()[6]?.type).toBe("session-branch/version");
       expect(live.snapshotEvents().at(-1)?.type).toBe("turn/end");
-      // RDB canonical log：截断前缀 + 版本效果 + 手工轮 → head = 12。
+
       expect((await backend.getHead(SessionIdBrand("live"))).fHeadSequence).toBe(12);
 
-      // 截断后继续 append 成功（coordinator cursor 已对齐，无残留 writer 校验误报）。
       const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
       liveAppend.append("turn/start", { turn: 4 });
       await ctx.sessions.flush(live);
@@ -162,7 +151,6 @@ describe("SessionEditor edit", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
 
-      // 编辑轮 2 的 assistant（eventSeq 10 = 轮 2 assistant/message）→ manualTurn。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("live"),
@@ -173,14 +161,12 @@ describe("SessionEditor edit", () => {
       });
       expect(result.sessionId).toBe(SessionIdBrand("live"));
 
-      // live log：截断前缀（header + 轮 1，seq 0..6）+ ignorable 版本效果
-      // （seq 7）+ manualTurn 轮 2（seq 8..13，含 turn/start…turn/end）。
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
       ]);
       expect(live.snapshotEvents()[7]?.type).toBe("session-branch/version");
       expect(live.snapshotEvents().at(-1)?.type).toBe("turn/end");
-      // manualTurn 的 assistant 内容为编辑后文本。
+
       const editedAssistant = live
         .snapshotEvents()
         .find((e) => e.type === "assistant/message" && e.data.turn === 2);
@@ -209,7 +195,6 @@ describe("SessionEditor edit", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
 
-      // mock agents：get 返回 live agent（记录 followup）。
       const followups: unknown[] = [];
       const disposeAgents = ctx.provide("agents", {
         get: (id: SessionIdBrand) =>
@@ -231,8 +216,6 @@ describe("SessionEditor edit", () => {
         },
       });
 
-      // 编辑轮 1 的 user（eventSeq 2）→ boundary = -1（清空全部，含
-      // request/header）→ 重放输入必须经 rewind 前解析的 headerConfig 排队。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("live"),
@@ -243,8 +226,7 @@ describe("SessionEditor edit", () => {
       });
       expect(result.sessionId).toBe(SessionIdBrand("live"));
       expect(followups).toHaveLength(1);
-      // live log：版本效果（seq 0）+ 重放输入由 followup 后的 agent append
-      // （mock 只记录，不 append）→ 版本效果是唯一新事件。
+
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0]);
       expect(live.snapshotEvents()[0]?.type).toBe("session-branch/version");
       disposeAgents();
@@ -274,8 +256,6 @@ describe("SessionEditor edit", () => {
   it("edits a user message in an open turn (whole-turn rewind, drop and replay)", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合：
-      // turn/start + user/message（seq 12）+ step/start + assistant/message（seq 14）。
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         {
@@ -311,8 +291,6 @@ describe("SessionEditor edit", () => {
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
 
-      // 编辑未闭合轮 3 的轮首 user（eventSeq 13）→ 整轮截断到轮 2 末尾
-      // （复用目标轮号，不留悬空 turn/start），重放编辑版。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("src"),
@@ -322,11 +300,8 @@ describe("SessionEditor edit", () => {
         cascade: "truncate",
       });
       expect(result.sessionId).toBe(SessionIdBrand("src"));
-      expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
+      expect(result.queuedTurns).toBe(0);
 
-      // 真实落盘行：截断前缀（0..11，轮 2 的 turn/end）+ 版本效果原样落库
-      // （seq 12，ignorable 信封与 JSONL 一致）；无 agents 服务 → 重放输入
-      // 不落盘（退化为已 durable 的就地版本，可随时继续输入）。
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -342,13 +317,11 @@ describe("SessionEditor edit", () => {
       expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
       expect(rows[11]?.fType).toBe("turn/end");
       expect(rows[12]?.fType).toBe("session-branch/version");
-      // 被 drop 的旧 user/message（seq 13）与轮 3 partial assistant（seq 15）
-      // 不在 log 中（轮 1/2 的 assistant/message 保留）。
+
       expect(rows.some((r) => r.fType === "user/message" && r.fSequence === 13)).toBe(false);
       expect(rows.some((r) => r.fType === "assistant/message" && r.fSequence === 15)).toBe(false);
       expect(rows.some((r) => r.fType === "assistant/message" && r.fSequence === 3)).toBe(true);
 
-      // 截断后继续 append 成功：版本效果占位 seq 12，后续输入从 seq 13 续接。
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
@@ -423,8 +396,6 @@ describe("SessionEditor edit", () => {
   it("edits a user message in an open turn on a live session in real agent-loop order (memory log balanced)", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合，真实
-      // agent-loop 顺序：turn/start → step/start → user/message → ...
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
@@ -466,8 +437,6 @@ describe("SessionEditor edit", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
 
-      // 编辑未闭合轮 3 的轮首 user（eventSeq 14）→ 整轮截断到轮 2 末尾
-      // （复用目标轮号，孤儿 step/start 随整轮一起丢弃）。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("live"),
@@ -479,7 +448,6 @@ describe("SessionEditor edit", () => {
       expect(result.sessionId).toBe(SessionIdBrand("live"));
       expect(result.queuedTurns).toBe(0);
 
-      // live 内存 log：截断前缀（0..11，轮 2 的 turn/end）+ ignorable 版本效果（12）。
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
       ]);
@@ -488,7 +456,7 @@ describe("SessionEditor edit", () => {
       expect(live.snapshotEvents().some((e) => e.type === "step/start" && e.data.turn === 3)).toBe(
         false,
       );
-      // 内存 log 对 token meter 重放合法。
+
       const meter = new TokenMeter(ctx);
       expect(() => meter.measure(live)).not.toThrow();
     } finally {
@@ -499,10 +467,6 @@ describe("SessionEditor edit", () => {
   it("exports a surface-corrupt session as a loadable artifact (export-time repair)", async () => {
     const { ctx, dispose } = await harness();
     try {
-      // 历史加载失败的数据样式：assistant/message 的 replace 指向既有 surface
-      // 节点。assistant/message 的来源内嵌在 stream、禁止 sourceEventSeqs，
-      // 其 provenance 永远无法满足上游 fold 校验——导出（readRaw）把非法
-      // replace 降级为 append。
       const compacted: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
         {
@@ -571,12 +535,10 @@ describe("SessionEditor edit", () => {
       ];
       await createPersisted(ctx, "export-me", compacted);
 
-      // 导出即修复：readRaw 序列化前修复 surface 语义并重算 provenance，
-      // 产出的 artifact 无需任何修复即可导入。
       const raw = await rdb(ctx).readRaw(SessionIdBrand("export-me"));
       expect(raw).toBeDefined();
       const parsed = parseJsonlArtifact(raw!.content);
-      // 导入以新 id 落库后会话可完整加载。
+
       const importedId = SessionIdBrand("export-imported");
       const handle = await rdb(ctx).create(
         { ...parsed.meta, id: importedId },
@@ -598,9 +560,6 @@ describe("SessionEditor edit", () => {
   it("edits a user message in an open turn in real agent-loop order (orphan step/start dropped, token-meter replay safe)", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // 真实 agent-loop 的 append 顺序：turn/start → step/start → user/message
-      // → assistant/message（stream 内嵌 delta，原样落库）→ step/end
-      // （无 turn/end）。轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 未闭合。
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
@@ -650,8 +609,6 @@ describe("SessionEditor edit", () => {
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
 
-      // 编辑未闭合轮 3 的轮首 user（eventSeq 14）→ 整轮截断到轮 2 末尾
-      // （复用目标轮号；孤儿 step/start 随整轮一起丢弃）。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("src"),
@@ -661,9 +618,8 @@ describe("SessionEditor edit", () => {
         cascade: "truncate",
       });
       expect(result.sessionId).toBe(SessionIdBrand("src"));
-      expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
+      expect(result.queuedTurns).toBe(0);
 
-      // 真实落盘行：截断前缀（0..11，轮 2 的 turn/end）+ 版本效果原样落库（seq 12）。
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -681,7 +637,6 @@ describe("SessionEditor edit", () => {
       expect(rows[12]?.fType).toBe("session-branch/version");
       expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 13)).toBe(false);
 
-      // 截断后继续 append 成功：版本效果占位 seq 12，后续输入从 seq 13 续接。
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
@@ -694,7 +649,7 @@ describe("SessionEditor edit", () => {
       await rdb(ctx).append(SessionIdBrand("src"), continuation);
       const continued = await rdb(ctx).load(SessionIdBrand("src"));
       expect(continued.events.at(-1)?.type).toBe("turn/end");
-      // 完整 log 对 token meter 重放合法（无孤儿 step/start）。
+
       const meter = new TokenMeter(ctx);
       const replayed = Session.create(SessionIdBrand("src"), [...continued.events]);
       expect(() => meter.measure(replayed)).not.toThrow();
@@ -706,10 +661,6 @@ describe("SessionEditor edit", () => {
   it("edits the second user message appended mid-turn in an open turn (agent-loop followup)", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合，且轮 3
-      // 内 agent 运行中追加了第二条 user/message（真实 agent-loop 的 followup
-      // 追加：turn/start → step/start → user/message → assistant/message →
-      // step/end → step/start → user/message → step/end，无 turn/end）。
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
@@ -760,8 +711,6 @@ describe("SessionEditor edit", () => {
       ];
       await createPersisted(ctx, "src", [...twoTurnLog(), ...openTail]);
 
-      // 编辑轮 3 内追加的第二条 user 消息（eventSeq 18）→ rewind 到该消息
-      // （exclusive drop 它及其后），重放编辑版。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("src"),
@@ -771,11 +720,8 @@ describe("SessionEditor edit", () => {
         cascade: "truncate",
       });
       expect(result.sessionId).toBe(SessionIdBrand("src"));
-      expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
+      expect(result.queuedTurns).toBe(0);
 
-      // 真实落盘行：截断前缀（0..16，孤儿 step/start 17 被 balanceRewindPrefix
-      // 剔除——它配对的 step/end 19 已被 drop）+ 版本效果原样落库（seq 17）；
-      // 被 drop 的旧 followup（seq 18）与 step/end（19）不在 log 中。
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -803,8 +749,6 @@ describe("SessionEditor edit", () => {
   it("edits the first user message of an open turn and keeps the mid-turn followup in the replay", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // request/header（seq 0）+ 轮 1（seq 1..6 闭合）+ 轮 2（seq 7..12 闭合）
-      // + 轮 3 未闭合，轮 3 内 agent 运行中追加了第二条 user/message（followup）。
       const header: SessionEvent = {
         type: "request/header",
         seq: SessionSeq(0),
@@ -878,7 +822,6 @@ describe("SessionEditor edit", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
 
-      // mock agents：get 返回 live agent（记录 followup，不真正驱动模型）。
       const followups: unknown[] = [];
       const disposeAgents = ctx.provide("agents", {
         get: (id: SessionIdBrand) =>
@@ -900,8 +843,6 @@ describe("SessionEditor edit", () => {
         },
       });
 
-      // 编辑轮 3 的第一条 user 消息（eventSeq 15）→ rewind 到该消息
-      // （exclusive drop 它及其后），重放编辑版 + 轮内 followup。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("live"),
@@ -911,7 +852,7 @@ describe("SessionEditor edit", () => {
         cascade: "truncate",
       });
       expect(result.sessionId).toBe(SessionIdBrand("live"));
-      // 重放 2 条输入：编辑版 + 轮内 followup。
+
       expect(followups).toHaveLength(2);
       const texts = followups.map((m) =>
         (m as { content: Array<{ type: string; text?: string }> }).content
@@ -929,8 +870,6 @@ describe("SessionEditor edit", () => {
   it("edits a mid-turn followup of a CLOSED turn without deleting the whole turn", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // request/header（seq 0）+ 轮 1（seq 1..6 闭合）+ 轮 2（seq 7..15 闭合）
-      // 轮 2 内 agent 运行中追加了第二条 user/message（followup）。
       const header: SessionEvent = {
         type: "request/header",
         seq: SessionSeq(0),
@@ -995,8 +934,6 @@ describe("SessionEditor edit", () => {
       ];
       await createPersisted(ctx, "src", [header, ...first, ...turn2]);
 
-      // 编辑闭合轮 2 内的 followup（eventSeq 13）→ 只 rewind 到该消息
-      // （exclusive drop 它及其后），保留轮首 q1 与回复，绝不允许整轮删除。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("src"),
@@ -1013,14 +950,12 @@ describe("SessionEditor edit", () => {
           ["turn/start", "turn/end", "user/message", "assistant/message"].includes(e.type),
         )
         .map((e) => `${String(e.seq)}:${e.type.replace("/", ".")}`);
-      // 轮 1 完整保留 + 轮 2 的 turn/start + q1 + ans0 保留；followup
-      // 之后（旧 seq 13/14/15）被 drop。
+
       expect(outline).toContain("6:turn.end");
       expect(outline).toContain("7:turn.start");
       expect(outline).toContain("9:user.message");
       expect(outline).toContain("10:assistant.message");
-      // 轮 2 还在（未被整轮删除）：轮首 q1 文本保留；turn/end 已不存在
-      // （被截断，load 补合成 interrupted closers）。
+
       expect(
         after.events.some(
           (e) =>
@@ -1028,7 +963,7 @@ describe("SessionEditor edit", () => {
             (e.data as { content?: Array<{ text?: string }> }).content?.[0]?.text === "q1",
         ),
       ).toBe(true);
-      // followup 文本已不在（exclusive drop 后未重放）。
+
       expect(
         after.events.some(
           (e) =>
@@ -1036,8 +971,7 @@ describe("SessionEditor edit", () => {
             (e.data as { content?: Array<{ text?: string }> }).content?.[0]?.text === "followup",
         ),
       ).toBe(false);
-      // 轮 2 的真实 turn/end（reason completed）已被截断；load 只给未闭合
-      // 尾部补合成 interrupted closers，轮 1 的 completed turn/end 保留。
+
       const completed = after.events.filter(
         (e) =>
           e.type === "turn/end" &&
@@ -1052,8 +986,6 @@ describe("SessionEditor edit", () => {
   it("edits on a COLD session by resuming the agent and replaying the edited input (GUI flow)", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // request/header（seq 0）+ 轮 1（seq 1..6 闭合）+ 轮 2（seq 7..12 闭合）。
-      // 会话只落库、无 live owner（模拟 GUI 打开历史会话后服务端 cold）。
       const header: SessionEvent = {
         type: "request/header",
         seq: SessionSeq(0),
@@ -1073,9 +1005,8 @@ describe("SessionEditor edit", () => {
           }) as SessionEvent,
       );
       await createPersisted(ctx, "cold", [header, ...first, ...second]);
-      expect(ctx.sessions.get(SessionIdBrand("cold"))).toBeUndefined(); // 确无 live
+      expect(ctx.sessions.get(SessionIdBrand("cold"))).toBeUndefined();
 
-      // mock agents：resume 返回一个"已驻留 agent"handle（记录 followup）。
       const resumed: Array<{
         sessionId: string;
         provider: string | undefined;
@@ -1096,7 +1027,7 @@ describe("SessionEditor edit", () => {
             provider: options.agentOptions?.provider,
             model: options.agentOptions?.model,
           });
-          // 真实 resume 会加载会话并建立 live entry（读 DB 现有事件）。
+
           const stored = await rdb(ctx).load(SessionIdBrand("cold"));
           ctx.sessions.create(SessionIdBrand("cold"), {
             meta: stored.meta,
@@ -1114,8 +1045,6 @@ describe("SessionEditor edit", () => {
         },
       });
 
-      // 编辑轮 2 user（eventSeq 8）→ rewind 到轮 1 末尾 → resume agent →
-      // followup 重放 edited 输入（GUI 场景的完整闭环）。
       const result = await editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("cold"),
@@ -1125,17 +1054,17 @@ describe("SessionEditor edit", () => {
         cascade: "truncate",
       });
       expect(result.sessionId).toBe(SessionIdBrand("cold"));
-      // resume 被调用且携带会话的模型配置。
+
       expect(resumed).toHaveLength(1);
       expect(resumed[0]).toMatchObject({ sessionId: "cold", provider: "mock", model: "mock" });
-      // followup 收到编辑后的输入。
+
       expect(followups).toHaveLength(1);
       const text = (followups[0] as { content: Array<{ type: string; text?: string }> }).content
         .filter((b) => b.type === "text")
         .map((b) => b.text ?? "")
         .join("");
       expect(text).toBe("q2 edited");
-      // 会话被 resume 后变 live（agent 驻留）。
+
       expect(ctx.sessions.get(SessionIdBrand("cold"))).toBeDefined();
       disposeAgents();
     } finally {
@@ -1157,7 +1086,6 @@ describe("SessionEditor edit", () => {
       );
       await createPersisted(ctx, "cold2", [header, ...first]);
 
-      // agents 服务存在但 resume 失败（factory 缺失 / prepare 冲突）。
       const disposeAgents = ctx.provide("agents", {
         get: () => undefined,
         create: async () => {
@@ -1168,8 +1096,6 @@ describe("SessionEditor edit", () => {
         },
       });
 
-      // 编辑轮 1 user（eventSeq 2）：resume 在 rewind 前失败 → 编辑抛错
-      // （不静默），且会话未被截断（原子：失败不丢数据）。
       await expect(
         editor.edit({
           action: "edit",
@@ -1181,7 +1107,7 @@ describe("SessionEditor edit", () => {
         }),
       ).rejects.toThrow(/no agent factory registered|无法重放/);
       const after = await rdb(ctx).load(SessionIdBrand("cold2"));
-      expect(after.events).toHaveLength(7); // header(0) + 轮 1(1..6) 完整
+      expect(after.events).toHaveLength(7);
       disposeAgents();
     } finally {
       await dispose();
@@ -1208,7 +1134,6 @@ describe("SessionEditor edit", () => {
       await ctx.sessions.flush(live);
       const before = live.snapshotEvents().length;
 
-      // agent 正在跑（whenIdle 需要显式 resolve 才会放行 rewind）。
       let releaseIdle: () => void = () => {};
       const idlePromise = new Promise<void>((resolve) => {
         releaseIdle = resolve;
@@ -1242,7 +1167,6 @@ describe("SessionEditor edit", () => {
         },
       });
 
-      // 发起编辑：运行中的 loop 先被停止，再等其收敛——释放前 rewind 不完成。
       const editing = editor.edit({
         action: "edit",
         sessionId: SessionIdBrand("busy"),
@@ -1251,14 +1175,13 @@ describe("SessionEditor edit", () => {
         text: "edited while busy",
         cascade: "truncate",
       });
-      // live 路径无真实 IO 等待，microtask 轮询足以推进到停止点；实现缺失
-      // 停止时循环退出、断言明确失败（不挂起）。
+
       for (let i = 0; i < 1000 && !calls.includes("whenIdle"); i += 1) await Promise.resolve();
       expect(calls).toEqual(["cancel", "whenIdle"]);
-      // keepInbox：停止本身不丢弃待处理输入（截断后由 live 钩子 durable 取消）。
+
       expect(cancels[0]).toEqual({ cause: { kind: "user" }, options: { keepInbox: true } });
       expect(live.snapshotEvents()).toHaveLength(before);
-      // 释放 agent → 编辑继续完成。
+
       releaseIdle();
       const result = await editing;
       expect(result.sessionId).toBe(SessionIdBrand("busy"));
@@ -1289,7 +1212,6 @@ describe("SessionEditor edit", () => {
       const live = ctx.sessions.get(SessionIdBrand("pending"))!;
       await ctx.sessions.flush(live);
 
-      // Leftover queued input must be durably canceled by rewind itself.
       let cleared = false;
       const followups: unknown[] = [];
       const disposeAgents = ctx.provide("agents", {

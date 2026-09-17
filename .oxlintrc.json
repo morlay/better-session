@@ -1,9 +1,12 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "oxc"],
-  "ignorePatterns": ["apps/dsh-custom/target/**", "target/**", "lib/**"],
+  "plugins": ["typescript", "unicorn", "oxc", "node"],
+  "ignorePatterns": ["target/**", "lib/**", "**/dist/**"],
   "options": {
     "typeAware": true,
     "typeCheck": true
+  },
+  "rules": {
+    "node/no-sync": "error"
   }
 }

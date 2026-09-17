@@ -63,7 +63,7 @@ function tryWriteLock(
 describe("busyTimeout: cross-process write-lock contention", () => {
   it("a zero timeout fails immediately while the lock is held (SQLite default would lose the append)", async () => {
     const path = await freshDbPath();
-    const holder = openDatabase(path, "wal", 0);
+    const holder = await openDatabase(path, "wal", 0);
     holder.exec("BEGIN IMMEDIATE");
     try {
       const result = await tryWriteLock(path, 0);
@@ -77,9 +77,9 @@ describe("busyTimeout: cross-process write-lock contention", () => {
 
   it("a nonzero timeout waits for the lock and commits (contention becomes a queue, not a loss)", async () => {
     const path = await freshDbPath();
-    const holder = openDatabase(path, "wal", 0);
+    const holder = await openDatabase(path, "wal", 0);
     holder.exec("BEGIN IMMEDIATE");
-    // Release the lock shortly after the waiter has begun contending on it.
+
     const release = setTimeout(() => {
       holder.exec("COMMIT");
     }, 800);

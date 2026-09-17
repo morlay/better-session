@@ -1,5 +1,4 @@
-import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Context } from "@deepseek-ai/cordis";
@@ -14,8 +13,7 @@ let root: string;
 let workspace: string;
 
 beforeEach(async () => {
-  // realpath：macOS 的 os.tmpdir() 是 /var/folders/…，canonical 拼写才是 /private/var/…。
-  root = realpathSync(await mkdtemp(join(tmpdir(), "sandbox-local-spec-")));
+  root = await realpath(await mkdtemp(join(tmpdir(), "sandbox-local-spec-")));
   workspace = join(root, "workspace");
   await mkdir(workspace, { recursive: true });
 });
@@ -25,7 +23,6 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-/** 装配插件（策略服务用桩：默认 workspace-write，工作区 = 临时工作区）。 */
 async function mount(config: Record<string, unknown> = {}): Promise<Context> {
   const ctx = new Context();
   contexts.push(ctx);

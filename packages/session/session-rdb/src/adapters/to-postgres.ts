@@ -18,7 +18,6 @@ import { toProperty, type ColumnDef, type TableDef } from "./types.ts";
 type TableRegistry = Record<string, AnyPgTable>;
 
 function buildColumn(name: string, c: ColumnDef, tables: TableRegistry): AnyPgColumnBuilder {
-  // 具体 builder 类型与 AnyPgColumnBuilder 在方法层面不兼容，构建阶段用宽松类型。
   let col: any;
   switch (c.type) {
     case "text": {
@@ -58,8 +57,7 @@ export function toPostgresSchema(
   schemaName = "public",
 ): Record<string, AnyPgTable> {
   const tables: TableRegistry = {};
-  // `pgSchema(name).table` 使表对象携带 schema 限定（查询/DDL 显式引用，
-  // 不依赖 search_path）；public 与无 schema 行为一致。
+
   const table = schemaName === "public" ? pgTable : pgSchema(schemaName).table;
   for (const def of defs) {
     const columns: Record<string, AnyPgColumnBuilder> = {};

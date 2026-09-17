@@ -18,29 +18,17 @@ import {
   type SessionPersistence,
 } from "@deepseek-ai/dsh-session-persistence";
 
-/** One backend service instance under test plus its teardown. */
 interface ContractBackendInstance {
   persistence: SessionPersistence;
   dispose: () => Promise<void>;
 }
 
-/** A backend under test: the primary instance plus optional storage-level capabilities. */
 export interface ContractBackend extends ContractBackendInstance {
-  /**
-   * Open a FRESH backend instance over the SAME storage, as another process
-   * would after this one exits. Enables the cross-instance visibility and
-   * reopen-continuation tests; a backend without shared storage omits it and
-   * those tests self-skip.
-   */
   reopen?: () => Promise<ContractBackendInstance>;
-  /**
-   * Inject a torn physical tail after the committed log of one stored session,
-   * simulating a crash mid-write. Enables the torn-tail tests.
-   */
+
   corruptTail?: (id: SessionId, cwd: string | undefined) => Promise<void>;
 }
 
-/** Build a minimal {@link SessionHeader} for a session id. */
 export function meta(id: string, cwd?: string): SessionHeader {
   return {
     version: SESSION_FORMAT_VERSION,
@@ -51,7 +39,6 @@ export function meta(id: string, cwd?: string): SessionHeader {
   };
 }
 
-/** A well-formed one-turn event log (contiguous seqs from 0). */
 export function oneTurnLog(): SessionEvent[] {
   return [
     { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
@@ -108,7 +95,6 @@ export function oneTurnLog(): SessionEvent[] {
   ];
 }
 
-/** A contiguous second-turn batch continuing {@link oneTurnLog}. */
 function secondTurn(startSeq = 6): SessionEvent[] {
   return [
     { type: "turn/start", seq: SessionSeq(startSeq), time: 9, data: { turn: 2 } },
@@ -136,12 +122,6 @@ export function appendLog(session: Session, events: readonly SessionEvent[]): vo
   }
 }
 
-/**
- * Run the backend-agnostic handle contract suite. `make()` MUST return a
- * fresh backend over fresh, empty storage each call.
- * @param name - suite label, e.g. `jsonl-none` / `sqlite`.
- * @param make - factory producing one fresh {@link ContractBackend} per test.
- */
 export function runPersistenceContract(name: string, make: () => Promise<ContractBackend>): void {
   describe(`SessionPersistence contract: ${name}`, () => {
     it("round-trips through one write handle: append, self-read, offset/length defaults", async () => {
@@ -155,18 +135,18 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         expect(handle.header).toMatchObject(m);
 
         await handle.append(log);
-        // An empty batch is a no-op, not an error.
+
         await handle.append([]);
-        // A write handle reads its own successful appends.
+
         const full = await handle.read();
         expect(full.events).toEqual(log);
         expect((await handle.read(3)).events).toEqual(log.slice(3));
         expect((await handle.read(0, 2)).events).toEqual(log.slice(0, 2));
         expect((await handle.read(1, 3)).events).toEqual(log.slice(1, 4));
-        // At/past the stored end: an empty list, never an error.
+
         expect((await handle.read(log.length)).events).toEqual([]);
         expect((await handle.read(log.length + 100)).events).toEqual([]);
-        // flush after a durable append is a satisfied barrier, not an error.
+
         await handle.flush();
         await handle.close();
       } finally {
@@ -194,8 +174,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         await expect(persistence.create(meta("dup-pending"))).rejects.toBeInstanceOf(
           SessionAlreadyExistsError,
         );
-        // Closing the creator without ever appending erases the session, so
-        // the id is free again.
+
         await first.close();
         const second = await persistence.create(meta("dup-pending"));
         await second.close();
@@ -263,7 +242,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
       try {
         const m = meta("owned");
         const creator = await persistence.create(m);
-        // The creator holds ownership even before materialization.
+
         await expect(persistence.open(m.id, "write")).rejects.toBeInstanceOf(
           SessionAlreadyOwnedError,
         );
@@ -273,7 +252,6 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         );
         await creator.close();
 
-        // After close, a new write handle continues at the stored next-seq.
         const writer = await persistence.open(m.id, "write");
         await writer.append(secondTurn());
         expect((await writer.read()).events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -295,7 +273,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         expect(reader.access).toBe("read");
         await expect(reader.append(secondTurn())).rejects.toBeInstanceOf(SessionReadOnlyError);
         await expect(reader.flush()).rejects.toBeInstanceOf(SessionReadOnlyError);
-        // The refusals mutated nothing.
+
         expect((await reader.read()).events).toEqual(oneTurnLog());
         await reader.close();
       } finally {
@@ -319,7 +297,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
           await using writer = await persistence.open(m.id, "write");
           await writer.append(secondTurn());
         }
-        // Leaving the block disposed the handle, so ownership is free again.
+
         const reopened = await persistence.open(m.id, "write");
         await reopened.close();
       } finally {
@@ -332,8 +310,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
       try {
         const materialized = await backend.persistence.create(meta("flush-all"));
         const abandoned = await backend.persistence.create(meta("flush-all-closing"));
-        // Close starts before the barrier: the swept handle refuses its flush,
-        // which counts as flushed — close itself drained durably.
+
         const closing = abandoned.close();
         await backend.persistence.flush();
         await closing;
@@ -341,9 +318,8 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         if (backend.reopen !== undefined) {
           const reopened = await backend.reopen();
           try {
-            // The barrier materialized the empty session durably...
             expect(await reopened.persistence.stat(SessionId("flush-all"))).toBeDefined();
-            // ...while the one that closed unappended never existed.
+
             expect(await reopened.persistence.stat(SessionId("flush-all-closing"))).toBeUndefined();
           } finally {
             await reopened.dispose();
@@ -360,7 +336,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
       try {
         const m = meta("lazy", "/work");
         const creator = await backend.persistence.create(m);
-        // The creator's own reads see the empty log before materialization.
+
         expect((await creator.read()).events).toEqual([]);
 
         const snapshot = await backend.persistence.stat(m.id);
@@ -440,8 +416,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         expect((await before.read()).events).toEqual(oneTurnLog());
 
         await writer.append(secondTurn());
-        // Both a pre-existing read handle and a freshly opened one observe the
-        // append once it has resolved.
+
         expect((await before.read()).events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
         const after = await persistence.open(m.id, "read");
         expect((await after.read()).events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -481,10 +456,10 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
       try {
         const m = meta("contiguity");
         const handle = await persistence.create(m);
-        await handle.append(oneTurnLog()); // seqs 0..5, next-seq = 6
-        // A re-append of an already-stored seq is rejected, not duplicated.
+        await handle.append(oneTurnLog());
+
         await expect(handle.append(oneTurnLog())).rejects.toThrow(/expected 6/);
-        // A mid-batch gap is rejected as a whole.
+
         const gapped: SessionEvent[] = [
           { type: "turn/start", seq: SessionSeq(6), time: 9, data: { turn: 2 } },
           {
@@ -495,7 +470,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
           },
         ];
         await expect(handle.append(gapped)).rejects.toThrow(/expected 7/);
-        // Neither rejection changed the stored log.
+
         expect((await handle.read()).events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
         await handle.close();
       } finally {
@@ -520,7 +495,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         await expect(handle.append(bad(1n))).rejects.toThrow(TypeError);
         await expect(handle.append(bad(1n))).rejects.toThrow(/losslessly JSON-serializable/);
         await expect(handle.append(bad(undefined))).rejects.toThrow(/losslessly JSON-serializable/);
-        // The rejected batches left no events behind: seq 0 is still free.
+
         await handle.append(oneTurnLog());
         expect((await handle.read()).events).toEqual(oneTurnLog());
         await handle.close();
@@ -535,7 +510,7 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         const m = meta("foreign-vocabulary");
         const handle = await persistence.create(m);
         await handle.append(oneTurnLog());
-        // 写路径当前格式校验：未知类型（非 ignorable）拒绝入库，批次不落库。
+
         await expect(
           handle.append([
             { type: "mystery/event", seq: SessionSeq(6), time: 7, data: { payload: true } },
@@ -543,7 +518,6 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         ).rejects.toBeInstanceOf(SessionFormatUnsupportedError);
         await handle.close();
 
-        // 拒绝的批次未落库：log 只有 oneTurnLog，可正常读写。
         const reader = await persistence.open(m.id, "read");
         try {
           const { events } = await reader.read();
@@ -579,15 +553,12 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         await creator.close();
         await backend.corruptTail(m.id, m.cwd);
 
-        // A reader over the corrupted artifact serves only the committed prefix.
         const readerInstance = await backend.reopen();
         try {
           const reader = await readerInstance.persistence.open(m.id, "read");
           expect((await reader.read()).events).toEqual(oneTurnLog());
           await reader.close();
 
-          // A write open + first append durably truncates the torn tail and
-          // continues at the committed next-seq.
           const writer = await readerInstance.persistence.open(m.id, "write");
           await writer.append(secondTurn());
           expect((await writer.read()).events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -596,7 +567,6 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
           await readerInstance.dispose();
         }
 
-        // The repaired log is intact for the next instance.
         const verifyInstance = await backend.reopen();
         try {
           const verify = await verifyInstance.persistence.open(m.id, "read");
@@ -630,7 +600,6 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         const listChanged = (await persistence.list()).find((s) => s.header.id === m.id);
         expect(listChanged?.revision).toBe(statChanged?.revision);
 
-        // Snapshot headers carry the stored header, identically everywhere.
         const reader = await persistence.open(m.id, "read");
         expect(statChanged?.header).toEqual(reader.header);
         expect(listChanged?.header).toEqual(reader.header);

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { and, desc, eq, gte, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, notInArray, sql } from "drizzle-orm";
 import type { PgAsyncDatabase, PgAsyncTransaction } from "drizzle-orm/pg-core";
 import type { NodePgDatabase, NodePgQueryResultHKT } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -20,7 +20,6 @@ import { sessionConflictRow, sessionInsertRow, titleOfEventData } from "./log.ts
 import { createStorageRepository } from "./storage-takeover/repository.ts";
 import type { StorageRepository } from "./storage-takeover/types.ts";
 
-/** drizzle-kit 生成的迁移目录（随包根 drizzle/ 发布；src/dist 形态经相对 URL 统一解析）。 */
 const postgresMigrationsDir = fileURLToPath(new URL("../drizzle/postgres/", import.meta.url));
 
 export interface PostgresBackendOptions {
@@ -37,13 +36,12 @@ export class PostgresBackend implements Backend {
 
   private readonly tables: Record<string, any>;
 
-  /** storages 接管表访问层；句柄在 open()（含迁移）完成后解析。 */
   readonly storage: StorageRepository;
 
   private readonly opened: Promise<void>;
   private resolveOpened!: () => void;
   private rejectOpened!: (error: unknown) => void;
-  /** 事务期间的连接覆盖：storage 写方法经它加入当前事务。 */
+
   private txOverride: unknown;
 
   constructor(
@@ -55,14 +53,11 @@ export class PostgresBackend implements Backend {
       this.resolveOpened = resolve;
       this.rejectOpened = reject;
     });
-    // 每个 storage 原语都会重新 await 同一 promise，失败仍逐一可见；这个
-    // 守卫只防止 open 失败早于首次使用时的 unhandled rejection。
+
     this.opened.catch(() => {});
     this.storage = createStorageRepository({
       db: () => this.opened.then(() => this.txOverride ?? this.db),
-      // storages 写事务用 serializable：workspace 域是整记录替换，多实例并发写
-      // 同一记录在 read committed 下是「最后提交者赢」的静默覆盖；提升隔离级别
-      // 后冲突以序列化失败暴露（与「并发写入 fail loud」一致），调用方重试即可。
+
       writeAtomically: (fn) =>
         this.db.transaction(
           async (tx) => {
@@ -92,8 +87,7 @@ export class PostgresBackend implements Backend {
 
   private async doOpen(): Promise<void> {
     const schema = this.options.schema ?? "public";
-    // drizzle-kit 迁移：v2 baseline 由旧版本建表（首次打开时标记为已应用），
-    // 本版本只执行 v3 diff（删 f_original_seq）。
+
     const qualifiedMeta = schema === "public" ? "t_schema_meta" : `"${schema}".t_schema_meta`;
     const probe = (await this.db.execute(
       sql`SELECT to_regclass(${qualifiedMeta}) IS NOT NULL AS exists`,
@@ -126,9 +120,8 @@ export class PostgresBackend implements Backend {
     this.storeIdentity = `${this.options.identityBase}:store:${storeId}`;
   }
 
-  /** 标记 v2 baseline 已应用（迁移表 v1 结构：id/hash/created_at/name/applied_at）。 */
   private async baselineV2(): Promise<void> {
-    const dir = readdirSync(postgresMigrationsDir).find((name) => name.endsWith("_v2_initial"));
+    const dir = (await readdir(postgresMigrationsDir)).find((name) => name.endsWith("_v2_initial"));
     if (dir === undefined) throw new Error("missing v2 baseline migration in drizzle/postgres");
     await this.db.execute(sql`
       CREATE SCHEMA IF NOT EXISTS drizzle
@@ -176,6 +169,28 @@ export class PostgresBackend implements Backend {
       .execute() as unknown as EventRow[];
   }
 
+  async getEventTypeAt(id: SessionId, sequence: number): Promise<string | undefined> {
+    const table = this.tables["t_session_events"];
+    const rows = (await this.eventRows(this.db)
+      .where(and(eq(table.fSessionId, id), eq(table.fSequence, sequence)))
+      .limit(1)
+      .execute()) as Array<{ fType?: string }>;
+    return rows[0]?.fType;
+  }
+
+  async getEventTypesBefore(
+    id: SessionId,
+    beforeSequence: number,
+    limit: number,
+  ): Promise<Array<Pick<EventRow, "fSequence" | "fType">>> {
+    const table = this.tables["t_session_events"];
+    return (await this.eventRows(this.db)
+      .where(and(eq(table.fSessionId, id), lt(table.fSequence, beforeSequence)))
+      .orderBy(desc(table.fSequence))
+      .limit(limit)
+      .execute()) as unknown as Array<Pick<EventRow, "fSequence" | "fType">>;
+  }
+
   async listSessions(): Promise<SessionRow[]> {
     return this.db.select().from(this.tables["t_sessions"]).execute() as unknown as Promise<
       SessionRow[]
@@ -204,8 +219,6 @@ export class PostgresBackend implements Backend {
     };
   }
 
-  // --- meta helpers ---
-
   private async readMeta(
     exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     key: string,
@@ -217,8 +230,6 @@ export class PostgresBackend implements Backend {
       .execute();
     return rows[0]?.fValue;
   }
-
-  // --- row primitives (transaction-internal) ---
 
   private async upsertSession(
     exec: PgAsyncDatabase<NodePgQueryResultHKT>,
@@ -249,7 +260,7 @@ export class PostgresBackend implements Backend {
         .where(eq(this.tables["t_sessions"].fSessionId, id))
         .execute()
     )[0] as Pick<SessionRow, "fHeadEventId" | "fHeadSequence"> | undefined;
-    /* v8 ignore next -- appendBatch/commitRepair always materialize the row before reading the head */
+
     if (head === undefined) throw new Error(`session "${id}" has no materialized row`);
     return head;
   }
@@ -265,7 +276,7 @@ export class PostgresBackend implements Backend {
         .where(eq(this.tables["t_sessions"].fSessionId, id))
         .execute()
     )[0] as { fSeedLength: number | null } | undefined;
-    /* v8 ignore next -- rewind always materializes the row before reading the seed length */
+
     if (row === undefined) throw new Error(`session "${id}" has no materialized row`);
     return row.fSeedLength;
   }
@@ -341,7 +352,6 @@ export class PostgresBackend implements Backend {
       .execute();
   }
 
-  /** 从事件表重算标题（最后一条 `session/title`），写回会话行的 f_title 列。 */
   private async refreshTitle(
     exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     id: SessionId,
@@ -397,8 +407,11 @@ export class PostgresBackend implements Backend {
       .delete(this.tables["t_session_projcache_row"])
       .where(eq(this.tables["t_session_projcache_row"].fSessionId, id))
       .execute();
-    await exec.delete(this.tables["t_sessions"]).where(eq(this.tables["t_sessions"].fSessionId, id)).execute();
-    // 桥接已删：不再被任何会话引用的事件行是孤儿（fork 共享的事件仍被引用，保留）。
+    await exec
+      .delete(this.tables["t_sessions"])
+      .where(eq(this.tables["t_sessions"].fSessionId, id))
+      .execute();
+
     await exec
       .delete(tEvents)
       .where(

@@ -15,7 +15,6 @@ import {
 } from "@deepseek-ai/dsh-session";
 import SessionPersistenceSqlite from "@morlay/session-rdb";
 
-/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
 function rdb(ctx: Context): SessionPersistenceSqlite {
   return ctx.sessionPersistence as SessionPersistenceSqlite;
 }
@@ -32,7 +31,6 @@ async function freshDbPath(): Promise<string> {
   return join(dir, "sessions.db");
 }
 
-/** 建 v2 形状库（已发布形状：t_session_events 带 f_original_seq、无 t_schema_meta）。 */
 function createV2Database(path: string): void {
   const db = new DatabaseSync(path);
   db.exec(`
@@ -107,7 +105,6 @@ describe("migrate v2 → v3", () => {
     await ctx.plugin(SessionStore);
     const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
     try {
-      // 迁移后会话可正常读取（v3 形状）。
       const loaded = await rdb(ctx).load(SessionId("s1"));
       expect(loaded.events).toHaveLength(1);
       expect(loaded.events[0]?.type).toBe("user/message");
@@ -121,7 +118,7 @@ describe("migrate v2 → v3", () => {
       user_version: number;
     };
     expect(version).toBe(3);
-    // v3 diff：t_session_events 删 f_original_seq、建 t_schema_meta。
+
     const bridgeColumns = db.prepare("PRAGMA table_info(t_session_events)").all() as Array<{
       name: string;
     }>;
@@ -143,7 +140,7 @@ describe("migrate v2 → v3", () => {
     await ctx.plugin(SessionStore);
     const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
     await fiber.dispose();
-    // 第二次打开：迁移已记录，不重复执行。
+
     const ctx2 = new Context();
     await ctx2.plugin(EmptySettings);
     await ctx2.plugin(SessionStore);
@@ -161,10 +158,6 @@ describe("migrate v2 → v3", () => {
   });
 
   it("reads a v0-format session through the legacy conversion chain (no id messages, old assistant shape)", async () => {
-    // 历史 v0 数据：f_version = 0，消息无 id、assistant/message 用旧形状
-    // （content/provenance 顶层字段）。读取时经上游迁移链转当前逻辑事件。
-    // surface 事件按上游 v2→v3 迁移的可迁移形状排在 step 内：迁移链只在
-    // 首个 step/start 处注入 system head，pre-step surface 会被拒绝。
     const path = await freshDbPath();
     const db = new DatabaseSync(path);
     db.exec(`
@@ -244,7 +237,7 @@ describe("migrate v2 → v3", () => {
     const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
     try {
       const loaded = await rdb(ctx).load(SessionId("v0-session"));
-      // 迁移链补 id / 旧形状转当前格式，并在首个 step 后注入 system head。
+
       expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
       expect(loaded.events).toHaveLength(5);
       expect(loaded.events[2]?.type).toBe("system/message");
@@ -266,9 +259,6 @@ describe("migrate v2 → v3", () => {
   });
 
   it("migrates a v2 session through the chain: in-step surface keeps chronology and promotes the system prompt to a head", async () => {
-    // v2 已发布形状：消息带 id、assistant/message 内嵌 message+stream，
-    // request/header 携带 header.system。v2→v3 迁移把 system 提升为
-    // system/message 并剥离 header.system——升级后历史会话的主路径。
     const path = await freshDbPath();
     createV0SessionDatabase(
       path,
@@ -311,8 +301,7 @@ describe("migrate v2 → v3", () => {
     try {
       const loaded = await rdb(ctx).load(SessionId("v0-session"));
       expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
-      // 首个 step 注入空 system head，request/header 的 system 再以 replace
-      // 更新它：源 7 事件 → 9。
+
       expect(loaded.events).toHaveLength(9);
       const emptyHead = loaded.events[2]!;
       expect(emptyHead.type).toBe("system/message");
@@ -334,10 +323,6 @@ describe("migrate v2 → v3", () => {
   });
 
   it("adopts a pre-step v2 session and normalizes request/header to the v3 shape", async () => {
-    // 本仓库编辑/重试种子（appendManualTurn）写入 pre-step surface，上游
-    // v2→v3 迁移链拒绝这类日志（不重排历史）。回退视图把 request/header 归一
-    // 为 v3 形状（省略 system / 空 tools / 空 adapterDefaults），会话保持可读；
-    // system prompt 不再进入模型请求，下次运行由 system/message 机制重建。
     const path = await freshDbPath();
     createV0SessionDatabase(
       path,
@@ -398,10 +383,6 @@ describe("migrate v2 → v3", () => {
   });
 
   it("loads a session whose replace range escaped into the old coordinate space (repair precedes validation)", async () => {
-    // 真实历史数据的形状：旧写入器重编号事件后，桥接行里的 replace range
-    // 仍落在旧坐标空间（end 远大于自身 seq）。读取视图修复（夹取/降级）必须
-    // 在 open 的 validateStoredEvents 之前运行，否则上游以
-    // 「startSeq and endSeq must reference earlier events」拒绝整个会话。
     const path = await freshDbPath();
     createV0SessionDatabase(
       path,
@@ -453,8 +434,7 @@ describe("migrate v2 → v3", () => {
       expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
       const checkpoint = loaded.events[7]!;
       expect(checkpoint.type).toBe("user/message");
-      // end 越界但 start 在 surface 且紧邻 metering 给出被遮蔽数量 → 夹取到
-      // 当前 surface 的同长区间（保住压缩语义）。
+
       expect(checkpoint.surfaceOp).toEqual({
         op: "replace",
         startSeq: SessionSeq(1),
@@ -475,9 +455,6 @@ describe("migrate v2 → v3", () => {
   });
 
   it("renames v2 PTC vocabulary in the adopted view (tool/code-dispatch-* and tools-code-mode)", async () => {
-    // 上游 v2→v3 迁移把 PTC 词汇改名（tool/code-dispatch-* → tool/ptc-dispatch-*、
-    // tools-code-mode → tools-ptc）。混合世代回退视图直接采用存储行，必须做
-    // 同样的归一，否则上游以「unknown event type」拒绝整个会话。
     const path = await freshDbPath();
     createV0SessionDatabase(
       path,
@@ -555,9 +532,6 @@ describe("migrate v2 → v3", () => {
   });
 
   it("adopts a mixed-generation v0 session the migration chain refuses (header version normalized, stream filled)", async () => {
-    // 旧写入器只落一次 header version，之后跨上游版本继续追加：log 里既有
-    // v0 时代的形状，也有新版本字段（permission/preset.origin），不是任何
-    // 单一已发布格式。严格迁移链拒绝后回退为当前格式视图。
     const path = await freshDbPath();
     createV0SessionDatabase(path, [
       { id: "evt-0", type: "turn/start", data: '{"turn":1}', surfaceOp: null },
@@ -597,13 +571,13 @@ describe("migrate v2 → v3", () => {
       const loaded = await rdb(ctx).load(SessionId("v0-session"));
       expect(loaded.meta.version).toBe(SESSION_FORMAT_VERSION);
       expect(loaded.events).toHaveLength(7);
-      // 回退路径补全结算字段：assistant/message 缺 stream。
+
       const assistant = loaded.events[4]!;
       expect(assistant.type === "assistant/message" && assistant.data.stream).toEqual([]);
-      // 新版本字段原样保留（不经 v0 payload 校验）。
+
       const preset = loaded.events[3]!;
       expect(preset.data).toEqual({ preset: "workspace-write", origin: "selection" });
-      // 回退视图可通过上游 seed 校验（否则会话仍然加载失败）。
+
       expect(() =>
         Session.fromRestore(
           SessionId("v0-session"),
@@ -651,9 +625,7 @@ describe("migrate v2 → v3", () => {
 
   it("rewrites a migrated v0 log on write open so read and write coordinates agree", async () => {
     const path = await freshDbPath();
-    // seeded v0 会话：迁移链在继承切点补一个 session/end-seed，事件数 +1，
-    // 读坐标与存储桥接行数不再相等——写打开必须把迁移视图落库，否则 append
-    // 按存储 head 重编号会撞上已有行。
+
     createV0SessionDatabase(
       path,
       [
@@ -693,7 +665,6 @@ describe("migrate v2 → v3", () => {
       await handle.append([{ type: "session/end-seed", seq: SessionSeq(8), time: 2000, data: {} }]);
       await handle.close();
 
-      // 存储已重写为当前格式：head 与事件数一致，续写落在同一坐标空间。
       const db = new DatabaseSync(path, { readOnly: true });
       const session = db
         .prepare(
@@ -716,7 +687,6 @@ describe("migrate v2 → v3", () => {
   });
 });
 
-/** 建旧格式 header 的库，事件行按给定顺序落桥接表（f_original_seq = 稠密 seq）。 */
 function createV0SessionDatabase(
   path: string,
   rows: ReadonlyArray<{ id: string; type: string; data: string; surfaceOp: string | null }>,

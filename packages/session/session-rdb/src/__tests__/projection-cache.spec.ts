@@ -22,7 +22,6 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
-/** 真实 agent-loop 形状的三轮事件：turn1 = seq 0..5，turn1/end = 5。 */
 function threeTurnLog(): SessionEvent[] {
   const events: SessionEvent[] = [];
   const push = (type: string, data: unknown, extra?: Record<string, unknown>): void => {
@@ -70,7 +69,7 @@ function threeTurnLog(): SessionEvent[] {
 
 interface Harness {
   ctx: Context;
-  /** 介质路径（只有落表断言用得到）。 */
+
   dbPath?: string;
   cache: {
     write(session: {
@@ -93,7 +92,6 @@ interface Harness {
   dispose: () => Promise<void>;
 }
 
-/** 等待 rdb 装配的投影缓存服务完成异步加载。 */
 async function waitFor<T>(read: () => T | undefined, timeoutMs = 2000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -118,7 +116,7 @@ async function harness(root?: string): Promise<Harness> {
     type: "sqlite",
     path: dbPath,
   });
-  // session-rdb 内部经 ctx.inject(['sessionProjections']) 注册替换版服务。
+
   const cache = await waitFor(
     () => ctx.get("sessionProjectionCache") as Harness["cache"] | undefined,
   );
@@ -130,7 +128,6 @@ async function harness(root?: string): Promise<Harness> {
   };
 }
 
-/** `cachedSnapshot` 返回 turnOutline 的 wire 值（条目数组）。 */
 function cachedTurns(harness: Harness, id: string): number[] | undefined {
   const live = harness.ctx.sessions.get(SessionId(id));
   const header = live?.header ?? meta(id);
@@ -145,10 +142,9 @@ describe("session-rdb projection cache replacement", () => {
   it("checkpoints a newly created session without an explicit write", async () => {
     const { ctx, cache, dispose } = await harness();
     try {
-      // 写路径由 [Service.init] 安装（class-plugin 装载）；等它执行完再建会话。
       await new Promise((resolve) => setTimeout(resolve, 20));
       const id = SessionId("created");
-      // 生产形状：新建会话只带初始化事件（无 turn/end），只能靠 created 强制点落行。
+
       ctx.sessions.create(id, {
         meta: meta("created"),
         seed: [
@@ -175,8 +171,7 @@ describe("session-rdb projection cache replacement", () => {
     try {
       await new Promise((resolve) => setTimeout(resolve, 20));
       const id = SessionId("turn-end");
-      // 只喂第 1 轮（含 turn/end）：行内容必须由 turn/end 强制点推进，
-      // 而不是停在 created 时的空快照。
+
       ctx.sessions.create(id, { meta: meta("turn-end"), seed: threeTurnLog().slice(0, 6) });
       const turns = await waitFor(() => {
         const value = cachedTurns({ ctx, cache, dispose }, "turn-end");
@@ -191,7 +186,6 @@ describe("session-rdb projection cache replacement", () => {
   it("keeps the host list blank flag correct for a newly created session", async () => {
     const { ctx, cache, dispose } = await harness();
     try {
-      // host ApiSessionList 的单元（schema 只需满足注册契约；本用例只读 wire 值）。
       const passthrough = { parse: (value: unknown) => value } as never;
       ctx.sessionProjections.register({
         key: "sessionListMetadata",
@@ -221,8 +215,7 @@ describe("session-rdb projection cache replacement", () => {
           },
         ] as never,
       });
-      // host 列表的 cold 口径（api/session-controller list.ts）：cache miss 即
-      // `blank=false`（未知即可见）；这正是"新建会话被当作非空白、复用失效"的根源。
+
       const blankOf = (): boolean => {
         const snapshot = cache.cachedSnapshot(live.header, live.inheritedEventCount);
         const metadata = snapshot?.values["sessionListMetadata"] as { blank?: boolean } | undefined;
@@ -250,8 +243,7 @@ describe("session-rdb projection cache replacement", () => {
     try {
       await new Promise((resolve) => setTimeout(resolve, 20));
       const id = SessionId("titled");
-      // 注册集里没有 title 单元（harness 只装 turnOutline）→ 行里不会有 title；
-      // rdb 写路径仍把 session/title 事件维护进 t_sessions.f_title 列。
+
       ctx.sessions.create(id, {
         meta: meta("titled"),
         seed: [
@@ -270,7 +262,7 @@ describe("session-rdb projection cache replacement", () => {
 
       const withTitle = cache.cachedSnapshot(live.header, live.inheritedEventCount, ["title"]);
       expect(withTitle?.values["title"]).toBe("直取标题");
-      // 未请求 title 的读不合并该列（避免无谓的直查）。
+
       const withoutTitle = cache.cachedSnapshot(live.header, live.inheritedEventCount, [
         "turnOutline",
       ]);
@@ -303,7 +295,7 @@ describe("session-rdb projection cache replacement", () => {
       await first.ctx.sessions.flush(live);
       await waitFor(() => first.cache.cachedSnapshot(live.header, live.inheritedEventCount));
       expect(staleCount(first.dbPath!)).toBeGreaterThan(0);
-      // 模拟旧版写入路径的产物：行水位被写成 -1（日志起点之前）。
+
       const db = new DatabaseSync(first.dbPath!);
       try {
         db.exec("UPDATE t_session_projcache_row SET f_seq = -1");
@@ -314,7 +306,6 @@ describe("session-rdb projection cache replacement", () => {
       await first.dispose();
     }
 
-    // 重启：新装配启动时应清掉这些陈旧行（缓存 miss 只意味着更长的尾重放）。
     const second = await harness(root);
     try {
       await waitFor(() => (staleCount(second.dbPath!) === 0 ? true : undefined));
@@ -352,14 +343,14 @@ describe("session-rdb projection cache replacement", () => {
 
       const cached = cache.cachedSnapshot(live.header, live.inheritedEventCount);
       expect(cachedTurns({ ctx, cache, dispose }, "live")).toEqual([1]);
-      // 超前行正是前端 higher-seq-wins 锁死旧轮次的来源：水位必须退到截断后。
+
       expect(cached?.asOfSeq).toBeLessThanOrEqual(live.seq - 1);
     } finally {
       await dispose();
     }
   });
 
-  it("cold rewind rewrites the cache without a live session", async () => {
+  it("cold rewind invalidates the cache instead of folding the log again", async () => {
     const { ctx, cache, dispose } = await harness();
     try {
       const id = SessionId("cold");
@@ -367,13 +358,22 @@ describe("session-rdb projection cache replacement", () => {
       const handle = await ctx.sessionPersistence.create(meta("cold"));
       await handle.append(events);
       await handle.close();
-      // cold 读一次生成缓存行（write-back 是 fire-and-forget）。
+
       cache.coldSnapshot(meta("cold"), SessionLogOffset(0), events);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await waitFor(() => cachedTurns({ ctx, cache, dispose }, "cold"));
       expect(cachedTurns({ ctx, cache, dispose }, "cold")).toEqual([1, 2, 3]);
 
       await ctx.sessionBranch.rewind(id, 5);
 
+      // 失效：零 I/O 读不再返回截断前的旧值（重建交给读路径，rewind 不 fold 日志）
+      expect(cachedTurns({ ctx, cache, dispose }, "cold")).toBeUndefined();
+
+      // 读路径重建出截断后的正确值
+      const reader = await ctx.sessionPersistence.open(id, "read");
+      const truncated = (await reader.read()).events;
+      await reader.close();
+      cache.coldSnapshot(meta("cold"), SessionLogOffset(0), truncated);
+      await waitFor(() => cachedTurns({ ctx, cache, dispose }, "cold"));
       expect(cachedTurns({ ctx, cache, dispose }, "cold")).toEqual([1]);
     } finally {
       await dispose();
@@ -393,27 +393,23 @@ describe("session-rdb projection cache replacement", () => {
       const childId = SessionId("child");
       await ctx.sessionBranch.forkFrom(parentId, { atSeq: 5, childSessionId: childId });
 
-      // fork 只读父 log 并派生新会话：父的 checkpoint 不受影响。
       expect(cachedTurns({ ctx, cache, dispose }, "parent")).toEqual([1, 2, 3]);
 
-      // 子会话是 seeded：以自己的 header 与 inherited cut 做 cold 读，
-      // 记录绑定子会话的 lifecycle 而不是父记录。
       const child = await readStored(ctx, childId);
       expect(child.header.isSeeded).toBe(true);
-      expect(child.inheritedEventCount).toBe(6); // 第一轮 6 个事件构成 seed 前缀
+      expect(child.inheritedEventCount).toBe(6);
 
       const inherited = SessionLogOffset(child.inheritedEventCount);
       const restored = cache.coldSnapshot(child.header, inherited, child.events);
       expect(turnsOf(restored.values["turnOutline"])).toEqual([1]);
-      await new Promise((resolve) => setTimeout(resolve, 50)); // cold 写回是 fire-and-forget
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       expect(turnsOf(cache.cachedSnapshot(child.header, inherited)?.values["turnOutline"])).toEqual(
         [1],
       );
-      // identity 校验：同一个 id 配错的 inherited cut 读不到子记录。
+
       expect(cache.cachedSnapshot(child.header, SessionLogOffset(0))).toBeUndefined();
 
-      // 联动结果落表：identity 复用会话行（seed 前缀长度），行水位不超过 seed 末尾。
       const db = new DatabaseSync(dbPath!);
       try {
         const head = db
@@ -454,9 +450,9 @@ describe("session-rdb projection cache replacement", () => {
         SessionLogOffset(child.inheritedEventCount),
         child.events,
       );
-      // 子会话只继承截断后存活的前缀。
+
       expect(turnsOf(snapshot.values["turnOutline"])).toEqual([1]);
-      // 父会话自己的水位仍在截断之后。
+
       expect(cachedTurns({ ctx, cache, dispose }, "parent")).toEqual([1]);
     } finally {
       await dispose();
@@ -473,7 +469,6 @@ describe("session-rdb projection cache replacement", () => {
       await cache.write(live);
       expect(cachedTurns({ ctx, cache, dispose }, "live")).toEqual([1, 2, 3]);
 
-      // 直接改介质（等价于另一个进程写入）：读路径必须立刻反映，而不是命中进程内镜像。
       const db = new DatabaseSync(dbPath!);
       try {
         const row = db
@@ -499,14 +494,12 @@ describe("session-rdb projection cache replacement", () => {
   });
 });
 
-/** `turnOutline` 的 wire 值 → 轮次数组。 */
 function turnsOf(outline: unknown): number[] | undefined {
   return Array.isArray(outline)
     ? outline.map((entry) => (entry as { turn: number }).turn)
     : undefined;
 }
 
-/** 读回一个非 live 会话的 header、seed 前缀长度与完整 log。 */
 async function readStored(
   ctx: Context,
   id: SessionId,

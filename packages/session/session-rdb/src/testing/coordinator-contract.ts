@@ -25,11 +25,6 @@ function send(session: Session, events: readonly SessionEvent[]): void {
   appendLog(session, events);
 }
 
-/**
- * RDB 特有行为契约：live 会话驱动持久化、seed 边界、fork/resume、HMR
- * dispose drain、冲突拒绝、torn-tail。coordinator 内部状态（ownerless /
- * per-id chain / legacy 迁移）已由新版 handle 模型承担，不再单独测试。
- */
 export function runCoordinatorContract(
   name: string,
   makeFixture: () => Promise<CoordinatorFixture>,
@@ -169,15 +164,14 @@ export function runCoordinatorContract(
       const { ctx, fiber } = await freshCtx(fix);
       try {
         const seed = oneTurnLog();
-        // A fork: a brand-new id whose seed came from elsewhere.
+
         const forked = ctx.sessions.create(SessionId("forked"), { seed, meta: { cwd: WORK } });
-        await ctx.sessions.flush(forked); // onCreated persisted the seed
+        await ctx.sessions.flush(forked);
         const loaded = await readAll(ctx, SessionId("forked"));
-        // Fork is where the marker earns its keep: the inherited prefix may
-        // carry a bracket the still-running parent owns.
+
         expect(loaded.events.slice(0, seed.length)).toEqual(seed);
         expect(loaded.events.at(-1)).toMatchObject({ type: "session/end-seed", seq: seed.length });
-        // A flush with no NEW events must not double-write.
+
         await ctx.sessions.flush(forked);
         const reloaded = await readAll(ctx, SessionId("forked"));
         expect(reloaded.events).toEqual(loaded.events);
@@ -205,13 +199,13 @@ export function runCoordinatorContract(
           seed: loaded.events,
           meta: { cwd: WORK },
         });
-        await second.ctx.sessions.flush(s2); // let onCreated adopt
+        await second.ctx.sessions.flush(s2);
         s2.append("turn/start", { turn: 2 });
         s2.append("turn/end", { turn: 2, reason: { kind: "completed" } });
         await second.ctx.sessions.flush(s2);
 
         const reloaded = await readAll(second.ctx, SessionId("resumed"));
-        // 0-5 the resumed seed, 6 end-seed, 7-8 the new turn.
+
         expect(reloaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
         expect(reloaded.events[6]).toMatchObject({ type: "session/end-seed" });
       } finally {
@@ -224,7 +218,7 @@ export function runCoordinatorContract(
       const fix = await makeFixture();
       const ctx = new Context();
       await ctx.plugin(SessionStore);
-      // A session exists BEFORE the persistence plugin is applied.
+
       const session = ctx.sessions.create(SessionId("pre-existing"), { meta: { cwd: WORK } });
       session.append("turn/start", { turn: 1 });
       session.append(
@@ -239,7 +233,6 @@ export function runCoordinatorContract(
 
       const fiber = await fix.mount(ctx);
       try {
-        // The plugin seeded it on apply; a subsequent flush persists its events.
         await ctx.sessions.flush(session);
         const loaded = await readAll(ctx, SessionId("pre-existing"));
         expect(loaded.events.length).toBeGreaterThanOrEqual(2);
@@ -265,10 +258,9 @@ export function runCoordinatorContract(
         { surfaceOp: "append" },
       );
       session.append("turn/end", { turn: 1, reason: { kind: "completed" } });
-      // No explicit flush — dispose must drain.
+
       await fiber.dispose();
 
-      // A fresh backend instance reads what the disposed one drained.
       const second = await freshCtx(fix);
       try {
         const loaded = await readAll(second.ctx, SessionId("drain"));
@@ -283,7 +275,6 @@ export function runCoordinatorContract(
       const fix = await makeFixture();
       const { ctx, fiber } = await freshCtx(fix);
       try {
-        // Persist a session with cwd WORK.
         let first!: Session;
         const firstFiber = await ctx.plugin(
           Object.assign(
@@ -297,7 +288,6 @@ export function runCoordinatorContract(
         await ctx.sessions.flush(first);
         await firstFiber.dispose();
 
-        // A NEW live session with the same id but a DIFFERENT cwd must be rejected.
         let second!: Session;
         await ctx.plugin(
           Object.assign(
@@ -318,8 +308,6 @@ export function runCoordinatorContract(
       const fix = await makeFixture();
       const { ctx, fiber } = await freshCtx(fix);
       try {
-        // A live session created then disposed BEFORE its first append: never
-        // materialized. A new live session reusing the id must reclaim it.
         let firstSession!: Session;
         const firstFiber = await ctx.plugin(
           Object.assign(
@@ -329,8 +317,8 @@ export function runCoordinatorContract(
             { inject: ["sessions"] },
           ),
         );
-        await ctx.sessions.flush(firstSession); // register the lazy state
-        await firstFiber.dispose(); // disposed before any append → never materialized
+        await ctx.sessions.flush(firstSession);
+        await firstFiber.dispose();
 
         let reuse!: Session;
         await ctx.plugin(
@@ -362,7 +350,6 @@ export function runCoordinatorContract(
         await handle.append(oneTurnLog());
         await handle.close();
 
-        // A fresh backend instance appends through a write handle.
         const writer = await ctx.sessionPersistence.open(SessionId("storage-only"), "write");
         await writer.append([
           { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
@@ -430,12 +417,10 @@ export function runCoordinatorContract(
         await creator.close();
         await fix.corruptTail(SessionId("torn"), WORK);
 
-        // A reader serves only the committed prefix.
         const reader = await ctx.sessionPersistence.open(SessionId("torn"), "read");
         expect((await reader.read()).events).toEqual(oneTurnLog());
         await reader.close();
 
-        // A write open + first append durably truncates the torn tail.
         const writer = await ctx.sessionPersistence.open(SessionId("torn"), "write");
         await writer.append([
           { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },

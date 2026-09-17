@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { readdirSync, statSync } from "node:fs";
-import { mkdir, open } from "node:fs/promises";
+import { mkdir, open, readdir, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { and, desc, eq, gte, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, notInArray, sql } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { migrate } from "drizzle-orm/node-sqlite/migrator";
 import type { SessionId } from "@deepseek-ai/dsh-session";
@@ -37,7 +36,6 @@ import type { StorageRepository } from "./storage-takeover/types.ts";
 
 type SqliteDb = NodeSQLiteDatabase & { $client: DatabaseSync };
 
-/** drizzle-kit 生成的迁移目录（随包根 drizzle/ 发布；src/dist 形态经相对 URL 统一解析）。 */
 const sqliteMigrationsDir = fileURLToPath(new URL("../drizzle/sqlite/", import.meta.url));
 
 const sqliteTxQueues = new Map<string, Promise<void>>();
@@ -45,7 +43,7 @@ const sqliteTxQueues = new Map<string, Promise<void>>();
 function enqueueSqliteTx<T>(path: string, fn: () => Promise<T>): Promise<T> {
   const tail = sqliteTxQueues.get(path) ?? Promise.resolve();
   const run = tail.then(fn);
-  // 失败的事务不得毒化后续队列。
+
   sqliteTxQueues.set(
     path,
     run.then(
@@ -65,11 +63,11 @@ async function createDatabaseFile(path: string): Promise<void> {
   }
 }
 
-export function openDatabase(
+export async function openDatabase(
   path: string,
   journalMode: JournalMode,
   busyTimeout = DEFAULT_BUSY_TIMEOUT_MS,
-): DatabaseSync {
+): Promise<DatabaseSync> {
   const db = new DatabaseSync(path);
   try {
     configureDatabase(db, path, journalMode, busyTimeout);
@@ -77,13 +75,12 @@ export function openDatabase(
     const { user_version: onDisk } = db.prepare("PRAGMA user_version").get() as {
       user_version: number;
     };
-    // v2 库（旧版本建表）首次打开：建迁移表并标记 v2 baseline 已应用，
-    // 使 migrate 只执行 v3 diff（删 f_original_seq、建 t_schema_meta）。
+
     if (onDisk === 2 && !hasMigrationsTable(db)) {
-      baselineV2(db);
+      await baselineV2(db);
     }
     migrate(dbx, { migrationsFolder: sqliteMigrationsDir });
-    // store 身份单例：新库由 migrate 建表后插入；v2/v3 库已有行（no-op）。
+
     dbx
       .insert(tPersistenceState)
       .values({ fSingleton: 1, fStoreId: randomUUID() })
@@ -92,8 +89,7 @@ export function openDatabase(
     if (onDisk === 0 || onDisk === 2) {
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     }
-    // journal_mode 不可绑定，经校验后的联合可直接插值；在归属校验、迁移
-    // 与身份写入全部成功之后应用（失败时保持磁盘原状）。
+
     db.exec(`PRAGMA journal_mode = ${journalMode.toUpperCase()}`);
     return db;
   } catch (error: unknown) {
@@ -110,9 +106,8 @@ function hasMigrationsTable(db: DatabaseSync): boolean {
   );
 }
 
-/** 标记 v2 baseline 已应用（迁移表 v1 结构：id/hash/created_at/name/applied_at）。 */
-function baselineV2(db: DatabaseSync): void {
-  const dir = readdirSync(sqliteMigrationsDir).find((name) => name.endsWith("_v2_initial"));
+async function baselineV2(db: DatabaseSync): Promise<void> {
+  const dir = (await readdir(sqliteMigrationsDir)).find((name) => name.endsWith("_v2_initial"));
   if (dir === undefined) throw new Error("missing v2 baseline migration in drizzle/sqlite");
   db.exec(`
     CREATE TABLE __drizzle_migrations (
@@ -134,12 +129,11 @@ function configureDatabase(
   journalMode: JournalMode,
   busyTimeout: number,
 ): void {
-  // 其余是驱动级 SQLite 操作（无 drizzle API）：连接 pragma 与 sqlite_schema 探测。
   db.exec("PRAGMA foreign_keys = ON");
-  // busy_timeout 必须先于一切锁获取（初始化事务与每次写事务）。
+
   db.exec(`PRAGMA busy_timeout = ${busyTimeout}`);
   const dbx = drizzle({ client: db });
-  // 初始化在单个 `BEGIN IMMEDIATE` 事务内完成，持写锁校验 schema 归属。
+
   dbx.transaction(
     (tx) => {
       const { user_version: onDisk } = tx.get(sql`PRAGMA user_version`) as {
@@ -185,7 +179,6 @@ export class SqliteBackend implements Backend {
   readonly kind = "sqlite" as const;
   storeIdentity!: string;
 
-  /** storages 接管表访问层；句柄在 open() 完成后解析。 */
   readonly storage: StorageRepository;
 
   private dbPath = "";
@@ -199,13 +192,12 @@ export class SqliteBackend implements Backend {
       this.resolveDb = resolve;
       this.rejectDb = reject;
     });
-    // 每个 storage 原语都会重新 await 同一 promise，失败仍逐一可见；这个
-    // 守卫只防止 open 失败早于首次使用时的 unhandled rejection。
+
     this.dbReady.catch(() => {});
     this.storage = createStorageRepository({
       db: () => this.dbReady,
-      // 同步驱动：读路径直读介质（open 之前的调用是装配错误，fail loud）。
-      dbSync: () => {
+
+      dbDirect: () => {
         if (this.db === undefined) throw new Error("sqlite session database is not open");
         return this.db;
       },
@@ -220,9 +212,7 @@ export class SqliteBackend implements Backend {
           } catch (error: unknown) {
             try {
               db.$client.exec("ROLLBACK");
-            } catch {
-              // 原始 SQLite 失败仍是可操作的根因。
-            }
+            } catch {}
             throw error;
           }
         }),
@@ -255,15 +245,12 @@ export class SqliteBackend implements Backend {
       await mkdir(dirname(actual), { recursive: true, mode: 0o700 });
       await createDatabaseFile(actual);
     }
-    // openDatabase 内的初始化事务是同步 `BEGIN IMMEDIATE`，须排进同一
-    // per-path 写队列——否则与进行中的写事务竞争会在持有锁的异步回调
-    // 让步期间忙等，冻结事件循环（死锁直到 busy_timeout）。
+
     await enqueueSqliteTx(actual, async () => {
       this.db = drizzle({
-        client: openDatabase(actual, this.options.journalMode, this.options.busyTimeout),
+        client: await openDatabase(actual, this.options.journalMode, this.options.busyTimeout),
       });
-      // drizzle-kit 迁移：v2 baseline 由旧版本建表（首次打开时标记为已应用），
-      // 本版本只执行 v3 diff（删 f_original_seq、建 t_schema_meta）。
+
       migrate(this.db, { migrationsFolder: sqliteMigrationsDir });
     });
     try {
@@ -272,7 +259,7 @@ export class SqliteBackend implements Backend {
         .from(tPersistenceState)
         .where(eq(tPersistenceState.fSingleton, 1))
         .get() as { fStoreId: string } | undefined;
-      /* v8 ignore next -- openDatabase inserts the singleton before returning. */
+
       if (row === undefined) {
         throw new Error(`session database at "${actual}" has no store identity`);
       }
@@ -280,7 +267,7 @@ export class SqliteBackend implements Backend {
         throw new Error(`session database at "${actual}" has no valid store identity`);
       }
       if (actual !== ":memory:") {
-        const identity = statSync(actual, { bigint: true });
+        const identity = await stat(actual, { bigint: true });
         this.storeIdentity = `file:${identity.dev}:${identity.ino}:${identity.birthtimeNs}:store:${row.fStoreId}`;
       } else {
         this.storeIdentity = `memory:store:${row.fStoreId}`;
@@ -292,8 +279,6 @@ export class SqliteBackend implements Backend {
   }
 
   async close(): Promise<void> {
-    // open 可能未及赋值 db 就失败（队列内初始化抛错）；close 不得在
-    // coordinator 的 dispose 之上再崩。
     if (this.db === undefined) return;
     this.db.$client.close();
   }
@@ -314,17 +299,30 @@ export class SqliteBackend implements Backend {
     return scoped.orderBy(tSessionEvents.fSequence).all() as unknown as EventRow[];
   }
 
+  async getEventTypeAt(id: SessionId, sequence: number): Promise<string | undefined> {
+    const row = this.eventRows()
+      .where(and(eq(tSessionEvents.fSessionId, id), eq(tSessionEvents.fSequence, sequence)))
+      .get() as { fType?: string } | undefined;
+    return row?.fType;
+  }
+
+  async getEventTypesBefore(
+    id: SessionId,
+    beforeSequence: number,
+    limit: number,
+  ): Promise<Array<Pick<EventRow, "fSequence" | "fType">>> {
+    return this.eventRows()
+      .where(and(eq(tSessionEvents.fSessionId, id), lt(tSessionEvents.fSequence, beforeSequence)))
+      .orderBy(desc(tSessionEvents.fSequence))
+      .limit(limit)
+      .all() as unknown as Array<Pick<EventRow, "fSequence" | "fType">>;
+  }
+
   async listSessions(): Promise<SessionRow[]> {
     return this.db.select().from(tSessions).all() as SessionRow[];
   }
 
   async transaction<T>(fn: (tx: BackendTx) => Promise<T>): Promise<T> {
-    // drizzle 的 SQLite 驱动只支持同步事务回调，而共享 BackendTx 接口因
-    // PostgreSQL 是异步的——BEGIN/COMMIT/ROLLBACK 语句因此走驱动层。
-    // 异步回调在持写锁期间让出微任务间隙：本进程内第二个连接此时同步
-    // `BEGIN IMMEDIATE` 会忙等并冻结事件循环（锁持有者无法提交，死锁直到
-    // busy_timeout）。per-path 写队列串行化消除该间隙——SQLite 本就单写者；
-    // 跨进程竞争仍经 busy_timeout 解决，不同数据库文件互不串行。
     return enqueueSqliteTx(this.dbPath, async () => {
       this.db.$client.exec("BEGIN IMMEDIATE");
       try {
@@ -332,15 +330,10 @@ export class SqliteBackend implements Backend {
         this.db.$client.exec("COMMIT");
         return result;
       } catch (error: unknown) {
-        // DELETE+INSERT 不会冲突；这里回滚 DB 级失败（磁盘满等），测试不可达。
-        /* v8 ignore start */
         try {
           this.db.$client.exec("ROLLBACK");
-        } catch {
-          // 原始 SQLite 失败仍是可操作的根因。
-        }
+        } catch {}
         throw error;
-        /* v8 ignore stop */
       }
     });
   }
@@ -359,8 +352,6 @@ export class SqliteBackend implements Backend {
     getPrevBridge: (id, sequence) => this.getPrevBridge(id, sequence),
     deleteSession: (id) => this.deleteSession(id),
   };
-
-  // --- row primitives (transaction-internal or standalone) ---
 
   private async upsertSession(storage: SessionStorageMetadata, incarnation: string): Promise<void> {
     this.db
@@ -381,7 +372,7 @@ export class SqliteBackend implements Backend {
       .from(tSessions)
       .where(eq(tSessions.fSessionId, id))
       .get() as Pick<SessionRow, "fHeadEventId" | "fHeadSequence"> | undefined;
-    /* v8 ignore next -- appendBatch/commitRepair always materialize the row before reading the head */
+
     if (head === undefined) throw new Error(`session "${id}" has no materialized row`);
     return head;
   }
@@ -392,7 +383,7 @@ export class SqliteBackend implements Backend {
       .from(tSessions)
       .where(eq(tSessions.fSessionId, id))
       .get() as { fSeedLength: number | null } | undefined;
-    /* v8 ignore next -- rewind always materializes the row before reading the seed length */
+
     if (row === undefined) throw new Error(`session "${id}" has no materialized row`);
     return row.fSeedLength;
   }
@@ -454,7 +445,6 @@ export class SqliteBackend implements Backend {
       .run();
   }
 
-  /** 从事件表重算标题（最后一条 `session/title`），写回会话行的 f_title 列。 */
   private async refreshTitle(id: SessionId): Promise<void> {
     const row = this.db
       .select({ fSequence: tSessionEvents.fSequence, fData: tEvents.fData })
@@ -495,7 +485,7 @@ export class SqliteBackend implements Backend {
     this.db.delete(tWorkspaceSessions).where(eq(tWorkspaceSessions.fSessionId, id)).run();
     this.db.delete(tSessionProjcacheRows).where(eq(tSessionProjcacheRows.fSessionId, id)).run();
     this.db.delete(tSessions).where(eq(tSessions.fSessionId, id)).run();
-    // 桥接已删：不再被任何会话引用的事件行是孤儿（fork 共享的事件仍被引用，保留）。
+
     const referenced = this.db.select({ fEventId: tSessionEvents.fEventId }).from(tSessionEvents);
     this.db.delete(tEvents).where(notInArray(tEvents.fEventId, referenced)).run();
   }

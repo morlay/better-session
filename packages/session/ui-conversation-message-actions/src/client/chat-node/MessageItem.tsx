@@ -3,16 +3,22 @@
 // `user`/`steering` 两个 key（keyed slot reuse 即替换），在消息动作行上提供
 // edit / retry（新版无此能力）。其余 key 由新版内置渲染器处理。
 
-import { memo, useState } from "react";
+import {
+  markdownLabels,
+  ReferenceMarkdown,
+  styling,
+  type ReferenceActions,
+} from "@morlay/dsh-client-ui-primitives/client";
+import { memo, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { InjectFace } from "@deepseek-ai/dsh-client-ui-slots";
 import { Button, Modal } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { UserMessageNode } from "@deepseek-ai/dsh-client-ui-chat/client";
+import type { UserMessageNode } from "@morlay/dsh-client-ui-chat/client";
 import { JsonBlock } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { ChatNodeViewProps, ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-chat/client";
-import type { RenderMessageImages } from "@deepseek-ai/dsh-client-ui-conversation/client";
+import type { ChatNodeViewProps, ChatViewSlotProps } from "@morlay/dsh-client-ui-chat/client";
+import type { RenderMessageImages } from "@morlay/dsh-client-ui-conversation/client";
 import { MessageIconActions } from "./MessageIconActions.tsx";
-import css from "./MessageItem.module.css";
+import { styles } from "./MessageItem.styles.ts";
 import type { EditableMessageBlock } from "../../shared.ts";
 import type { SessionEditorFace } from "../controller.ts";
 
@@ -33,56 +39,37 @@ function contentParts(content: readonly unknown[]): {
       images.push({ attachment: (b as UserImage).attachment });
     } else rest.push(block);
   }
-  return { text: texts.join(""), images, rest };
-}
-
-function projectUserText(text: string): ReactNode {
-  const re = /(^|\s)([/@][\w-]+)(?=\s|$)/g;
-  const parts: ReactNode[] = [];
-  let cursor = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const tokenStart = m.index + (m[1]?.length ?? 0);
-    const label = m[2] ?? "";
-    if (tokenStart > cursor) parts.push(<span key={cursor}>{text.slice(cursor, tokenStart)}</span>);
-    parts.push(
-      <span
-        key={tokenStart}
-        className={css.refChip}
-        data-ref-chip={label.startsWith("@") ? "subagent" : "skill"}
-      >
-        {label}
-      </span>,
-    );
-    cursor = tokenStart + label.length;
-  }
-  if (parts.length === 0) return <span>{text}</span>;
-  if (cursor < text.length) parts.push(<span key={cursor}>{text.slice(cursor)}</span>);
-  return <>{parts}</>;
+  // 多块消息按空行拼回 raw markdown（新式提交就是单块原文）。
+  return { text: texts.join("\n\n"), images, rest };
 }
 
 function UserStyleBubble({
   content,
   renderMessageImages,
   actions,
+  references,
   t,
 }: {
   content: readonly unknown[];
   renderMessageImages: RenderMessageImages;
 
   actions?: (text: string) => ReactNode;
+  // 引用 chip 的点击目标（owner props；缺省时 chip 照常渲染但点击无效果）。
+  references?: ReferenceActions | undefined;
   t: ChatViewSlotProps["t"];
 }): ReactNode {
   const { text, images, rest } = contentParts(content);
   const truncated = (total: number): string => t("json.truncated", { total });
+  // labels 按 locale revision 稳定（官方 MarkdownText 在它上面 memo 渲染缓存）。
+  const labels = useMemo(() => markdownLabels(t), [t]);
   const showBubble = text !== "" || rest.length > 0;
   return (
-    <div className={css.userRow} data-time-hover-root>
-      <div className={css.userStack}>
+    <div {...styling.props(styles.userRow)} data-time-hover-root>
+      <div {...styling.props(styles.userStack)}>
         {renderMessageImages({ images, align: "end" })}
         {showBubble && (
-          <div className={css.bubble}>
-            {projectUserText(text)}
+          <div {...styling.props(styles.bubble)}>
+            <ReferenceMarkdown text={text} labels={labels} actions={references} />
             {rest.map((block, i) => (
               <JsonBlock
                 key={i}
@@ -103,9 +90,15 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
   node,
   renderMessageImages,
   t,
+  openFile,
+  openSkill,
   recall,
   retry,
-}: ChatNodeViewProps<"user" | "steering"> & InjectFace<SessionEditorFace>) {
+}: ChatNodeViewProps<"user" | "steering"> & {
+  // keyed 渲染器由 owner props 展开调用：引用 chip 的点击目标从这里来。
+  openFile: (path: string) => void;
+  openSkill: (name: string) => void;
+} & InjectFace<SessionEditorFace>) {
   const data = node.data;
   const [confirmingRecall, setConfirmingRecall] = useState<EditableMessageBlock | null>(null);
   const [confirmingRetry, setConfirmingRetry] = useState(false);
@@ -153,7 +146,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
           closeLabel="关闭"
           description="将撤回该消息及其之后的对话内容到输入框，请修改后重新发送。"
           footer={
-            <div className={css.confirmActions}>
+            <div {...styling.props(styles.confirmActions)}>
               <Button variant="outline" onClick={() => setConfirmingRecall(null)}>
                 取消
               </Button>
@@ -179,7 +172,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
           closeLabel="关闭"
           description={`将重新生成第 ${turn} 轮的回复，并抛弃该回合之后的内容。`}
           footer={
-            <div className={css.confirmActions}>
+            <div {...styling.props(styles.confirmActions)}>
               <Button variant="outline" onClick={() => setConfirmingRetry(false)}>
                 取消
               </Button>
@@ -199,13 +192,13 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
       <UserStyleBubble
         content={data.content}
         renderMessageImages={renderMessageImages}
+        references={{ openFile, openSkill }}
         t={t}
         actions={(text) => (
           <MessageIconActions
             text={text}
             time={data.time}
             clock="start"
-            className={css.actions}
             t={t}
             onEdit={onEdit}
             onRetry={onRetry}

@@ -1,6 +1,3 @@
-// 已归档会话的硬删除：数据面清理、守卫（未归档 / live / 不存在）、
-// 归档集退场，以及不误伤其他会话的事件行。
-
 import { afterEach, describe, expect, it } from "vitest";
 import { Context } from "@deepseek-ai/cordis";
 import {
@@ -49,7 +46,6 @@ async function createPersisted(
   }
 }
 
-/** 经 storages 接管写 workspace 域状态：归档集落在会话行的 f_archived_at 上。 */
 async function archive(persistence: SessionPersistenceRdb, ...ids: string[]): Promise<void> {
   await persistence.internals().backend.storage.writeWorkspaceState({
     initialized: true,
@@ -58,10 +54,7 @@ async function archive(persistence: SessionPersistenceRdb, ...ids: string[]): Pr
   });
 }
 
-async function eventCountOf(
-  persistence: SessionPersistenceRdb,
-  id: string,
-): Promise<number> {
+async function eventCountOf(persistence: SessionPersistenceRdb, id: string): Promise<number> {
   return (await persistence.internals().backend.getEventRows(SessionId(id))).length;
 }
 
@@ -78,10 +71,10 @@ describe("deleteSession", () => {
     expect(listed).toContain(SessionId("keep-me"));
     expect(listed).not.toContain(SessionId("drop-me"));
     expect(await eventCountOf(persistence, "keep-me")).toBeGreaterThan(0);
-    // 会话行删除后其事件行不再被引用：孤儿清理把它一并抹掉。
+
     const remaining = await persistence.internals().backend.getEventRows(SessionId("drop-me"));
     expect(remaining).toEqual([]);
-    // 其他会话的事件 id 未被孤儿清理误伤。
+
     const kept = await persistence.internals().backend.getEventRows(SessionId("keep-me"));
     for (const row of kept) expect(row.fEventId).not.toBe("");
   });
@@ -163,7 +156,6 @@ describe("deleteSession", () => {
 
     await persistence.deleteSession(SessionId("parent"));
 
-    // 子会话复用父会话的事件行：孤儿清理不得把仍被引用的行删掉。
     const child = await persistence.readLog(childId, {});
     expect(child?.events.length ?? 0).toBeGreaterThan(0);
   });
@@ -191,7 +183,6 @@ describe("deleteSession", () => {
   });
 });
 
-/** 假 webServer/connection 注册后的删除路由（插件构造期已注册，等待注入落地）。 */
 async function deletionRoute(
   ctx: Context,
 ): Promise<(req: unknown, res: unknown) => void | Promise<void>> {

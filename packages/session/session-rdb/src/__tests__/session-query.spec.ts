@@ -31,7 +31,7 @@ describe("session-rdb session query replacement", () => {
     const { ctx, dispose } = await harness();
     disposals.push(dispose);
     const query = ctx.sessionQuery;
-    // 与官方 `openAt: never` 同形：拒绝发生在请求归一化与任何索引工作之前。
+
     await expect(query.searchSessions({ query: "needle" })).rejects.toMatchObject({
       code: "SESSION_QUERY_SEARCH_DISABLED",
     });

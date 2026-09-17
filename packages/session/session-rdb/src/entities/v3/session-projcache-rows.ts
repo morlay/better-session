@@ -1,13 +1,5 @@
 import type { TableDef } from "../../adapters/types.ts";
 
-/**
- * 投影 checkpoint 行（上游 checkpoint 的 `(sessionId, key, ver, seq, val)`
- * 逐行落库）：`f_seq` 是该行的日志水位、`f_ver` 是投影单元的 stateVersion。
- * 行是折出捷径、非权威，版本不匹配时整行丢弃。
- *
- * checkpoint 的日志 identity 不另存一份：它与 `t_sessions` 的行是 1:1，直接
- * 复用该行的 `f_version` / `f_created_at` / `f_cwd` / `f_seed_length` 做校验。
- */
 export const sessionProjcacheRows: TableDef = {
   name: "t_session_projcache_row",
   columns: {

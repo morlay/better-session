@@ -1,31 +1,44 @@
-// 真实内核级验证（darwin-only，自动跳过）：用真装配 + 真 spawn 跑一遍
-// workspace-write / allowWrite / deny，证明规则确实进了 Seatbelt profile。
-//
-// 跳过条件：非 macOS，或宿主不允许 spawn `sandbox-exec`（例如被更外层的
-// Seatbelt 拦住，`sandbox_apply: Operation not permitted`）。
-
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { Context } from "@deepseek-ai/cordis";
 import type { SandboxExecutionPolicy } from "@deepseek-ai/dsh-sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as plugin from "../index.ts";
 
-/** 宿主是否能真正执行 Seatbelt profile（探测一次）。 */
-function seatbeltUsable(): boolean {
+const execFileAsync = promisify(execFile);
+
+async function seatbeltUsable(): Promise<boolean> {
   if (process.platform !== "darwin") return false;
-  const probe = spawnSync(
-    "/usr/bin/sandbox-exec",
-    ["-p", "(version 1) (allow default)", "--", "true"],
-    { stdio: "ignore" },
-  );
+  const probe = await capture("/usr/bin/sandbox-exec", [
+    "-p",
+    "(version 1) (allow default)",
+    "--",
+    "true",
+  ]);
   return probe.status === 0;
 }
 
-const usable = seatbeltUsable();
+/** 跑子进程并把非零退出折算成 status，便于与 spawnSync 的结果形状保持一致。 */
+async function capture(
+  command: string,
+  args: string[],
+): Promise<{ status: number | null; stderr: string }> {
+  try {
+    const { stderr } = await execFileAsync(command, args, { encoding: "utf8" });
+    return { status: 0, stderr };
+  } catch (error: unknown) {
+    const failure = error as { code?: unknown; stderr?: unknown };
+    return {
+      status: typeof failure.code === "number" ? failure.code : null,
+      stderr: typeof failure.stderr === "string" ? failure.stderr : "",
+    };
+  }
+}
 
-/** 仓库内、不在 `os.tmpdir()` 下的临时根：allowWrite 的增量效果需要它。 */
+const usable = await seatbeltUsable();
+
 const root = join(process.cwd(), ".tmp", "sandbox-local-e2e");
 const workspace = join(root, "ws");
 const cache = join(root, "cache");
@@ -42,7 +55,6 @@ async function mount(config: Record<string, unknown>): Promise<Context> {
   return ctx;
 }
 
-/** 用真实平台链 confine，然后真实执行。 */
 async function run(
   ctx: Context,
   command: string,
@@ -52,8 +64,7 @@ async function run(
     workspaceRoot: workspace,
   });
   const [program, ...args] = confined.argv;
-  const result = spawnSync(program as string, args, { encoding: "utf8" });
-  return { status: result.status, stderr: result.stderr ?? "" };
+  return capture(program as string, args);
 }
 
 describe.skipIf(!usable)("真实 Seatbelt 下的 allow / deny", () => {

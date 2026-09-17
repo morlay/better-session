@@ -17,7 +17,6 @@ import {
 
 const WORKSPACE = "/ws";
 
-/** 把 `-- <pattern>` 条目编译成规则。 */
 function denyRules(entries: string[], workspace = WORKSPACE) {
   return compileRules(
     ruleSourceOf({ access: entries.map((entry) => `-- ${entry}`) }, {}),
@@ -25,7 +24,6 @@ function denyRules(entries: string[], workspace = WORKSPACE) {
   );
 }
 
-/** 把 `r- <path>` 条目编译成规则。 */
 function readOnlyRules(entries: string[], workspace = WORKSPACE) {
   return compileRules(
     ruleSourceOf({ access: entries.map((entry) => `r- ${entry}`) }, {}),
@@ -106,7 +104,7 @@ describe("globToRegexSource", () => {
     expect(new RegExp(`^${globToRegexSource("/ws/[ab].txt")}$`).test("/ws/b.txt")).toBe(true);
     expect(new RegExp(`^${globToRegexSource("/ws/[!ab].txt")}$`).test("/ws/c.txt")).toBe(true);
     expect(new RegExp(`^${globToRegexSource("/ws/[!ab].txt")}$`).test("/ws/a.txt")).toBe(false);
-    // 只用 JS 与 POSIX ERE 共有的语法（Seatbelt 要用同一份源码）。
+
     expect(globToRegexSource("/ws/**/*.pem")).not.toContain("(?:");
   });
 });

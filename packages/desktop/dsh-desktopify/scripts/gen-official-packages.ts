@@ -1,10 +1,9 @@
-// 生成 src/official-packages.generated.ts：从上游 bundle 的装配面搜集官方插件
-// 包清单（解析逻辑见 ../src/official-packages.ts）。上游升级后重跑：
-//   pnpm --filter @morlay/dsh-desktopify run gen:official-packages
-
-import { writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { collectOfficialProfilePackages, DESKTOPIFY_PACKAGE_ROOT } from "../src/official-packages.ts";
+import {
+  collectOfficialProfilePackages,
+  DESKTOPIFY_PACKAGE_ROOT,
+} from "../src/official-packages.ts";
 
 const list = await collectOfficialProfilePackages();
 
@@ -18,5 +17,5 @@ export const OFFICIAL_PROFILE_PACKAGES: readonly string[] = [
 ${list.map((name) => `  ${JSON.stringify(name)},`).join("\n")}
 ];
 `;
-writeFileSync(join(DESKTOPIFY_PACKAGE_ROOT, "src", "official-packages.generated.ts"), content);
+await writeFile(join(DESKTOPIFY_PACKAGE_ROOT, "src", "official-packages.generated.ts"), content);
 console.log(`official packages: wrote ${String(list.length)} packages`);

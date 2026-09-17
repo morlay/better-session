@@ -1,5 +1,3 @@
-/** Upstream-Node child lifecycle and streaming custom-protocol carrier. */
-
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { once } from "node:events";
 import { join } from "node:path";
@@ -64,32 +62,27 @@ async function exitsWithin(exit: Promise<void>, milliseconds: number): Promise<b
   }
 }
 
-/** Ready facts reported by one installed dsh child. */
 export interface DesktopHostReady {
   readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION;
   readonly dshVersion: string;
 }
 
-/** Spawn hook that may route the child through a user shell (rc sourcing). */
 export type DesktopHostSpawn = (
   command: string,
   args: readonly string[],
   options: SpawnOptions,
 ) => ChildProcess;
 
-/** Launch customization for development and packaged modes. */
 export interface DesktopHostOptions {
-  /** Extra Node.js arguments before the entry (development: `--import=tsx/esm`). */
   readonly nodeArgs?: readonly string[];
-  /** Extra environment entries merged over the filtered parent environment. */
+
   readonly extraEnv?: Readonly<Record<string, string>>;
-  /** Allow profile bundles resolved outside the project (workspace links). */
+
   readonly allowLinkedProfile?: boolean;
-  /** Spawn hook; defaults to a direct `spawn`. */
+
   readonly spawn?: DesktopHostSpawn;
 }
 
-/** One dsh backend running under the bundled upstream Node.js executable. */
 export class DesktopHostProcess {
   private child: ChildProcess | undefined;
   private requestPipe: Writable | undefined;
@@ -108,14 +101,6 @@ export class DesktopHostProcess {
   private exitPromise: Promise<void> | undefined;
   private stderr = "";
 
-  /**
-   * @param node - absolute bundled upstream Node.js executable.
-   * @param runtimeDir - immutable dsh package set the application carries (the
-   *   desktop host entry and the official packages resolve from here).
-   * @param projectDir - active or staged desktop npm project.
-   * @param inspectPort - optional loopback inspector port for workspace development.
-   * @param options - launch customization (node args, environment, shell spawn).
-   */
   constructor(
     private readonly node: string,
     private readonly runtimeDir: string,
@@ -124,7 +109,6 @@ export class DesktopHostProcess {
     private readonly options: DesktopHostOptions = {},
   ) {}
 
-  /** Start the child once and resolve only after its complete composition is active. */
   async start(): Promise<DesktopHostReady> {
     if (this.child !== undefined) return this.readyPromise;
     const entry = join(
@@ -218,7 +202,6 @@ export class DesktopHostProcess {
     return this.readyPromise;
   }
 
-  /** Forward one `dsh-app://app` request to the child without buffering its body. */
   async fetch(request: Request): Promise<Response> {
     await this.start();
     const child = this.child;
@@ -266,14 +249,13 @@ export class DesktopHostProcess {
     });
   }
 
-  /** Request graceful teardown, then wait for child exit. */
   async stop(): Promise<void> {
     const child = this.child;
     if (child === undefined) return;
     this.blockedResponses.clear();
     this.responsePipe?.resume();
     if (child.connected) this.send({ type: "shutdown" });
-    // Closing the parent-owned write end releases the Host's pending Windows pipe read.
+
     this.requestPipe?.destroy();
     const exited = this.exitPromise ?? Promise.resolve();
     if (!(await exitsWithin(exited, 10_000))) this.killChild("SIGTERM");
@@ -288,7 +270,6 @@ export class DesktopHostProcess {
     this.responsePipe = undefined;
   }
 
-  /** Signal the child, covering its whole process group when it was detached. */
   private killChild(signal: NodeJS.Signals): void {
     const child = this.child;
     if (child === undefined || child.pid === undefined) return;

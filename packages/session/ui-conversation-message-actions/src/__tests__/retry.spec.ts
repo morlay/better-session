@@ -13,7 +13,6 @@ import {
   type SessionEvent,
 } from "@morlay/ui-conversation-message-actions/testing";
 
-/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
 function rdb(ctx: import("@deepseek-ai/cordis").Context): SessionPersistenceSqlite {
   return ctx.sessionPersistence as SessionPersistenceSqlite;
 }
@@ -34,11 +33,11 @@ describe("SessionEditor retry", () => {
         turn: 2,
         cascade: "truncate",
       });
-      expect(result.sessionId).toBe(SessionIdBrand("src")); // 不改变 session id
-      expect(result.queuedTurns).toBe(0); // 无 agents 服务 → 退化为就地版本
+      expect(result.sessionId).toBe(SessionIdBrand("src"));
+      expect(result.queuedTurns).toBe(0);
 
       const after = await rdb(ctx).load(SessionIdBrand("src"));
-      // 截断到轮 1（turn/end @ 5），轮 2 及之后被抛弃；版本效果原样落库（seq 6）。
+
       expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
       expect(after.events[6]?.type).toBe("session-branch/version");
     } finally {
@@ -61,10 +60,9 @@ describe("SessionEditor retry", () => {
       });
       expect(result.sessionId).toBe(SessionIdBrand("live"));
 
-      // live 内存 log：截断前缀 + ignorable 版本效果（seq 6）。
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
       expect(live.snapshotEvents()[6]?.type).toBe("session-branch/version");
-      // RDB canonical log：截断前缀 + 版本效果原样落库（与 JSONL 一致）。
+
       const backend = (
         ctx.sessionPersistence as unknown as {
           internals(): {
@@ -82,8 +80,6 @@ describe("SessionEditor retry", () => {
   it("retry on a live session replays queued input through the live agent", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // 轮 1（seq 1..6）+ request/header（seq 0，在轮 1 内，截断后仍可解析模型）
-      // + 轮 2（seq 7..12）。
       const first = oneTurnLog().map(
         (e) => ({ ...e, seq: e.seq + 1, time: e.time + 1 }) as SessionEvent,
       );
@@ -112,7 +108,6 @@ describe("SessionEditor retry", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
 
-      // mock agents：get 返回 live agent（记录 followup，不真正驱动模型）。
       const followups: unknown[] = [];
       const disposeAgents = ctx.provide("agents", {
         get: (id: SessionIdBrand) =>
@@ -140,11 +135,10 @@ describe("SessionEditor retry", () => {
         turn: 2,
         cascade: "truncate",
       });
-      // 就地：id 不变；重放排队到 live agent（turn 2 的输入）。
+
       expect(result.sessionId).toBe(SessionIdBrand("live"));
       expect(followups).toHaveLength(1);
-      // live log：截断前缀（header seq 0 + 轮 1 seq 1..6）+ ignorable
-      // 版本效果（seq 7，boundary = 轮 1 的 turn/end @ 6）。
+
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
       expect(live.snapshotEvents()[7]?.type).toBe("session-branch/version");
       disposeAgents();
@@ -165,7 +159,7 @@ describe("SessionEditor retry", () => {
       });
       const timeline: BranchTimeline = await editor.timeline(SessionIdBrand("src"));
       expect(timeline.root.sessionId).toBe(SessionIdBrand("src"));
-      // 就地编辑不派生新会话：版本树保持单根。
+
       expect(timeline.nodes).toHaveLength(1);
     } finally {
       await dispose();

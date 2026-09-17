@@ -26,7 +26,6 @@ export async function buildTimeline(
 ): Promise<BranchTimeline> {
   const byId = new Map(snapshots.map((snapshot) => [snapshot.header.id, snapshot] as const));
 
-  // 回溯到根（当前会话 → 祖先链）。
   const ancestors: SessionId[] = [];
   let cursor: SessionId | undefined = sessionId;
   const seen = new Set<SessionId>();
@@ -43,7 +42,6 @@ export async function buildTimeline(
     throw new SessionBranchError(`session "${sessionId}" is not persisted`, "SESSION_NOT_FOUND");
   }
 
-  // 根向下的完整后代（BFS；按 createdAt 稳定排序）。
   const ordered: SessionId[] = [];
   const queue: SessionId[] = [rootId];
   while (queue.length > 0) {
@@ -73,10 +71,10 @@ export async function buildTimeline(
       seedLength: snapshot.inheritedEventCount ?? 0,
       createdAt: header.createdAt,
     };
-    // 根节点不可能带版本效果；其余节点读自有后缀。
+
     if (header.parentSession !== undefined) {
       const events = await readOwnEvents(header.id, node.seedLength, signal);
-      // 结构化守卫 + find（版本事件类型不在固化的 SessionEventType 中）。
+
       let version: SessionBranchVersionEventEnvelope | undefined;
       for (const event of events) {
         if (isSessionBranchVersionEvent(event)) {

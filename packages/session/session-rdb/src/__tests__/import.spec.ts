@@ -11,9 +11,12 @@ import {
   SessionSeq,
   SessionStore,
   SESSION_FORMAT_VERSION,
+  Session,
 } from "@deepseek-ai/dsh-session";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
-import { strToU8, zipSync } from "fflate";
+import { TokenMeter, type TokenMeasurement } from "@deepseek-ai/dsh-token-meter";
+import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
+import { strToU8, zip } from "fflate";
 import SessionPersistenceSqlite from "@morlay/session-rdb";
 import { toJsonlArtifact } from "@morlay/session-rdb/artifact";
 import { EmptySettings } from "@morlay/session-rdb/testing";
@@ -38,7 +41,6 @@ async function freshDbPath(): Promise<string> {
   return join(dir, "sessions.sqlite");
 }
 
-// 最小 HTTP 请求替身：headers + 单块 body 的 async iterable（handler 逐块读取）。
 function fakeJsonRequest(body: unknown): import("node:http").IncomingMessage {
   const chunk = Buffer.from(JSON.stringify(body));
   return {
@@ -49,7 +51,6 @@ function fakeJsonRequest(body: unknown): import("node:http").IncomingMessage {
   } as unknown as import("node:http").IncomingMessage;
 }
 
-// 最小 HTTP 响应替身：记录 status 与 body。
 function fakeResponse(): { res: import("node:http").ServerResponse; code: number; body: string } {
   const state = {
     res: undefined as unknown as import("node:http").ServerResponse,
@@ -111,6 +112,38 @@ function richLog(): SessionEvent[] {
   ];
 }
 
+// oneTurnLog() 的轮次重编号：turnFrom(6, 2) 是 turn 2 的六个事件（seq 6..11）
+function turnFrom(base: number, turnNumber: number): SessionEvent[] {
+  return oneTurnLog().map((event, index) => {
+    const data = event.data as { turn?: number };
+    return {
+      ...event,
+      seq: SessionSeq(base + index),
+      time: base + index + 1,
+      data: data.turn === undefined ? event.data : { ...data, turn: turnNumber },
+    } as SessionEvent;
+  });
+}
+
+// 上游 TokenMeter 是 ctx 单例服务（同一 ctx 只能注册一个），比较「全新实例」的折叠结果时
+// 在独立 ctx 上折叠同一个会话对象（measure 只读会话日志与可选的 llm 服务）。
+function freshMeasurement(session: Session): TokenMeasurement {
+  const probe = new Context();
+  new SessionProjectionRegistry(probe);
+  return new TokenMeter(probe).measure(session);
+}
+
+// fflate 的 `zip` 是回调式异步 API（node 侧内部走 worker_threads），测试夹具同样桥成 Promise；
+// 它与 `zipSync` 产出字节一致，夹具本身不关心同步性。
+function zipAsync(data: Record<string, Uint8Array>): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    zip(data, (error, output) => {
+      if (error === null) resolve(output);
+      else reject(error);
+    });
+  });
+}
+
 describe("parseJsonlArtifact", () => {
   it("parses a header line and plain event lines", () => {
     const parsed = parseJsonlArtifact(
@@ -138,10 +171,6 @@ describe("parseJsonlArtifact", () => {
   });
 
   it("converts a v0 artifact with legacy message shapes through the migration chain", () => {
-    // 历史 v0 artifact：消息无 id、assistant/message 用 content/provenance
-    // 顶层字段。导入时经上游迁移链转当前逻辑事件（补 id、嵌入 stream，并在
-    // 首个 step 后注入 system head）。surface 事件必须排在 step 内——上游
-    // v2→v3 迁移拒绝 pre-step surface，而不是重排来源历史。
     const parsed = parseJsonlArtifact(
       [
         JSON.stringify({
@@ -225,7 +254,7 @@ describe("parseJsonlArtifact", () => {
       isSeeded: true,
       delegationDepth: 1,
     });
-    // 继承前缀按目标坐标计：源前缀 2 个事件 + 迁移注入的 system head = 3。
+
     expect(parsed.inheritedEventCount).toBe(SessionLogOffset(3));
   });
 
@@ -280,30 +309,29 @@ describe("parseJsonlArtifact", () => {
 });
 
 describe("parseImportZip", () => {
-  it("extracts session.jsonl from a zip", () => {
+  it("extracts session.jsonl from a zip", async () => {
     const artifact = toJsonlArtifact(meta("roundtrip", "/work"), 0, oneTurnLog());
-    const zip = zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(artifact) });
-    const parsed = parseImportZip(zip);
+    const zip = await zipAsync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(artifact) });
+    const parsed = await parseImportZip(zip);
     expect(parsed.meta).toMatchObject({ id: "roundtrip", cwd: "/work", isSeeded: false });
     expect(parsed.events).toEqual(oneTurnLog());
   });
 
-  it("accepts the generation-addressed artifact name used by upstream export", () => {
-    // 上游 UI 导出按世代命名（session.v3.jsonl）：导入必须识别同一份产物。
+  it("accepts the generation-addressed artifact name used by upstream export", async () => {
     const artifact = toJsonlArtifact(meta("v3", "/work"), 0, oneTurnLog());
-    const zip = zipSync({ "session.v3.jsonl": strToU8(artifact) });
-    const parsed = parseImportZip(zip);
+    const zip = await zipAsync({ "session.v3.jsonl": strToU8(artifact) });
+    const parsed = await parseImportZip(zip);
     expect(parsed.meta.id).toBe("v3");
     expect(parsed.events).toEqual(oneTurnLog());
   });
 
-  it("rejects a corrupt zip and a zip without the artifact", () => {
-    expect(() => parseImportZip(strToU8("not a zip"))).toThrow(/not a valid ZIP/);
-    expect(() => parseImportZip(zipSync({ other: strToU8("x") }))).toThrow(
+  it("rejects a corrupt zip and a zip without the artifact", async () => {
+    await expect(parseImportZip(strToU8("not a zip"))).rejects.toThrow(/not a valid ZIP/);
+    await expect(parseImportZip(await zipAsync({ other: strToU8("x") }))).rejects.toThrow(
       /no session log artifact/,
     );
-    // 非 canonical 名（大写/压缩后缀/临时名）不视为产物。
-    expect(() => parseImportZip(zipSync({ "Session.jsonl": strToU8("x") }))).toThrow(
+
+    await expect(parseImportZip(await zipAsync({ "Session.jsonl": strToU8("x") }))).rejects.toThrow(
       /no session log artifact/,
     );
   });
@@ -311,8 +339,6 @@ describe("parseImportZip", () => {
 
 describe("import round-trip through the backend", () => {
   it("imports a large batch beyond the single-INSERT binding limit", async () => {
-    // SQLite 单条多行 INSERT 的绑定参数上限 32766（10 列 × 3276 行）；
-    // 超过上限时后端必须分批落库而不是 prepare 失败。
     const path = await freshDbPath();
     const ctx = new Context();
     await ctx.plugin(EmptySettings);
@@ -339,8 +365,8 @@ describe("import round-trip through the backend", () => {
 
       const raw = await p.readRaw(m.id);
       expect(raw).toBeDefined();
-      const parsed = parseImportZip(
-        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+      const parsed = await parseImportZip(
+        await zipAsync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
       );
       const id = await persistImport(p, undefined, parsed);
       const loaded = await p.load(id);
@@ -366,11 +392,11 @@ describe("import round-trip through the backend", () => {
 
       const raw = await p.readRaw(m.id);
       expect(raw).toBeDefined();
-      // 导出内容按当前世代编码，文件名必须声明同一世代（与上游导出对齐）。
+
       expect(raw!.filename).toBe("session.v3.jsonl");
-      const zip = zipSync({ [raw!.filename]: strToU8(raw!.content) });
-      const parsed = parseImportZip(zip);
-      // 导入以新 id 落库：源会话保持不变。
+      const zip = await zipAsync({ [raw!.filename]: strToU8(raw!.content) });
+      const parsed = await parseImportZip(zip);
+
       const importedId = `session-imported` as SessionId;
       await p.createAndAppend(
         { ...parsed.meta, id: importedId },
@@ -380,7 +406,7 @@ describe("import round-trip through the backend", () => {
 
       const loaded = await p.load(importedId);
       expect(loaded.meta).toMatchObject({ cwd: "/work", isSeeded: false });
-      // 原样存储：导出→导入 round-trip 还原完整事件（6 事件，seq 0..5）。
+
       expect(loaded.events.map((e) => e.type)).toEqual([
         "turn/start",
         "user/message",
@@ -414,7 +440,7 @@ describe("import round-trip through the backend", () => {
         parentSession: SessionId("the-parent"),
         isSeeded: true,
       };
-      // v2 seeded 会话：继承前缀末尾必须带 session/end-seed {inherited} marker。
+
       const events = [
         ...seed,
         {
@@ -430,8 +456,8 @@ describe("import round-trip through the backend", () => {
       await p.createAndAppend(childMeta, events, 3);
 
       const raw = await p.readRaw(childMeta.id);
-      const parsed = parseImportZip(
-        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+      const parsed = await parseImportZip(
+        await zipAsync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
       );
       expect(parsed.meta.isSeeded).toBe(true);
       expect(parsed.inheritedEventCount).toBe(3);
@@ -448,24 +474,22 @@ describe("import round-trip through the backend", () => {
     const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
     try {
       const p = ctx.sessionPersistence as SessionPersistenceSqlite;
-      // 源会话 A：将被导出。
+
       const src = meta("export-src", "/work");
       await p.createAndAppend(src, richLog());
-      // 目标会话 B：已有旧内容（导出前会被 rewind 清空），且保持 live
-      // （observeSession 优先读 live 内存快照——覆盖后必须同步回导入事件）。
+
       const target = meta("target", "/other");
       await p.createAndAppend(target, oneTurnLog());
       const live = ctx.sessions.create(target.id, { meta: target, seed: [...oneTurnLog()] });
       await ctx.sessions.flush(live);
-      // seed 构造会自动补 session/end-seed：6 事件 + 1 标记 = 7。
+
       expect(live.snapshotEvents()).toHaveLength(7);
 
       const raw = await p.readRaw(src.id);
-      const parsed = parseImportZip(
-        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+      const parsed = await parseImportZip(
+        await zipAsync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
       );
-      // 覆盖：rewind(-1) 清空 target（真实 branch 服务同步 coordinator
-      // cursor 与内存 log）后追加导入事件。
+
       const branch = ctx.get("sessionBranch") as unknown as {
         rewind(id: SessionId, toBoundary: number): Promise<unknown>;
       };
@@ -474,8 +498,8 @@ describe("import round-trip through the backend", () => {
       expect(id).toBe(target.id);
       const loaded = await p.load(target.id);
       expect(loaded.meta.id).toBe(target.id);
-      expect(loaded.meta.cwd).toBe("/other"); // 覆盖不改变身份/cwd
-      // 目标会话内容 = 源会话的稠密持久化视图（无 delta/provenance）。
+      expect(loaded.meta.cwd).toBe("/other");
+
       expect(loaded.events.map((e) => e.type)).toEqual([
         "turn/start",
         "user/message",
@@ -484,14 +508,139 @@ describe("import round-trip through the backend", () => {
         "step/end",
         "turn/end",
       ]);
-      // live 内存同步：observeSession 路径（live 命中）读到与 DB 一致的事件。
+
       const liveRead = ctx.sessions.get(target.id);
       expect(liveRead).toBeDefined();
       expect(liveRead!.snapshotEvents()).toEqual(loaded.events);
       expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-      // 源会话保持不变。
+
       const source = await p.load(src.id);
       expect(source.events).toEqual(loaded.events);
+    } finally {
+      await fiber.dispose();
+    }
+  });
+
+  it("keeps a pre-warmed token meter valid after an overwrite import (in-place log replacement)", async () => {
+    const path = await freshDbPath();
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    new SessionProjectionRegistry(ctx);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
+    try {
+      const p = ctx.sessionPersistence as SessionPersistenceSqlite;
+      const meter = new TokenMeter(ctx);
+
+      const src = meta("meter-src", "/work");
+      await p.createAndAppend(src, [...turnFrom(0, 1), ...turnFrom(6, 2), ...turnFrom(12, 3)]);
+
+      // 目标先停在「turn 2 的 step 2 悬空未闭合」（中断运行的形状），预热后水位停在旧日志上
+      const target = meta("meter-target", "/other");
+      const targetSeed: SessionEvent[] = [
+        ...richLog(),
+        { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
+        { type: "step/start", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
+        { type: "step/end", seq: SessionSeq(8), time: 9, data: { turn: 2, step: 1 } },
+        { type: "step/start", seq: SessionSeq(9), time: 10, data: { turn: 2, step: 2 } },
+      ];
+      await p.createAndAppend(target, targetSeed);
+      const live = ctx.sessions.create(target.id, { meta: target, seed: [...targetSeed] });
+      await ctx.sessions.flush(live);
+
+      expect(meter.measure(live).logRevision).toBe(live.snapshotEvents().length);
+
+      const raw = await p.readRaw(src.id);
+      const parsed = parseJsonlArtifact(raw!.content);
+
+      const branch = ctx.get("sessionBranch") as unknown as {
+        rewind(id: SessionId, toBoundary: number): Promise<unknown>;
+        resetLiveDerivedState?(session: Session): void;
+      };
+      const invalidated: SessionId[] = [];
+      const resetLiveDerivedState = branch.resetLiveDerivedState?.bind(branch);
+      if (resetLiveDerivedState !== undefined) {
+        branch.resetLiveDerivedState = (session) => {
+          invalidated.push(session.id);
+          resetLiveDerivedState(session);
+        };
+      }
+
+      await persistImport(p, branch, parsed, target.id, ctx.sessions);
+
+      // 覆盖导入整段替换内存 log：必须经过同一失效钩子，不能把水位留在被替换掉的旧日志上
+      expect(invalidated).toEqual([target.id]);
+      const measurement = meter.measure(live);
+      expect(measurement.logRevision).toBe(live.snapshotEvents().length);
+      expect(measurement).toEqual(freshMeasurement(live));
+    } finally {
+      await fiber.dispose();
+    }
+  });
+
+  it("keeps a legitimate unclosed step tail when exporting and importing a whole log", async () => {
+    const path = await freshDbPath();
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
+    try {
+      const p = ctx.sessionPersistence as SessionPersistenceSqlite;
+      const src = meta("open-tail-src", "/work");
+      const sourceLog: SessionEvent[] = [
+        ...richLog(),
+        { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
+        { type: "step/start", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
+      ];
+      await p.createAndAppend(src, sourceLog);
+
+      const raw = await p.readRaw(src.id);
+      const parsed = parseJsonlArtifact(raw!.content);
+      expect(parsed.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+
+      const importedId = await persistImport(p, undefined, parsed);
+      const imported = await p.load(importedId);
+      expect(imported.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+
+      const session = Session.create(importedId, [...imported.events]);
+      expect(freshMeasurement(session).logRevision).toBe(session.snapshotEvents().length);
+    } finally {
+      await fiber.dispose();
+    }
+  });
+
+  it("drops the tail from an orphan step/end when exporting and importing a whole log", async () => {
+    const path = await freshDbPath();
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
+    try {
+      const p = ctx.sessionPersistence as SessionPersistenceSqlite;
+      const src = meta("orphan-src", "/work");
+      const sourceLog: SessionEvent[] = [
+        ...richLog(),
+        { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
+        { type: "step/end", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
+        {
+          type: "turn/end",
+          seq: SessionSeq(8),
+          time: 9,
+          data: { turn: 2, reason: { kind: "completed" } },
+        },
+      ];
+      await p.createAndAppend(src, sourceLog);
+
+      const raw = await p.readRaw(src.id);
+      const parsed = parseJsonlArtifact(raw!.content);
+      expect(parsed.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+
+      const importedId = await persistImport(p, undefined, parsed);
+      const imported = await p.load(importedId);
+      expect(imported.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+
+      const session = Session.create(importedId, [...imported.events]);
+      expect(freshMeasurement(session).logRevision).toBe(session.snapshotEvents().length);
     } finally {
       await fiber.dispose();
     }
@@ -507,7 +656,7 @@ describe("import round-trip through the backend", () => {
       const p = ctx.sessionPersistence as SessionPersistenceSqlite;
       const src = meta("export-src", "/work");
       await p.createAndAppend(src, richLog());
-      // 目标 live 会话：覆盖会 rewind(-1) 截断其内存 log，必须先停止 loop。
+
       const target = meta("target-busy", "/other");
       await p.createAndAppend(target, oneTurnLog());
       const live = ctx.sessions.create(target.id, { meta: target, seed: [...oneTurnLog()] });
@@ -527,14 +676,13 @@ describe("import round-trip through the backend", () => {
                 },
                 whenIdle: async () => {
                   calls.push("whenIdle");
-                  // 收敛等待期间覆盖（rewind）尚未发生：内存 log 未被截断。
+
                   expect(live.snapshotEvents()).toHaveLength(before);
                 },
               }
             : undefined,
       });
 
-      // route 级：注册 fake webServer / connection，走真实 HTTP 导入入口。
       const routes = new Map<string, (req: unknown, res: unknown) => void | Promise<void>>();
       ctx.provide("webServer", {
         register: (route: {
@@ -552,7 +700,7 @@ describe("import round-trip through the backend", () => {
 
       const raw = await p.readRaw(src.id);
       const zip = Buffer.from(
-        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+        await zipAsync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
       ).toString("base64");
       const response = fakeResponse();
       await routes.get(SESSION_IMPORT_PATH)!(
@@ -562,7 +710,7 @@ describe("import round-trip through the backend", () => {
 
       expect(response.code).toBe(200);
       expect(JSON.parse(response.body)).toEqual({ sessionId: target.id });
-      // 覆盖（rewind）前先停止运行中的 loop：cancel → whenIdle → 覆盖。
+
       expect(calls).toEqual(["cancel", "whenIdle"]);
       expect(cancels[0]).toEqual({ cause: { kind: "user" }, options: { keepInbox: true } });
       const loaded = await p.load(target.id);
@@ -591,8 +739,8 @@ describe("import round-trip through the backend", () => {
       const src = meta("new-src", "/work");
       await p.createAndAppend(src, oneTurnLog());
       const raw = await p.readRaw(src.id);
-      const parsed = parseImportZip(
-        zipSync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
+      const parsed = await parseImportZip(
+        await zipAsync({ [SESSION_LOG_ARTIFACT_FILENAME]: strToU8(raw!.content) }),
       );
 
       const id = await persistImport(p, undefined, parsed);

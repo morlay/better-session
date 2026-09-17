@@ -63,7 +63,7 @@ export interface SessionEditorOperationResult {
 
 export interface EditableMessageBlock {
   key: string;
-  // 消息所属轮号；轮外消息（无 turn 归属）缺省。
+
   turn?: number;
   eventSeq: number;
   blockIndex: number;

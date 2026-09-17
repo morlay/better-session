@@ -1,15 +1,4 @@
-/**
- * Electron shell: window, `dsh-app://` custom protocol, and the dsh backend
- * child lifecycle. The backend is the upstream `@deepseek-ai/dsh-desktop-host`
- * entry run under a bundled Node.js executable (packaged) or the current
- * Electron executable in node mode (development); requests from the renderer
- * are forwarded over framed byte pipes. On Unix the backend inherits the
- * user's shell environment through rc sourcing (see shell-env.ts).
- * @module @morlay/dsh-desktopify
- */
-
-import { mkdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, protocol } from "electron";
@@ -44,7 +33,6 @@ const MIME: Readonly<Record<string, string>> = {
   ".svg": "image/svg+xml",
 };
 
-/** Runtime resources resolved for the current mode. */
 interface RuntimeResources {
   readonly node: string;
   readonly seed: string;
@@ -76,11 +64,6 @@ function developmentProject(): string | undefined {
   return resolve(configured);
 }
 
-/**
- * 无标题栏窗口框架：macOS 隐藏标题栏（保留交通灯，顶部仍可拖动）；Windows
- * 隐藏标题栏并用 `titleBarOverlay` 保留系统窗口控制按钮（透明底、中性符号
- * 色，避免与页面内容冲突）；其余平台去掉系统边框。
- */
 function windowFrame(): Pick<
   BrowserWindowConstructorOptions,
   "titleBarStyle" | "frame" | "titleBarOverlay"
@@ -156,11 +139,6 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
   return port;
 }
 
-/**
- * Development host Node arguments. The launcher sets `DSH_DESKTOP_TSX_IMPORT`
- * only when the workspace actually has tsx installed, so a workspace without
- * it never receives a loader it cannot resolve.
- */
 function developmentNodeArgs(): string[] {
   const specifier = process.env.DSH_DESKTOP_TSX_IMPORT;
   return specifier === undefined || specifier === "" ? [] : [`--import=${specifier}`];
@@ -170,21 +148,19 @@ async function main(): Promise<void> {
   const development = developmentProject();
   const config: AppConfig =
     development === undefined
-      ? loadAppConfig(process.resourcesPath)
-      : loadAppConfig(process.env.DSH_DESKTOP_APPCONFIG_DIR ?? process.resourcesPath);
+      ? await loadAppConfig(process.resourcesPath)
+      : await loadAppConfig(process.env.DSH_DESKTOP_APPCONFIG_DIR ?? process.resourcesPath);
   const resources = runtimeResources();
   const hostInspectPort = developmentHostInspectPort(development !== undefined);
   const activeProject = development ?? join(resolveDshHome(config) ?? "", "profiles", PROFILE_NAME);
-  // 上游桌面宿主按「不可变包集 + profile 项目」两个目录启动：宿主入口与官方包
-  // 从 runtimeDir 解析，profile 项目只承载装配。打包态 runtimeDir 是种子
-  // profile（应用自带、随安装不可变），开发态就是工作区本身。
+
   const runtimeProject = development ?? join(resources.seed, "profiles", PROFILE_NAME);
   const dshHome = resolveDshHome(config);
 
   if (development === undefined) {
     if (dshHome === undefined)
       throw new Error("dsh desktop: packaged applications require a concrete dshHome");
-    ensureSeedProfile(resources.seed, dshHome);
+    await ensureSeedProfile(resources.seed, dshHome);
   }
 
   let host: DesktopHostProcess | undefined;
@@ -193,10 +169,6 @@ async function main(): Promise<void> {
   let quitPrompting = false;
   const appPreload = fileURLToPath(new URL("./preload-app.cjs", import.meta.url));
 
-  /**
-   * 退出确认：红叉 / Cmd+Q / 菜单退出都先问一次，避免误关把后台 host 与
-   * 运行中的会话一起强杀。确认后置 quitConfirmed 并重新走退出流程。
-   */
   const confirmQuit = async (window?: BrowserWindow): Promise<void> => {
     if (quitPrompting) return;
     quitPrompting = true;
@@ -224,16 +196,21 @@ async function main(): Promise<void> {
   };
 
   const startHost = async (projectDir = activeProject): Promise<DesktopHostProcess> => {
-    const next = new DesktopHostProcess(resources.node, runtimeProject, projectDir, hostInspectPort, {
-      nodeArgs: development === undefined ? [] : developmentNodeArgs(),
-      // 显式设置 DSH_HOME：用户 shell 环境可能残留旧应用的 DSH_HOME
-      // export，host 经 shell 注入启动时会继承它，导致数据落到错误目录。
-      extraEnv: {
-        ...(dshHome === undefined ? {} : { DSH_HOME: dshHome }),
-        ...(development === undefined ? {} : { ELECTRON_RUN_AS_NODE: "1" }),
+    const next = new DesktopHostProcess(
+      resources.node,
+      runtimeProject,
+      projectDir,
+      hostInspectPort,
+      {
+        nodeArgs: development === undefined ? [] : developmentNodeArgs(),
+
+        extraEnv: {
+          ...(dshHome === undefined ? {} : { DSH_HOME: dshHome }),
+          ...(development === undefined ? {} : { ELECTRON_RUN_AS_NODE: "1" }),
+        },
+        spawn: shellWrappedSpawn,
       },
-      spawn: shellWrappedSpawn,
-    });
+    );
     await next.start();
     return next;
   };
@@ -276,7 +253,6 @@ async function main(): Promise<void> {
     window.focus();
   };
 
-  // 先启动 host 再加载页面：页面首帧即拿到后端（官方实现同序）。
   host = await startHost();
 
   mainWindow = createMainWindow();
@@ -307,19 +283,14 @@ async function main(): Promise<void> {
   });
 }
 
-/**
- * Electron 的 userData 默认取 asar 里的包名——本工具包名，于是所有用它打出来的 app
- * 共用同一个 profile 和同一把单实例锁：锁在前一个实例手上时
- * `requestSingleInstanceLock()` 失败、进程静默退出（表现成「装完启动不了」）。打包
- * 产物按 app id 隔离；dev 模式由启动器传 `--user-data-dir`，这里不动。
- */
 if (app.isPackaged) {
   try {
-    const profile = join(app.getPath("appData"), loadAppConfig(process.resourcesPath).id);
-    mkdirSync(profile, { recursive: true });
+    // 打包应用必须在 whenReady 之前把 userData 指到 appconfig.json 的 id 目录；
+    // 这里用顶层 await 完成读配置与建目录，模块其余部分随后继续同步执行。
+    const profile = join(app.getPath("appData"), (await loadAppConfig(process.resourcesPath)).id);
+    await mkdir(profile, { recursive: true });
     app.setPath("userData", profile);
   } catch (error) {
-    // 配置缺失/损坏交给 main() 的启动失败路径（诊断文件 + 错误对话框）。
     console.error(error);
   }
 }

@@ -1,0 +1,42 @@
+# 测试反模式
+
+三条会让测试失去价值的写法，见到就改。例子取自本仓库既有实践。
+
+## 与实现耦合
+
+mock 内部协作者、测私有方法、绕过接口查内部状态（直接读库表、读私有字段）来断言。
+
+- 征兆：行为没变，重构却让测试碎掉；或测试替身比被测代码还长。
+- 本仓库的判据：数据层测试用真实 SQLite `:memory:` 穿 `ctx.sessionPersistence` 接缝
+  （`packages/session/session-rdb/src/__tests__/rdb.spec.ts`），不 mock 内部 repository；
+  编排层测试穿 `ctx.sessionEditor` / HTTP 面（`ui-conversation-message-actions/src/__tests__/http.spec.ts`），
+  不断言 `SessionEditor` 的私有字段。
+- 改：把断言移回接缝（调用方与测试共同的边界），只依赖接口承诺。
+
+## 同义反复
+
+期望值由被测代码用同一种方式算出来——用手工复刻的实现推导出的期望、从实现里导出的常量当字面量、
+恒等于自身的快照。它构造性地通过，永远不会与代码产生分歧。
+
+- 征兆：断言左侧与右侧都来自同一个实现模块（例如用 `locateTurnEnd` 的返回值去期望它自己的输出）。
+- 本仓库的判据：期望值必须来自**独立真值**——手写的日志 fixture（`session-rdb/src/testing/` 的
+  `oneTurnLog` 等）、规格原文、上游自带测试（`vendor/<name>/packages/**/tests/`）里已固定的字面量。
+- 改：把真值挪出实现，写成测试里的字面量与 fixture；实现只提供被测入口。
+
+## 越过接缝测试
+
+不从调用方与测试共同的边界进，而是直接构造实现内部状态、或按实现内部形状写断言。
+
+- 征兆：测试 import 的是包的内部路径而非包门面 / `testing` 出口；改一个私有函数名就红。
+- 本仓库的判据：跨包消费只经包出口（含 `@morlay/*/testing`），装配面经 `cordis.patch.yml` 的声明
+  （`session/better-session/src/__tests__/assembly.spec.ts`）而非手搓插件列表。
+- 改：回到 [`how-to-write.md`](../../../standards/how-to-write.md) 的「接缝在哪」表里对应的那一面，从那一面写测试。
+
+## 水平切片
+
+先把所有测试写完，再写实现。批量写出的测试验证的是想象的行为：测的是事物的形态而非面向用户的行为，
+对真实变化不敏感，而且你在理解实现之前就锁定了测试结构。
+
+- 征兆：一轮改动里测试文件先成批出现，实现后补；红→绿之间没有反馈。
+- 改：按**垂直切片**走——一个测试 → 一个实现 → 重复，每个测试都是回应上一轮的发**曳光弹**
+  （见 `dsh-plugin-implement` 的循环）。

@@ -25,8 +25,6 @@ function turnEnd(seq: number, turn: number): SessionEvent {
 
 describe("balanceRewindPrefix", () => {
   it("drops a trailing orphan step/start (real agent-loop order, user/message boundary)", () => {
-    // 真实 agent-loop 顺序：turn/start → step/start → user/message → ...
-    // rewind 到 user/message（exclusive）后，step/start 残留为孤儿。
     const prefix: SessionEvent[] = [
       turnStart(0, 1),
       stepStart(1, 1, 1),
@@ -63,7 +61,6 @@ describe("balanceRewindPrefix", () => {
   });
 
   it("keeps a paired step whose step/end precedes the boundary", () => {
-    // step/start 与 step/end 都在保留区内：配对完整，不剔除。
     const prefix: SessionEvent[] = [
       turnStart(0, 1),
       stepStart(1, 1, 1),
@@ -76,7 +73,6 @@ describe("balanceRewindPrefix", () => {
   });
 
   it("drops multiple trailing orphan step/starts", () => {
-    // 两个未闭合 step（step/end 都在 drop 区）：全部剔除。
     const prefix: SessionEvent[] = [
       turnStart(0, 1),
       stepStart(1, 1, 1),
@@ -91,7 +87,6 @@ describe("balanceRewindPrefix", () => {
   });
 
   it("keeps the turn/start when the whole step tail is orphaned", () => {
-    // 轮次开始标记保留（重放轮会开新的 turn/start）；只有孤儿 step/start 被剔除。
     const prefix: SessionEvent[] = [turnStart(0, 1), stepStart(1, 1, 1)];
     const balanced = balanceRewindPrefix(prefix);
     expect(balanced.map((e) => e.seq)).toEqual([0]);
@@ -103,5 +98,99 @@ describe("balanceRewindPrefix", () => {
     const snapshot = [...prefix];
     balanceRewindPrefix(prefix);
     expect(prefix).toEqual(snapshot);
+  });
+
+  it("returns an empty prefix for an empty log", () => {
+    expect(balanceRewindPrefix([])).toEqual([]);
+  });
+
+  it("keeps a fully closed log untouched", () => {
+    const prefix: SessionEvent[] = [
+      turnStart(0, 1),
+      stepStart(1, 1, 1),
+      stepEnd(2, 1, 1),
+      turnEnd(3, 1),
+    ];
+    expect(balanceRewindPrefix(prefix)).toHaveLength(4);
+  });
+
+  it("drops the tail from an orphan step/end inside a closed turn (not only the tail after it)", () => {
+    const prefix: SessionEvent[] = [
+      turnStart(0, 1),
+      stepStart(1, 1, 1),
+      stepEnd(2, 1, 1),
+      turnEnd(3, 1),
+      turnStart(4, 2),
+      stepEnd(5, 2, 1),
+      turnEnd(6, 2),
+    ];
+    const balanced = balanceRewindPrefix(prefix);
+    expect(balanced.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4]);
+    expect(balanced.at(-1)?.type).toBe("turn/start");
+  });
+
+  it("drops consecutive orphan step/ends from the first one", () => {
+    const prefix: SessionEvent[] = [
+      turnStart(0, 1),
+      stepEnd(1, 1, 1),
+      stepEnd(2, 1, 1),
+      turnEnd(3, 1),
+    ];
+    expect(balanceRewindPrefix(prefix).map((e) => e.seq)).toEqual([0]);
+  });
+
+  it("drops the whole log when its first event is an orphan step/end", () => {
+    expect(balanceRewindPrefix([stepEnd(0, 1, 1), turnEnd(1, 1)]).map((e) => e.seq)).toEqual([]);
+  });
+
+  it("drops a step/end whose step number does not match the open step/start", () => {
+    const prefix: SessionEvent[] = [turnStart(0, 1), stepStart(1, 1, 1), stepEnd(2, 1, 2)];
+    expect(balanceRewindPrefix(prefix).map((e) => e.seq)).toEqual([0]);
+  });
+
+  it("drops a step/start that collides with an already open step/start", () => {
+    const prefix: SessionEvent[] = [
+      turnStart(0, 1),
+      stepStart(1, 1, 1),
+      stepStart(2, 1, 2),
+      turnEnd(3, 1),
+    ];
+    expect(balanceRewindPrefix(prefix).map((e) => e.seq)).toEqual([0]);
+  });
+
+  it("keeps a trailing unclosed step/start when the caller owns no following step (export / import)", () => {
+    const prefix: SessionEvent[] = [
+      turnStart(0, 1),
+      stepStart(1, 1, 1),
+      {
+        type: "user/message",
+        seq: 2,
+        time: 2,
+        data: {
+          id: "u1",
+          role: "user",
+          content: [{ type: "text", text: "hi" }],
+          source: { kind: "user" },
+        },
+        surfaceOp: "append",
+      } as SessionEvent,
+    ];
+    expect(balanceRewindPrefix(prefix, { keepOpenTail: true }).map((e) => e.seq)).toEqual([
+      0, 1, 2,
+    ]);
+  });
+
+  it("still drops an unbalanced tail when the caller owns no following step (export / import)", () => {
+    const prefix: SessionEvent[] = [
+      turnStart(0, 1),
+      stepStart(1, 1, 1),
+      stepEnd(2, 1, 1),
+      turnEnd(3, 1),
+      turnStart(4, 2),
+      stepEnd(5, 2, 1),
+    ];
+    expect(balanceRewindPrefix(prefix, { keepOpenTail: true }).map((e) => e.seq)).toEqual([
+      0, 1, 2, 3, 4,
+    ]);
   });
 });

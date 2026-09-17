@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -9,4 +9,4 @@ if (!token) {
 }
 
 // pnpm publish 拒绝脏 working tree，认证 token 写到全局 ~/.npmrc
-writeFileSync(join(homedir(), ".npmrc"), `//npm.pkg.github.com/:_authToken=${token}\n`);
+await writeFile(join(homedir(), ".npmrc"), `//npm.pkg.github.com/:_authToken=${token}\n`);

@@ -1,17 +1,9 @@
-// 会话删除端点：web 模式下 client 经 `/api/session.delete` 触发 host 侧的
-// 已归档会话硬删除（上游没有会话删除面，见 ADR）。
-//
-// 鉴权与拒审复用 connection 的 `requestRejection`，与 `/api/session.import`
-// 同一条通路；webServer / connection 由其他插件注册，本后端构造早于它们，
-// 因此用 ctx.inject 延迟到两个服务就绪后再注册 exact route。
-
 import type { Context } from "@deepseek-ai/cordis";
 import type { SessionId } from "@deepseek-ai/dsh-session";
 import { SessionDeletionError, type SessionPersistenceRdb } from "./index.ts";
 
 export const SESSION_DELETE_PATH = "/api/session.delete";
 
-/** 删除失败到 HTTP 状态的映射（其余按 400 处理）。 */
 const STATUS_OF_DELETION_ERROR: Record<SessionDeletionError["code"], number> = {
   SESSION_NOT_FOUND: 404,
   SESSION_NOT_ARCHIVED: 409,

@@ -1,10 +1,10 @@
 sync:
-    tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/sync.ts') }}
+    tsx {{ join(module_directory(), '../.agents/skills/dsh-plugin-upstream-sync/scripts/sync.ts') }}
 
 patch:
-    tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/patch.ts') }}
+    tsx {{ join(module_directory(), '../.agents/skills/dsh-plugin-upstream-sync/scripts/patch.ts') }}
 
 build:
-    tsx {{ join(module_directory(), '../.agents/skills/dsh-side-workspace-plugin-develop/scripts/build.ts') }}
+    tsx {{ join(module_directory(), '../.agents/skills/dsh-plugin-upstream-sync/scripts/build.ts') }}
 
 prepare: sync patch build

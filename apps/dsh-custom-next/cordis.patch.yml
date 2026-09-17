@@ -1,1 +1,10 @@
-[]
+# dsh-custom-next 的 profile 层装配（`dsh-desktopify dev --web` 会把它装进 web profile）。
+#
+# 开发态 client bundle 路由：本地 client 半由源码现场打包。该行按
+# DSH_DEV_CLIENT_BUNDLES 启用——启动器置 1，其余启动方式下保持禁用，生产装配不受影响。
+- insert:
+    - id: dev-client-bundles
+      name: "@morlay/dsh-desktopify/dev-client-bundles"
+      disabled: !!js process.env.DSH_DEV_CLIENT_BUNDLES !== '1'
+      config:
+        prefixes: ["@morlay/"]

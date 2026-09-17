@@ -14,7 +14,6 @@ import {
   type SessionEvent,
 } from "@morlay/ui-conversation-message-actions/testing";
 
-/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
 function rdb(ctx: import("@deepseek-ai/cordis").Context): SessionPersistenceSqlite {
   return ctx.sessionPersistence as SessionPersistenceSqlite;
 }
@@ -24,7 +23,6 @@ interface EventRow {
   fType: string;
 }
 
-/** 读取落盘行（截断验证的权威视图）。 */
 async function eventRows(
   ctx: import("@deepseek-ai/cordis").Context,
   id: SessionIdBrand,
@@ -49,7 +47,6 @@ describe("SessionEditor recall", () => {
     try {
       await createPersisted(ctx, "src", twoTurnLog());
 
-      // 轮 2 的轮首 user（eventSeq 7）→ boundary = 轮 1 的 turn/end（5）。
       const result = await editor.recall({
         action: "recall",
         sessionId: SessionIdBrand("src"),
@@ -61,7 +58,7 @@ describe("SessionEditor recall", () => {
       const rows = await eventRows(ctx, SessionIdBrand("src"));
       expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5]);
       expect(rows[5]?.fType).toBe("turn/end");
-      // 撤回不写版本效果：交给用户重新发送，不产生派生版本记录。
+
       expect(rows.some((r) => r.fType === "session-branch/version")).toBe(false);
 
       const after = await rdb(ctx).load(SessionIdBrand("src"));
@@ -92,7 +89,6 @@ describe("SessionEditor recall", () => {
   it("recalls a first user message in an open turn: whole-turn rewind, no orphan turn/start", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // 轮 1/2 闭合（0..11）+ 轮 3 未闭合（turn/start 12，user 14）。
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
@@ -111,7 +107,7 @@ describe("SessionEditor recall", () => {
       const rows = await eventRows(ctx, SessionIdBrand("src"));
       expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
       expect(rows[11]?.fType).toBe("turn/end");
-      // 悬空 turn/start 与轮 3 内容一并截断，下一次发送从干净边界续接。
+
       expect(rows.some((r) => r.fSequence >= 12)).toBe(false);
     } finally {
       await dispose();
@@ -148,8 +144,6 @@ describe("SessionEditor recall", () => {
       ];
       await createPersisted(ctx, "src", [header, ...first, ...turn2]);
 
-      // followup（eventSeq 13）→ rewind 到该消息本身（exclusive drop），
-      // 保留轮首 q1 与回复；孤儿 step/start 12 由 rewind 平衡化剔除。
       await editor.recall({
         action: "recall",
         sessionId: SessionIdBrand("src"),
@@ -188,7 +182,6 @@ describe("SessionEditor recall", () => {
       await ctx.sessions.flush(live);
       const before = live.snapshotEvents().length;
 
-      // agent 正在跑（whenIdle 需要显式 resolve 才会放行 rewind）。
       let releaseIdle: () => void = () => {};
       const idlePromise = new Promise<void>((resolve) => {
         releaseIdle = resolve;
@@ -225,15 +218,13 @@ describe("SessionEditor recall", () => {
         sessionId: SessionIdBrand("busy"),
         eventSeq: 2,
       });
-      // 运行中的 loop 先被停止（cancel），再等其收敛——此时 rewind 未发生。
-      // live 路径无真实 IO 等待，microtask 轮询足以推进到停止点；实现缺失
-      // 停止时循环退出、断言明确失败（不挂起）。
+
       for (let i = 0; i < 1000 && !calls.includes("whenIdle"); i += 1) await Promise.resolve();
       expect(calls).toEqual(["cancel", "whenIdle"]);
-      // keepInbox：停止本身不丢弃待处理输入（截断后由 live 钩子 durable 取消）。
+
       expect(cancels[0]).toEqual({ cause: { kind: "user" }, options: { keepInbox: true } });
       expect(live.snapshotEvents()).toHaveLength(before);
-      // 释放 agent → 撤回继续完成，live 内存 log 清空。
+
       releaseIdle();
       const result = await recalling;
       expect(result.sessionId).toBe(SessionIdBrand("busy"));
@@ -249,7 +240,6 @@ describe("SessionEditor recall", () => {
     try {
       await createPersisted(ctx, "src", twoTurnLog());
 
-      // eventSeq 9 是轮 2 的 assistant/message，不是可撤回的用户输入。
       await expect(
         editor.recall({
           action: "recall",
@@ -257,7 +247,7 @@ describe("SessionEditor recall", () => {
           eventSeq: 9,
         }),
       ).rejects.toThrow(/不可撤回/);
-      // 拒绝不截断会话（原子：失败不丢数据）。
+
       const rows = await eventRows(ctx, SessionIdBrand("src"));
       expect(rows).toHaveLength(12);
     } finally {
@@ -268,8 +258,6 @@ describe("SessionEditor recall", () => {
   it("recalls a message outside every turn: truncates from that message on", async () => {
     const { ctx, editor, dispose } = await harness();
     try {
-      // 轮外排队输入（首个 turn/start 之前落成 user/message）：撤回即从该
-      // 消息开始 exclusive drop，其后的整轮一并截断。
       const outside = userMessage(0, "outside", "queued then stopped", 1);
       await createPersisted(ctx, "src", [outside, ...turnLog(1, 1)]);
 
@@ -305,7 +293,7 @@ describe("SessionEditor recall", () => {
       const rows = await eventRows(ctx, SessionIdBrand("src"));
       expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5]);
       expect(rows[5]?.fType).toBe("turn/end");
-      // 撤回不写版本效果：交给用户重新发送，不产生派生版本记录。
+
       expect(rows.some((r) => r.fType === "session-branch/version")).toBe(false);
     } finally {
       await dispose();

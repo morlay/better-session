@@ -12,7 +12,6 @@ import {
   type SessionEvent,
 } from "@morlay/ui-conversation-message-actions/testing";
 
-/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
 function rdb(ctx: import("@deepseek-ai/cordis").Context): SessionPersistenceSqlite {
   return ctx.sessionPersistence as SessionPersistenceSqlite;
 }
@@ -31,7 +30,7 @@ describe("SessionEditor rewind / fork / timeline", () => {
       const after = await rdb(ctx).load(SessionIdBrand("src"));
       expect(after.events).toHaveLength(6);
       expect(after.events.at(-1)?.type).toBe("turn/end");
-      // 续写（coordinator 状态已同步）。
+
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
@@ -55,7 +54,7 @@ describe("SessionEditor rewind / fork / timeline", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
       await editor.rewind(SessionIdBrand("live"), 5);
-      // live 内存 log 与持久化一起截断，会话不释放、id 不变。
+
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
       expect(ctx.sessions.get(SessionIdBrand("live"))).toBe(live);
     } finally {
@@ -88,7 +87,7 @@ describe("SessionEditor rewind / fork / timeline", () => {
                 },
                 whenIdle: async () => {
                   calls.push("whenIdle");
-                  // 收敛等待期间 rewind 尚未发生：内存 log 与停止前一致。
+
                   expect(live.snapshotEvents()).toHaveLength(before);
                 },
               }
@@ -103,7 +102,6 @@ describe("SessionEditor rewind / fork / timeline", () => {
 
       await editor.rewind(SessionIdBrand("busy"), 5);
 
-      // 先停止 loop（cancel），再等其收敛，最后才截断。
       expect(calls).toEqual(["cancel", "whenIdle"]);
       expect(cancels[0]).toEqual({ cause: { kind: "user" }, options: { keepInbox: true } });
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
@@ -180,7 +178,6 @@ describe("SessionEditor rewind / fork / timeline", () => {
       const live = ctx.sessions.get(SessionIdBrand("live"))!;
       await ctx.sessions.flush(live);
 
-      // mock 驻留 agent：phase.lastTurn = 2（编辑前游标），requestHeaderLogged = true。
       let inboxCleared = false;
       const mockAgent: {
         session: typeof live;
@@ -211,7 +208,6 @@ describe("SessionEditor rewind / fork / timeline", () => {
         },
       });
 
-      // retry turn 2（truncate → 截断到轮 1 末尾，保留轮 1 = turn 1）。
       const result = await editor.retry({
         action: "retry",
         sessionId: SessionIdBrand("live"),
@@ -219,11 +215,10 @@ describe("SessionEditor rewind / fork / timeline", () => {
         cascade: "truncate",
       });
       expect(result.sessionId).toBe(SessionIdBrand("live"));
-      // 轮次游标重置为截断后最后 turn 号（轮 1 = 1）→ 重放 followup 会开
-      // turn 2（复用目标轮号），而不是递增出 turn 3。
+
       expect(mockAgent.phase.lastTurn).toBe(1);
       expect(mockAgent.requestHeaderLogged).toBe(false);
-      // rewind 强制 durable 取消残留排队输入。
+
       expect(inboxCleared).toBe(true);
       disposeAgents();
     } finally {
@@ -239,7 +234,7 @@ describe("SessionEditor rewind / fork / timeline", () => {
       expect(childId).toBe(SessionIdBrand("child"));
       const child = await rdb(ctx).load(childId);
       expect(child.meta.parentSession).toBe(SessionIdBrand("src"));
-      expect(child.events).toHaveLength(12); // after 模式：包含轮 2
+      expect(child.events).toHaveLength(12);
     } finally {
       await dispose();
     }

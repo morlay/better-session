@@ -1,3 +1,6 @@
+# persona 的中文表达部分对齐 union-alpha 的说话风格：从 openrouter-custom/stealth/union-alpha
+# 在 12 个场景（报进度 / 解释 / 评审 / 分歧 / 排期 / 拒绝 / 复盘 / 提问 …）下的输出里提炼，
+# 两轮复测稳定复现的才是要点。改这段后重启 dsh 生效（见 README）。
 - id: system-prompt
   config:
     includeHarnessIdentity: false
@@ -82,9 +85,19 @@
           -- mise.*.toml
           -- **/*.pem
 
+- insert:
+    - id: dsh-context
+      name: dsh-context
+
 # 提示词分层：系统提示词只留上面的 persona，工具说明 / Agent Teams 规则 / plan
 # 规则等由该插件降级为 <system-reminder> user 消息。部署级策略，在这里定义一次
 # 即覆盖全部 preset（含子 agent），preset composition 不再各自带这一行。
 - insert:
     - id: prompt-reminder
       name: "@morlay/dsh-prompt-reminder"
+
+# 引用后注入：用户消息里的 `skill:name` 在 pre-step 展开成
+# `<skill_content>` 注入消息，消息文本保持 link 原文（模型文本不膨胀）。
+- insert:
+    - id: reference-injection
+      name: "@morlay/dsh-reference-injection"

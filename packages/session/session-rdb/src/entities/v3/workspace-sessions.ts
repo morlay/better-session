@@ -1,10 +1,5 @@
 import type { TableDef } from "../../adapters/types.ts";
 
-/**
- * workspace 的会话归属（上游 `workspaceRecord.sessionIds` 的数组顺序）：
- * 一个会话一行，`f_position` 是归属显示顺序。会话 id 有独立索引，可按
- * session 反查归属 workspace。
- */
 export const workspaceSessions: TableDef = {
   name: "t_workspace_sessions",
   columns: {

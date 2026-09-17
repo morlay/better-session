@@ -1,22 +1,7 @@
-/**
- * Download and verify the upstream Node.js runtime for the packaged backend.
- * The backend runs under this bundled Node executable; the shell spawns it
- * directly (no user Node required). Downloads are cached under the target
- * workspace's `node_modules/.dsh-desktopify/downloads` and verified against
- * the official SHASUMS256.
- */
-
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
-import {
-  createReadStream,
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { chmod, readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { access, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
 import { join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import extractZip from "extract-zip";
@@ -27,6 +12,46 @@ const NODE_VERSION = "24.17.0";
 
 type RuntimePlatform = "darwin" | "linux" | "win";
 type RuntimeArch = "arm64" | "x64";
+
+interface CapturedCommand {
+  readonly error?: Error;
+  readonly status: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// spawnSync 的异步等价：保留 error/status/signal/stdout/stderr 五个字段的语义
+function capture(command: string, args: readonly string[]): Promise<CapturedCommand> {
+  return new Promise((resolvePromise) => {
+    const child = spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      resolvePromise({ error, status: null, signal: null, stdout, stderr });
+    });
+    child.once("close", (status, signal) => {
+      resolvePromise({ status, signal, stdout, stderr });
+    });
+  });
+}
 
 function target(): { platform: RuntimePlatform; arch: RuntimeArch } {
   const rawPlatform = process.env.DSH_DESKTOP_TARGET_PLATFORM ?? process.platform;
@@ -44,7 +69,7 @@ async function download(url: string, path: string): Promise<void> {
   const response = await fetch(url);
   if (!response.ok)
     throw new Error(`desktop runtime: ${url} returned HTTP ${String(response.status)}`);
-  writeFileSync(path, new Uint8Array(await response.arrayBuffer()), { mode: 0o600 });
+  await writeFile(path, new Uint8Array(await response.arrayBuffer()), { mode: 0o600 });
 }
 
 async function prepareNode(
@@ -59,8 +84,8 @@ async function prepareNode(
   const downloadRoot = join(buildRootDir, "downloads");
   const archive = join(downloadRoot, archiveName);
   const sums = join(downloadRoot, `node-v${NODE_VERSION}-SHASUMS256.txt`);
-  if (!existsSync(archive)) await download(`${releaseRoot}/${archiveName}`, archive);
-  if (!existsSync(sums)) await download(`${releaseRoot}/SHASUMS256.txt`, sums);
+  if (!(await pathExists(archive))) await download(`${releaseRoot}/${archiveName}`, archive);
+  if (!(await pathExists(sums))) await download(`${releaseRoot}/SHASUMS256.txt`, sums);
   const line = (await readFile(sums, "utf8"))
     .split(/\r?\n/u)
     .find((candidate) => candidate.endsWith(`  ${archiveName}`));
@@ -73,16 +98,16 @@ async function prepareNode(
   if (actual !== expected) throw new Error(`desktop runtime: checksum mismatch for ${archiveName}`);
 
   const extraction = join(buildRootDir, "node-extract");
-  rmSync(extraction, { recursive: true, force: true });
-  mkdirSync(extraction, { recursive: true });
+  await rm(extraction, { recursive: true, force: true });
+  await mkdir(extraction, { recursive: true });
   if (platform === "win") await extractZip(archive, { dir: extraction });
   else await extract({ cwd: extraction, file: archive });
   const source = join(extraction, folder, platform === "win" ? "node.exe" : "bin/node");
   const destinationRoot = join(buildRootDir, "runtime", "node");
   const destination = join(destinationRoot, platform === "win" ? "node.exe" : "node");
-  rmSync(destinationRoot, { recursive: true, force: true });
-  mkdirSync(destinationRoot, { recursive: true });
-  // A fresh write prevents macOS from retaining invalid code-signature vnode state from a tar-extracted Mach-O clone.
+  await rm(destinationRoot, { recursive: true, force: true });
+  await mkdir(destinationRoot, { recursive: true });
+
   await pipeline(createReadStream(source), createWriteStream(destination, { flags: "wx" }));
   if (platform !== "win") await chmod(destination, 0o755);
   const hostPlatform = process.platform === "win32" ? "win" : process.platform;
@@ -91,7 +116,7 @@ async function prepareNode(
     (arch === process.arch ||
       (platform === "darwin" && arch === "x64" && process.arch === "arm64"));
   if (hostCanExecute) {
-    const result = spawnSync(destination, ["--version"], { encoding: "utf8" });
+    const result = await capture(destination, ["--version"]);
     if (
       result.error !== undefined ||
       result.status !== 0 ||
@@ -104,10 +129,9 @@ async function prepareNode(
       );
     }
   }
-  rmSync(extraction, { recursive: true, force: true });
+  await rm(extraction, { recursive: true, force: true });
 }
 
-/** Options for the bundled-runtime preparation step of `bundle`. */
 export interface PrepareRuntimeOptions {
   readonly workspace?: string;
 }
@@ -116,10 +140,10 @@ export async function runPrepareRuntime(options: PrepareRuntimeOptions): Promise
   const { platform, arch } = target();
   const buildRootDir = buildRoot(resolve(options.workspace ?? resolveWorkspace()));
   const runtimeRoot = join(buildRootDir, "runtime");
-  mkdirSync(join(buildRootDir, "downloads"), { recursive: true });
-  mkdirSync(runtimeRoot, { recursive: true });
+  await mkdir(join(buildRootDir, "downloads"), { recursive: true });
+  await mkdir(runtimeRoot, { recursive: true });
   await prepareNode(platform, arch, buildRootDir);
-  writeFileSync(
+  await writeFile(
     join(runtimeRoot, "versions.json"),
     `${JSON.stringify(
       {

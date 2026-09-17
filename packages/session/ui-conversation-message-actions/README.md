@@ -50,7 +50,7 @@
   运行中的 loop 并发；`keepInbox` 表示停止本身不丢弃待处理输入，残留排队输入由
   rewind 在截断后强制 durable 取消（session-rdb 的 live 会话钩子 `inbox.clear`）；
   实现无 `cancel` 能力时退化为等待其自然停下
-  （[ADR 0005](./docs/adr/0005-rewind前主动停止运行中的loop.md)）；
+  （[ADR 0005](./.agents/adrs/0005-rewind前主动停止运行中的loop.md)）；
 - **cold 会话**：`resume` 已持久化会话（`create` 对已持久化日志必失败），
   resume 后 agent 驻留（不 dispose，避免 session 被移出 store 破坏客户端窗口）；
 - 模型 provider/model 在 **rewind 之前**从 `request/header` 解析（就地编辑
@@ -58,7 +58,8 @@
 
 ## 浏览器半（client bundle）
 
-`dist/client.js` 经 `__ModuleLoader__.load` 手递，替换 `conversation.chat.node`
+`dist/client.cjs`（单文件，运行期按 `/plugins/??<pkg>/client.js` 服务）经
+`__ModuleLoader__.load` 手递，替换 `conversation.chat.node`
 的 `user` / `steering` 渲染：
 
 - **shadow 注册**：`user` / `steering` 两个 key 以 `priority: -1` 重新注册
@@ -76,10 +77,12 @@
   前的高 seq 旧值，截断后的正确值 seq 更小，永远覆盖不上（轮次导航残留已
   删除的轮次）；不可用时回退 `location.reload()`；
 - **构建约束**：client bundle 必须是**单文件**（client-modules 只服务/加载
-  `client.js`）——`deps.neverBundle` 保持 react 与 `@deepseek-ai/*` external
-  （平台 seed 词或独立插件，内联会把别的插件的 `__ModuleLoader__.load` 嵌进来
-  导致 duplicate factory），其余依赖全部内联，`inlineDynamicImports` 合并动态
-  import；CSS Modules 经 lightningcss 内联 + `<style data-plugin>` 注入。
+  `client.js`，产物是 `dist/client.cjs`）——devkit 的 client 入口插件（`clientEntryPlugin`
+  - `isClientExternal`）保持 react / cordis / store / slots / primitives 与其余
+    `@deepseek-ai/*` client 插件行 external（平台 seed 词或独立插件，内联会把别的插件的
+    `__ModuleLoader__.load` 嵌进来导致 duplicate factory），契约层（`dsh-session` / `dsh-llm` /
+    `dsh-util-*` 等没有模块表条目的包）与其他第三方依赖全部内联，动态 import 合并；
+    CSS Modules 经 lightningcss 内联 + `<style data-plugin>` 注入。
 
 ## 分层边界
 
@@ -103,3 +106,17 @@
 
 端到端装配真实 rdb 后端，验证 retry / rewind / fork / timeline 闭环，
 以及 live 会话的 rewind（内存 log 截断 / handle cursor 对齐）与 agent 重放。
+
+测试接缝（每个都对应 `src/__tests__/` 下的 spec）：
+
+| 接缝                                           | 覆盖                                                                                          |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `ctx.sessionEditor`（host 编排）               | `edit` / `retry` / `recall` / `branch` / `replay` / `plan`（真实 SQLite + duck-typed agent）  |
+| `POST` / `GET /session-editor`（webServer 面） | `http.spec.ts`（rewind 前的 stop-loop、GET timeline、非法参数 400）                           |
+| `connection.fetch` 的 `/api/session-editor`    | `http-connection.spec.ts`（GET timeline / POST 六种动作 / 400 / 405 / 409）                   |
+| `SessionEditorController.face`（浏览器半）     | `client-controller.spec.ts`（recall 回填 composer、resync + 投影截断、版本导航、`/api` 前缀） |
+| `UserMessageNodeView`（入口门控）              | `chat-node-actions.spec.tsx`（编辑只要可编辑文本块、重试仅 closed 轮次、确认弹窗）            |
+
+未覆盖（已知）：`client/import-action.tsx` 与 `SessionEditorController.importSession`
+（`/api/session.import` 的浏览器半——FileReader 读文件 + `location.reload()` 薄壳；
+服务端面由 `session-rdb` 的 `import.spec.ts` 覆盖）。

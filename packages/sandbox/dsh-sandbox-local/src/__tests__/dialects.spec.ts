@@ -8,7 +8,6 @@ function rules(config: { access?: string[] }) {
   return compileRules(ruleSourceOf(config, {}), WORKSPACE);
 }
 
-/** 官方 Seatbelt 形态：`[sandbox-exec, -p, <profile>, --, ...]`。 */
 const SEATBELT_ARGV = [
   "/usr/bin/sandbox-exec",
   "-p",
@@ -19,7 +18,6 @@ const SEATBELT_ARGV = [
   "echo hi",
 ];
 
-/** 官方 bwrap 形态。 */
 const BWRAP_ARGV = [
   "bwrap",
   "--ro-bind",
@@ -38,7 +36,6 @@ const BWRAP_ARGV = [
   "echo hi",
 ];
 
-/** 官方 Landlock 形态。 */
 const LANDLOCK_ARGV = [
   "/launcher/landlock-run",
   "--ro",
@@ -51,7 +48,6 @@ const LANDLOCK_ARGV = [
   "bash",
 ];
 
-/** 官方 Windows ACL runner 形态。 */
 const WINDOWS_ARGV = [
   "node",
   "/runner/index.js",
@@ -91,7 +87,7 @@ describe("extendConfinedArgv", () => {
     expect(extended.slice(3)).toEqual(SEATBELT_ARGV.slice(3));
     expect(profile).toContain('(allow file-write* (subpath "/cache"))');
     expect(profile).toContain('(deny file-read* file-write* (subpath "/ws/secrets"))');
-    // 正则源码里 `/` 不转义、`.` 转义，可直接放进 SBPL 的 #"…"。
+
     expect(profile).toContain('(deny file-read* file-write* (regex #"^/ws/mise\\.[^/]*\\.toml$"))');
   });
 

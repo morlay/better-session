@@ -61,9 +61,10 @@ Teams 协作规则、harness 源码位置、Web GUI 说明都注册成系统提�
 `@morlay/dsh-preset` 的 `cordis.patch.yml` 就是这么声明的：一次覆盖全部 preset
 （standard / ptc 以及后续新增的），preset composition 不各自带这一行。
 
-profile 的依赖树必须能解析该包名（示例 app `apps/dsh-custom-next` 的
-`dependencies` 已声明）——preset 的行与 host plane 的行都用 profile 的 resolver
-解析，换工作区时要一并声明，否则该行加载失败、工具说明会留在系统提示词里。
+profile 的依赖树必须能解析该包名（`@morlay/dsh-preset` 的 `dependencies` 已声明，
+示例 app `apps/dsh-custom-next` 因此只声明 `@morlay/dsh-preset`）——preset 的行与
+host plane 的行都用 profile 的 resolver
+解析，换工作区时要保证该包在依赖树里可达，否则该行加载失败、工具说明会留在系统提示词里。
 
 放在 host plane 而不是 preset composition：这是一条与具体 preset 无关的部署级
 策略；注册在 root scope 的 listener 会收到每个 agent 的装配与 pre-step 事件。

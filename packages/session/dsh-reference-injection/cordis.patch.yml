@@ -1,0 +1,3 @@
+# 本包是纯插件：装配点是部署侧（preset）的一行，不经 bundle patch；
+# 空 patch 只为满足包 exports 约定。
+[]

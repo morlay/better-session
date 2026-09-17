@@ -19,7 +19,6 @@ export interface SessionRow {
 
   fRevision: number;
 
-  /** 归档时间戳（毫秒）；NULL 表示未归档。 */
   fArchivedAt: number | null;
 }
 
@@ -67,7 +66,6 @@ export interface BackendTx {
 
   updateSeedLength(id: SessionId, seedLength: number): Promise<void>;
 
-  /** 从事件表重算会话标题（最后一条 `session/title`）并写回会话行。 */
   refreshTitle(id: SessionId): Promise<void>;
 
   insertEvents(events: EventInsert[]): Promise<void>;
@@ -92,7 +90,6 @@ export interface BackendTx {
     sequence: number,
   ): Promise<{ fEventId: string; fSequence: number } | undefined>;
 
-  /** 删除一个会话的桥接、归属、投影 checkpoint 与会话行，并清理不再被任何会话引用的事件行。 */
   deleteSession(id: SessionId): Promise<void>;
 }
 
@@ -101,7 +98,6 @@ export interface Backend {
 
   readonly storeIdentity: string;
 
-  /** storages 接管表（workspace 域与投影 checkpoint）的访问层：与事件日志同介质。 */
   readonly storage: StorageRepository;
 
   open(): Promise<void>;
@@ -109,6 +105,14 @@ export interface Backend {
   getSession(id: SessionId): Promise<SessionRow | undefined>;
 
   getEventRows(id: SessionId, fromSequence?: number): Promise<EventRow[]>;
+
+  getEventTypeAt(id: SessionId, sequence: number): Promise<string | undefined>;
+
+  getEventTypesBefore(
+    id: SessionId,
+    beforeSequence: number,
+    limit: number,
+  ): Promise<Array<Pick<EventRow, "fSequence" | "fType">>>;
 
   listSessions(): Promise<SessionRow[]>;
 

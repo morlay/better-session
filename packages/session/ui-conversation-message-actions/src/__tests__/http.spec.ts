@@ -1,9 +1,6 @@
-// HTTP 面守卫：POST /session-editor 的 rewind 也必须先停止运行中的 loop
-// （handler → 公共 rewind → stopLoop）。路由由 SessionEditor 构造函数内的
-// effect 注册，webServer 替身须在本插件装配前就绪。
-
 import { describe, expect, it } from "vitest";
 import {
+  createPersisted,
   harness,
   meta,
   SessionIdBrand,
@@ -24,7 +21,6 @@ interface FakeResponse {
 
 type RouteHandler = (request: FakeRequest, response: FakeResponse) => void | Promise<void>;
 
-// 最小 POST 请求替身：每次注册回调后按序投递单块 body 与 end。
 function fakeJsonRequest(body: unknown): FakeRequest {
   const chunk = Buffer.from(JSON.stringify(body));
   const request: FakeRequest = {
@@ -39,7 +35,6 @@ function fakeJsonRequest(body: unknown): FakeRequest {
   return request;
 }
 
-// 最小响应替身：记录 status 与 body。
 function fakeResponse(): { response: FakeResponse; code: number; body: string } {
   const state = {
     response: undefined as unknown as FakeResponse,
@@ -70,7 +65,6 @@ describe("session-editor HTTP 面", () => {
       });
     });
     try {
-      // 路由注册随插件激活的 effect 执行；本用例无真实 IO，microtask 轮询足够。
       for (let i = 0; i < 1000 && !routes.has(SESSION_EDITOR_PATH); i += 1) await Promise.resolve();
       expect(routes.has(SESSION_EDITOR_PATH)).toBe(true);
 
@@ -96,7 +90,7 @@ describe("session-editor HTTP 面", () => {
                 },
                 whenIdle: async () => {
                   calls.push("whenIdle");
-                  // 收敛等待期间 HTTP rewind 尚未截断。
+
                   expect(live.snapshotEvents()).toHaveLength(before);
                 },
               }
@@ -111,11 +105,49 @@ describe("session-editor HTTP 面", () => {
 
       expect(response.code).toBe(200);
       expect(JSON.parse(response.body)).toEqual({ sessionId: "busy", queuedTurns: 0 });
-      // handler → 公共 rewind：先停止 loop（cancel → whenIdle），再截断。
+
       expect(calls).toEqual(["cancel", "whenIdle"]);
       expect(cancels[0]).toEqual({ cause: { kind: "user" }, options: { keepInbox: true } });
       expect(live.snapshotEvents().map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5]);
       disposeAgents();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("GET 取 timeline，参数非法是 400（web 模式下浏览器半的入口）", async () => {
+    const routes = new Map<string, RouteHandler>();
+    const { ctx, dispose } = await harness((scope) => {
+      scope.provide("webServer", {
+        register: (route: { path: string; handler: RouteHandler }) => {
+          routes.set(route.path, route.handler);
+          return () => {};
+        },
+      });
+    });
+    try {
+      for (let i = 0; i < 1000 && !routes.has(SESSION_EDITOR_PATH); i += 1) await Promise.resolve();
+      const handler = routes.get(SESSION_EDITOR_PATH)!;
+      await createPersisted(ctx, "s1", twoTurnLog());
+
+      const listed = fakeResponse();
+      const request: FakeRequest = {
+        method: "GET",
+        url: `${SESSION_EDITOR_PATH}?sessionId=s1`,
+        on() {
+          return request;
+        },
+      };
+      await handler(request, listed.response);
+      expect(listed.code).toBe(200);
+      expect(JSON.parse(listed.body)).toMatchObject({
+        sessionId: "s1",
+        retryableTurns: [{ turn: 1 }, { turn: 2 }],
+      });
+
+      const rejected = fakeResponse();
+      await handler(fakeJsonRequest({ action: "explode", sessionId: "s1" }), rejected.response);
+      expect(rejected.code).toBe(400);
     } finally {
       await dispose();
     }

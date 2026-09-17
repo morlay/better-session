@@ -1,10 +1,3 @@
-/**
- * 会话标题作为会话数据（`t_sessions.f_title` / `f_title_seq`）：
- * - 写路径遇到 `session/title` 事件即刷新该列；
- * - rewind 截断掉标题事件后列随之回退；
- * - 列表消费（投影缓存读路径）在没有 checkpoint 行时直接取该列。
- */
-
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -30,7 +23,6 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
-/** 一条 `session/title` 事件（上游 title unit 的输入）。 */
 function titleEvent(title: string, seq: number): SessionEvent {
   return {
     type: "session/title",
@@ -84,7 +76,6 @@ describe("session title as session data", () => {
         db.close();
       }
 
-      // 截断掉标题事件（保留到 turn/end = seq 5）→ 标题列回退为空。
       await ctx.sessionBranch.rewind(id, 5);
       const after = new DatabaseSync(dbPath);
       try {
@@ -130,7 +121,6 @@ describe("session title as session data", () => {
       const live = ctx.sessions.get(id)!;
       await ctx.sessions.flush(live);
 
-      // 没有调用过 write：checkpoint 行不存在，title 直接来自会话列。
       const snapshot = cache.cachedSnapshot(live.header, live.inheritedEventCount, ["title"]);
       expect(snapshot?.values["title"]).toBe("直取标题");
       expect(snapshot?.asOfSeq).toBe(6);
@@ -141,7 +131,7 @@ describe("session title as session data", () => {
 
   it("extracts titles from current and legacy event shapes", () => {
     expect(titleOfEventData('{"type":"session/title","data":{"title":"当前"}}')).toBe("当前");
-    // 旧世代（v0-v2）的 f_data 直接平铺事件 data。
+
     expect(titleOfEventData('{"title":"旧世代","messageSeqs":[1]}')).toBe("旧世代");
     expect(titleOfEventData('{"data":{}}')).toBeUndefined();
     expect(titleOfEventData("not json")).toBeUndefined();

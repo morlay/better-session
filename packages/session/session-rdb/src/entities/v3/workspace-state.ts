@@ -1,11 +1,5 @@
 import type { TableDef } from "../../adapters/types.ts";
 
-/**
- * workspace 域 global 单例（上游 `workspaceDomainState`）：`initialized` 是
- * 引导标记，`pendingMutation` 拆成操作与目标两列（create / delete 的可恢复
- * 两写标记）。显示顺序（`workspaceIds`）在 `t_workspaces.f_position`，
- * 归档集由 `t_sessions.f_archived_at` 承载（归档不触碰归属槽位）。
- */
 export const workspaceState: TableDef = {
   name: "t_workspace_state",
   columns: {

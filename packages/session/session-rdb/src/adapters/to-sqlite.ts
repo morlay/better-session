@@ -15,8 +15,6 @@ import { toProperty, type ColumnDef, type TableDef } from "./types.ts";
 type TableRegistry = Record<string, AnySQLiteTable>;
 
 function buildColumn(name: string, c: ColumnDef, tables: TableRegistry): SQLiteColumnBuilder {
-  // 具体 builder 类型与基类在方法层面不兼容（泛型逆变），构建阶段用宽松
-  // 类型合并，返回时收窄为基类；查询类型安全由手写行接口兜底。
   let col: any;
   switch (c.type) {
     case "text": {

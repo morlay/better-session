@@ -1,18 +1,11 @@
-/** Versioned control messages and framed byte transport for the Desktop Host child. */
-
-/** Protocol version implemented by the Electron shell and installed dsh Host. */
 export const DESKTOP_HOST_PROTOCOL_VERSION = 3 as const;
 
-/** Child descriptor Electron writes request frames to. */
 export const DESKTOP_REQUEST_PIPE_FD = 3;
 
-/** Child descriptor Electron reads response frames from. */
 export const DESKTOP_RESPONSE_PIPE_FD = 4;
 
-/** Child descriptor reserved for Node's lifecycle IPC channel. */
 export const DESKTOP_CONTROL_IPC_FD = 5;
 
-/** Maximum raw body bytes carried by one data frame. */
 export const DESKTOP_PIPE_CHUNK_BYTES = 64 * 1024;
 
 const FRAME_MAGIC = 0x44534833;
@@ -34,7 +27,6 @@ const RESPONSE_FRAME_DATA = 2;
 const RESPONSE_FRAME_END = 3;
 const RESPONSE_FRAME_ERROR = 4;
 
-/** Metadata that precedes one optional request body on the request pipe. */
 export interface DesktopHostRequestStart {
   readonly url: string;
   readonly method: string;
@@ -42,12 +34,10 @@ export interface DesktopHostRequestStart {
   readonly hasBody: boolean;
 }
 
-/** Commands retained on Node IPC because they do not carry Fetch payload bytes. */
 export type DesktopHostCommand = {
   readonly type: "shutdown";
 };
 
-/** Lifecycle events retained on Node IPC. */
 export type DesktopHostEvent =
   | {
       readonly type: "ready";
@@ -59,7 +49,6 @@ export type DesktopHostEvent =
       readonly message: string;
     };
 
-/** One decoded response-pipe frame. */
 export type DesktopHostResponseFrame =
   | {
       readonly type: "start";
@@ -125,7 +114,6 @@ function encodeJsonFrame(type: RequestFrameType, streamId: number, value: unknow
   return encodeFrame(type, streamId, Buffer.from(JSON.stringify(value), "utf8"));
 }
 
-/** Encode the metadata opening one request stream. */
 export function encodeDesktopRequestStart(
   streamId: number,
   request: DesktopHostRequestStart,
@@ -133,30 +121,21 @@ export function encodeDesktopRequestStart(
   return encodeJsonFrame(REQUEST_FRAME_START, streamId, request);
 }
 
-/** Encode one bounded raw request-body chunk. */
 export function encodeDesktopRequestData(streamId: number, data: Uint8Array): Buffer {
   return encodeFrame(REQUEST_FRAME_DATA, streamId, Buffer.from(data));
 }
 
-/** Encode normal request-body completion. */
 export function encodeDesktopRequestEnd(streamId: number): Buffer {
   return encodeFrame(REQUEST_FRAME_END, streamId, Buffer.alloc(0));
 }
 
-/** Encode cancellation of one request and its response. */
 export function encodeDesktopRequestCancel(streamId: number): Buffer {
   return encodeFrame(REQUEST_FRAME_CANCEL, streamId, Buffer.alloc(0));
 }
 
-/** Incrementally decode validated response frames from the Host byte pipe. */
 export class DesktopHostResponseDecoder {
   private buffer: Buffer = Buffer.alloc(0);
 
-  /**
-   * Append bytes and return every complete response frame.
-   * @param chunk - next bytes read from the Host response pipe.
-   * @returns complete frames in pipe order.
-   */
   push(chunk: Buffer): DesktopHostResponseFrame[] {
     this.buffer = this.buffer.byteLength === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
     const frames: DesktopHostResponseFrame[] = [];
@@ -167,7 +146,6 @@ export class DesktopHostResponseDecoder {
     }
   }
 
-  /** Reject EOF that splits a frame. */
   finish(): void {
     if (this.buffer.byteLength !== 0)
       throw new Error("dsh desktop: Host response pipe ended inside a frame");

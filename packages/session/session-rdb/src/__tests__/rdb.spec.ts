@@ -3,7 +3,6 @@ import { ToolCallId, createMessage, createUserMessage } from "@deepseek-ai/dsh-l
 import { afterEach, describe, expect, it } from "vitest";
 import { EmptySettings } from "@morlay/session-rdb/testing";
 import { Context } from "@deepseek-ai/cordis";
-import { existsSync } from "node:fs";
 import { chmod, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -81,7 +80,6 @@ function insertEventRow(
   return eventId;
 }
 
-/** 类型收窄：ctx.sessionPersistence 到 RDB 子类（便捷方法面）。 */
 function rdb(ctx: Context): SessionPersistenceSqlite {
   return ctx.sessionPersistence as SessionPersistenceSqlite;
 }
@@ -94,7 +92,6 @@ async function backend(path = ":memory:"): Promise<{ ctx: Context; dispose: () =
   return { ctx, dispose: () => fiber.dispose() };
 }
 
-// Run the same backend-agnostic contract as JSONL to pin identical semantics.
 runPersistenceContract("sqlite", async () => {
   const ctx = new Context();
   await ctx.plugin(EmptySettings);
@@ -108,23 +105,18 @@ runPersistenceContract("sqlite", async () => {
   };
 });
 
-// A file-backed database lets two mounts share rows across reload. `corruptTail`
-// inserts an unparsable row past the committed seq (as an events + session_events
-// pair, since a bridge row without an event row never joins), exercising
-// coordinator repair against real database rows.
 runCoordinatorContract("sqlite", async (): Promise<CoordinatorFixture> => {
   const dir = await mkdtemp(join(tmpdir(), "dsh-sqlite-coord-"));
   const path = join(dir, "sessions.db");
   return {
     mount: async (ctx) => {
-      // HMR 测试会在同一 ctx 上多次 reload 后端；settings 服务只注册一次。
       if (ctx.reflect.get("settings") === undefined) {
         await ctx.plugin(EmptySettings);
       }
       return await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path });
     },
     corruptTail: async (id) => {
-      const db = openDatabase(path, "wal");
+      const db = await openDatabase(path, "wal");
       const head = db
         .prepare("SELECT f_head_event_id, f_head_sequence FROM t_sessions WHERE f_session_id = ?")
         .get(id) as { f_head_event_id: string; f_head_sequence: number };
@@ -277,9 +269,6 @@ describe("eventDimensions", () => {
 });
 
 describe("scanRows", () => {
-  // scanRows works off EventRows (data is a JSON string column); build them from
-  // SessionEvents so the unit tests read in terms of the event vocabulary. With
-  // no delta filtering the persisted seq equals the original seq.
   const rows = (events: SessionEvent[]): EventRow[] =>
     events.map((e) => {
       const se = e as SessionEvent<SurfaceEventType>;
@@ -327,7 +316,7 @@ describe("scanRows", () => {
         time: 1,
         data: { turn: 1 },
       },
-      { type: "step/start", seq: SessionSeq(2), time: 2, data: { turn: 1, step: 1 } }, // seq 1 missing
+      { type: "step/start", seq: SessionSeq(2), time: 2, data: { turn: 1, step: 1 } },
     ];
     const { preserved, tornFrom } = scanRows(rows(gapped));
     expect(preserved.map((e) => e.seq)).toEqual([0]);
@@ -346,7 +335,7 @@ describe("scanRows", () => {
         time: 1,
         data: { turn: 1 },
       },
-      { type: "step/start", seq: SessionSeq(2), time: 2, data: { turn: 1, step: 1 } }, // seq 1 missing
+      { type: "step/start", seq: SessionSeq(2), time: 2, data: { turn: 1, step: 1 } },
       {
         type: "turn/end",
         seq: SessionSeq(3),
@@ -448,7 +437,7 @@ describe("rowToEvent", () => {
     const event = rowToEvent(row);
     expect(event.seq).toBe(0);
     expect((event as SurfaceEvent).surfaceOp).toBe("append");
-    // sourceEventSeqs 不落库：append 事件不带 provenance。
+
     expect((event as SurfaceEvent).sourceEventSeqs).toBeUndefined();
   });
 
@@ -502,7 +491,7 @@ describe("findSurfaceRepairs", () => {
       data: {
         turn: 1,
         step: 1,
-        // 真实重写继承原 message 的 id（上游 replacementStart 语义）。
+
         message: messageId === undefined ? message : { ...message, id: messageId },
       },
       ...extra,
@@ -510,8 +499,6 @@ describe("findSurfaceRepairs", () => {
   }
 
   it("degrades an invalid tool/result replace to append (the reported load failure)", () => {
-    // 用户报告的损坏样式：seq 4556 的 tool/result replace 指向的当前 surface
-    // 节点不是 tool/result（上游 assertToolResultRewrite 校验失败）。
     const events: SessionEvent[] = [
       { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       {
@@ -545,8 +532,7 @@ describe("findSurfaceRepairs", () => {
         time: 6,
         data: { turn: 1, reason: { kind: "completed" } },
       },
-      // 非法 tool/result replace：range [1,3] 的当前 surface 节点是
-      // user/message @1 + assistant/message @3，不是 tool/result。
+
       toolResult(6, "pruned", {
         surfaceOp: { op: "replace", startSeq: SessionSeq(1), endSeq: SessionSeq(3) },
       }),
@@ -626,7 +612,7 @@ describe("findSurfaceRepairs", () => {
           }),
           stream: [] as const,
         },
-        // range 起点 9 不在当前 surface（只有 0、1）。
+
         surfaceOp: { op: "replace", startSeq: 9, endSeq: 1 },
       } as unknown as SessionEvent,
     ];
@@ -641,14 +627,13 @@ describe("findSurfaceRepairs", () => {
         seq: SessionSeq(0),
         time: 1,
         data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } },
-        // 缺 surfaceOp（surface-eligible 事件必须携带）。
       } as unknown as SessionEvent,
       {
         type: "turn/end",
         seq: SessionSeq(1),
         time: 2,
         data: { turn: 1, reason: { kind: "completed" } },
-        // 非 surface-eligible 事件携带 surfaceOp。
+
         surfaceOp: "append",
       } as unknown as SessionEvent,
     ];
@@ -681,7 +666,7 @@ describe("findSurfaceRepairs", () => {
           }),
           stream: [] as const,
         },
-        // 畸形 replace：start 是字符串。
+
         surfaceOp: { op: "replace", startSeq: "1", endSeq: 0 },
       } as unknown as SessionEvent,
     ];
@@ -690,9 +675,6 @@ describe("findSurfaceRepairs", () => {
   });
 
   it("clamps a replace end that fell into the old coordinate space onto the metering count", () => {
-    // 旧写入器重编号后 range 端点仍是旧坐标：end 999 不在当前 surface，但
-    // 紧邻 metering 的 shadowedSeqs 给出被遮蔽数量 2，夹取到当前 surface 的
-    // 同长区间 [1, 3]（降级 append 会把被压缩历史全部放回派生历史）。
     const events: SessionEvent[] = [
       { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       {
@@ -891,7 +873,7 @@ describe("read-view repair", () => {
       start: 1,
       end: 3,
     });
-    // 用稠密 range 内的全部 surface 节点重写（旧值是旧坐标空间）。
+
     expect((events[0]!.data as unknown as { shadowedSeqs: unknown }).shadowedSeqs).toEqual([
       1, 2, 3,
     ]);
@@ -907,7 +889,7 @@ describe("read-view repair", () => {
           turn: 1,
           summary: "compacted",
           shadowedRange: { start: 1, end: 1 },
-          // 压缩竞态下 range 外的并发落地节点：当前写入器的权威列表，不得改写。
+
           shadowedSeqs: [1, 3],
           shadowedTokenCount: 5,
           provider: "mock",
@@ -957,9 +939,9 @@ describe("recomputeReplaceProvenance", () => {
     ];
     recomputeReplaceProvenance(events);
     const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
-    // 只有 surface 节点（user/message @ 8）进 provenance；turn/start/end 不是。
+
     expect(checkpoint.sourceEventSeqs).toEqual([8]);
-    // Non-replace events are untouched.
+
     expect(events[1]).toMatchObject({ seq: SessionSeq(8), surfaceOp: "append" });
     expect(
       (events[1] as SessionEvent & { sourceEventSeqs?: number[] }).sourceEventSeqs,
@@ -1008,15 +990,11 @@ describe("recomputeReplaceProvenance", () => {
     ];
     recomputeReplaceProvenance(events);
     const checkpoint = events[3] as SessionEvent & { sourceEventSeqs?: number[] };
-    // user/message @ 10 + assistant/message @ 11 are surface nodes in the range.
+
     expect(checkpoint.sourceEventSeqs).toEqual([10, 11]);
   });
 
   it("prefers the adjacent metering event's shadowedSeqs over a range scan", () => {
-    // 压缩竞态样式：compaction/summary 的 shadowedSeqs 显式列出全部被遮蔽
-    // 节点（含 range 数值区间漏掉的并发落地节点 659），replace 紧随其后。
-    // provenance 必须采用 shadowedSeqs（权威列表），否则上游
-    // assertProvenance 报 "missing 659"。
     const events: SessionEvent[] = [
       {
         type: "user/message",
@@ -1068,8 +1046,6 @@ describe("recomputeReplaceProvenance", () => {
   });
 
   it("uses shadowedSeqs even when the range scan would miss a shadowed node", () => {
-    // 竞态核心：range [1..2] 的数值区间不含 659（并发落地节点），但
-    // shadowedSeqs 显式列出 [1, 659, 2]——provenance 必须完整覆盖。
     const events: SessionEvent[] = [
       {
         type: "user/message",
@@ -1118,8 +1094,6 @@ describe("recomputeReplaceProvenance", () => {
   });
 
   it("falls back to a range scan when the adjacent event is not a metering event", () => {
-    // 非压缩 replace（如 tool-result pruner 的旧样式）：无紧邻 metering
-    // 事件，回退到 range 数值扫描，既有行为不变。
     const events: SessionEvent[] = [
       {
         type: "user/message",
@@ -1180,10 +1154,6 @@ describe("recomputeReplaceProvenance", () => {
   });
 
   it("satisfies the upstream surface fold across chained checkpoints with a straggler", () => {
-    // 端到端：两轮链式 checkpoint + 压缩竞态漏网节点（seq 2 位于上一个
-    // checkpoint 节点 5 之后的表面位置、seq 却更小）。重算后的 provenance
-    // 必须通过上游 foldSurface（assertProvenance 的真实实现），漏网节点
-    // 被正确遮蔽；按 range 数值扫描的旧结果会被 "missing 2" 拒绝。
     const events: SessionEvent[] = [
       {
         type: "user/message",
@@ -1285,7 +1255,7 @@ describe("recomputeReplaceProvenance", () => {
     expect(() => foldSurface(events)).toThrow(/missing 2/);
     checkpoint.sourceEventSeqs = [4, 2, 5];
     const { nodes } = foldSurface(events);
-    // 两轮 checkpoint 后，表面只剩最后一个 checkpoint 节点（漏网节点已被遮蔽）。
+
     expect([...nodes]).toEqual([SessionSeq(7)]);
   });
 });
@@ -1294,7 +1264,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
   it("rejects a stored v0 log containing a legacy request/header-delta event", async () => {
     const path = await freshDbPath();
     const m = meta("legacy-header-delta", "/legacy");
-    const db = openDatabase(path, "wal");
+    const db = await openDatabase(path, "wal");
     db.prepare(`
       INSERT INTO t_sessions
         (f_session_id, f_head_event_id, f_head_sequence, f_version, f_created_at, f_cwd,
@@ -1315,7 +1285,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     db.close();
 
     const mounted = await backend(path);
-    // 新版 fail-closed：未知事件类型（非 ignorable）拒绝解释整个 log。
+
     await expect(rdb(mounted.ctx).load(m.id)).rejects.toThrow(
       /contains event type "request\/header-delta" \(seq 1\) unknown to this harness/,
     );
@@ -1324,7 +1294,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
 
   it("has no independent per-session log location", async () => {
     const { ctx, dispose } = await backend();
-    // 新版模型无 locate：stat 对不存在会话返回 undefined。
+
     expect(await rdb(ctx).stat(meta("sqlite-location").id)).toBeUndefined();
     await dispose();
   });
@@ -1332,7 +1302,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
   it("an interrupted turn (rows after the last turn/end) is PRESERVED as stored", async () => {
     const path = await freshDbPath();
     const m = meta("crash");
-    // Run 1: persist a complete turn, then a half-written second turn (no turn/end).
+
     const ctx1 = new Context();
     await ctx1.plugin(EmptySettings);
     await ctx1.plugin(SessionStore);
@@ -1349,9 +1319,6 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     ]);
     await fiber1.dispose();
 
-    // Run 2: load PRESERVES the interrupted turn's real events verbatim——
-    // 新版模型下持久化层原样返回存储事件，补 closers 由消费方（Session
-    // 恢复 / agent-loop resume）负责。
     const ctx2 = new Context();
     await ctx2.plugin(EmptySettings);
     await ctx2.plugin(SessionStore);
@@ -1363,13 +1330,12 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
       "step/start",
       "assistant/message",
       "step/end",
-      "turn/end", // turn 1
+      "turn/end",
       "turn/start",
-      "step/start", // turn 2: 原样保留，无合成 closers
+      "step/start",
     ]);
     expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
 
-    // 后续 append 从存储 next-seq 续接（seq 8）。
     await rdb(ctx2).append(m.id, [
       {
         type: "turn/end",
@@ -1387,10 +1353,10 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const path = await freshDbPath();
     const m = meta("load-closes");
     const b1 = await backend(path);
-    await rdb(b1.ctx).createAndAppend(m, oneTurnLog()); // seqs 0..5
+    await rdb(b1.ctx).createAndAppend(m, oneTurnLog());
     await b1.dispose();
-    // Hand-write an interrupted turn (turn/start seq 6, no turn/end).
-    const db = openDatabase(path, "wal");
+
+    const db = await openDatabase(path, "wal");
     const head = db
       .prepare("SELECT f_head_event_id FROM t_sessions WHERE f_session_id = ?")
       .get(m.id) as { f_head_event_id: string };
@@ -1399,12 +1365,11 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
 
     const b2 = await backend(path);
     const loaded = await rdb(b2.ctx).load(m.id);
-    // turn 2's real turn/start (seq 6) is preserved verbatim——新版模型下
-    // 持久化层原样返回存储事件，不补合成 closers。
+
     expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
     expect(loaded.events.at(-1)!.type).toBe("turn/start");
-    // load() 不落库：存储行保持原样（无合成 closers）。
-    const probe = openDatabase(path, "wal");
+
+    const probe = await openDatabase(path, "wal");
     const stored = probe
       .prepare(`
       SELECT se.f_sequence, e.f_type FROM t_session_events se
@@ -1420,22 +1385,18 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
 
   it("rejects opening a database whose schema version is not the current build (newer OR older)", async () => {
     const path = await freshDbPath();
-    openDatabase(path, "wal").close(); // stamp user_version = SCHEMA_VERSION
-    const dbNewer = openDatabase(path, "wal");
+    (await openDatabase(path, "wal")).close();
+    const dbNewer = await openDatabase(path, "wal");
     dbNewer.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
     dbNewer.close();
-    expect(() => openDatabase(path, "wal")).toThrow(/incompatible with this build/);
+    await expect(openDatabase(path, "wal")).rejects.toThrow(/incompatible with this build/);
 
-    // The immediately preceding layout lacks the required store identity and is
-    // rejected rather than migrated (unreleased software, no backward-compat).
-    // Version 0 means "unversioned", so probe an explicit non-current version
-    // (SCHEMA_VERSION - 1 is 0 at SCHEMA_VERSION 1).
     const olderPath = await freshDbPath();
-    openDatabase(olderPath, "wal").close();
-    const dbOlder = openDatabase(olderPath, "wal");
+    (await openDatabase(olderPath, "wal")).close();
+    const dbOlder = await openDatabase(olderPath, "wal");
     dbOlder.exec("PRAGMA user_version = 123");
     dbOlder.close();
-    expect(() => openDatabase(olderPath, "wal")).toThrow(/incompatible with this build/);
+    await expect(openDatabase(olderPath, "wal")).rejects.toThrow(/incompatible with this build/);
   });
 
   it("rejects a table-backed unversioned database before stamping or changing journal mode", async () => {
@@ -1444,7 +1405,9 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     legacy.exec("CREATE TABLE t_sessions (id TEXT PRIMARY KEY)");
     legacy.close();
 
-    expect(() => openDatabase(path, "wal")).toThrow(/unversioned schema or application identity/);
+    await expect(openDatabase(path, "wal")).rejects.toThrow(
+      /unversioned schema or application identity/,
+    );
 
     const unchanged = new DatabaseSync(path);
     expect(unchanged.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
@@ -1463,7 +1426,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     viewOnly.exec("CREATE VIEW foreign_view AS SELECT 1 AS value");
     viewOnly.close();
 
-    expect(() => openDatabase(viewPath, "wal")).toThrow(
+    await expect(openDatabase(viewPath, "wal")).rejects.toThrow(
       /unversioned schema or application identity/,
     );
     const unchangedView = new DatabaseSync(viewPath);
@@ -1478,7 +1441,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     foreignApplication.exec("PRAGMA application_id = 12345");
     foreignApplication.close();
 
-    expect(() => openDatabase(applicationPath, "wal")).toThrow(
+    await expect(openDatabase(applicationPath, "wal")).rejects.toThrow(
       /unversioned schema or application identity/,
     );
     const unchangedApplication = new DatabaseSync(applicationPath);
@@ -1499,7 +1462,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     foreign.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     foreign.close();
 
-    expect(() => openDatabase(path, "wal")).toThrow(/has application id 12345/);
+    await expect(openDatabase(path, "wal")).rejects.toThrow(/has application id 12345/);
 
     const unchanged = new DatabaseSync(path);
     expect(unchanged.prepare("PRAGMA application_id").get()).toEqual({ application_id: 12345 });
@@ -1520,7 +1483,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     );
     conflicting.close();
 
-    expect(() => openDatabase(path, "wal")).toThrow();
+    await expect(openDatabase(path, "wal")).rejects.toThrow();
 
     const unchanged = new DatabaseSync(path);
     expect(
@@ -1547,7 +1510,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
 
   it("stamps the persistence application identity with the schema version", async () => {
     const path = await freshDbPath();
-    openDatabase(path, "wal").close();
+    (await openDatabase(path, "wal")).close();
 
     const db = new DatabaseSync(path);
     expect(db.prepare("PRAGMA application_id").get()).toEqual({
@@ -1561,10 +1524,10 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const path = await freshDbPath();
     const m = meta("corrupt-tail");
     const b1 = await backend(path);
-    await rdb(b1.ctx).createAndAppend(m, oneTurnLog()); // committed: seqs 0..5
+    await rdb(b1.ctx).createAndAppend(m, oneTurnLog());
     await b1.dispose();
 
-    const db = openDatabase(path, "wal");
+    const db = await openDatabase(path, "wal");
     const head = db
       .prepare("SELECT f_head_event_id FROM t_sessions WHERE f_session_id = ?")
       .get(m.id) as { f_head_event_id: string };
@@ -1593,8 +1556,8 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
 
     const b2 = await backend(path);
     const loaded = await rdb(b2.ctx).load(m.id);
-    expect(loaded.events).toEqual(oneTurnLog()); // torn tail discarded, committed intact (turn 1 already balanced → no closers)
-    // load physically deleted the corrupt tail row, so a fresh append continues.
+    expect(loaded.events).toEqual(oneTurnLog());
+
     await rdb(b2.ctx).append(m.id, [
       {
         type: "turn/start",
@@ -1620,14 +1583,11 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     await ctx.plugin(SessionStore);
     const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path: ":memory:" });
     const m = meta("rollback");
-    await rdb(ctx).createAndAppend(m, oneTurnLog()); // seqs 0..5
+    await rdb(ctx).createAndAppend(m, oneTurnLog());
 
-    // A batch that re-states an already-stored seq must be rejected and leave
-    // the stored log unchanged (the UNIQUE (session_id, seq) constraint fires
-    // inside the transaction → ROLLBACK).
     await expect(rdb(ctx).append(m.id, oneTurnLog())).rejects.toThrow();
     const loaded = await rdb(ctx).load(m.id);
-    expect(loaded.events).toEqual(oneTurnLog()); // unchanged
+    expect(loaded.events).toEqual(oneTurnLog());
     await fiber.dispose();
   });
 
@@ -1661,7 +1621,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const revisionA = (await rdb(a.ctx).listSnapshots())[0]?.revision;
     await a.dispose();
 
-    const probeA = openDatabase(pathA, "wal");
+    const probeA = await openDatabase(pathA, "wal");
     const storeIdA = (
       probeA.prepare("SELECT f_store_id FROM t_persistence_state WHERE f_singleton = 1").get() as {
         f_store_id: string;
@@ -1678,7 +1638,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const b = await backend(pathB);
     await rdb(b.ctx).createAndAppend(m, oneTurnLog());
     const revisionB = (await rdb(b.ctx).listSnapshots())[0]?.revision;
-    const probeB = openDatabase(pathB, "wal");
+    const probeB = await openDatabase(pathB, "wal");
     const storeIdB = (
       probeB.prepare("SELECT f_store_id FROM t_persistence_state WHERE f_singleton = 1").get() as {
         f_store_id: string;
@@ -1700,7 +1660,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const before = (await rdb(first.ctx).listSnapshots())[0]?.revision;
     await first.dispose();
 
-    const cleanup = openDatabase(path, "wal");
+    const cleanup = await openDatabase(path, "wal");
     cleanup.prepare("DELETE FROM t_sessions WHERE f_session_id = ?").run(m.id);
     cleanup.close();
 
@@ -1718,7 +1678,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const m = meta("empty-repair");
     await rdb(b.ctx).createAndAppend(m, oneTurnLog());
     const before = await rdb(b.ctx).listSnapshots();
-    // 新版模型无 commitRepair：空 append 是 no-op，revision 不变。
+
     const handle = await rdb(b.ctx).open(m.id, "write");
     await handle.append([]);
     await handle.close();
@@ -1728,15 +1688,14 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
 
   it("applies the configured busy timeout to every opened connection (default 5000ms)", async () => {
     const path = await freshDbPath();
-    // The backend opens one connection; the same pragma is asserted per handle
-    // (busy_timeout is connection-scoped, never persisted in the database).
-    const immediate = openDatabase(path, "wal", 0);
+
+    const immediate = await openDatabase(path, "wal", 0);
     expect(immediate.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 0 });
     immediate.close();
-    const custom = openDatabase(path, "wal", 321);
+    const custom = await openDatabase(path, "wal", 321);
     expect(custom.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 321 });
     custom.close();
-    const defaulted = openDatabase(path, "wal");
+    const defaulted = await openDatabase(path, "wal");
     expect(defaulted.prepare("PRAGMA busy_timeout").get()).toEqual({
       timeout: DEFAULT_BUSY_TIMEOUT_MS,
     });
@@ -1745,9 +1704,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
 
   it("busyTimeout config wires from the plugin into the database connection", async () => {
     const path = await freshDbPath();
-    // Loading the plugin with a custom busyTimeout proves the config key is
-    // accepted and passed through the open path (the connection itself is
-    // private; the value is asserted via a second connection above).
+
     const ctx = new Context();
     await ctx.plugin(EmptySettings);
     await ctx.plugin(SessionStore);
@@ -1763,10 +1720,6 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
 
 describe("SessionPersistenceSqlite: export-time repair (readRaw)", () => {
   it("readRaw repairs invalid tool/result surface replacements so the artifact loads", async () => {
-    // 用户报告的损坏样式：tool/result replace 指向的当前 surface 节点不是
-    // tool/result（上游 assertToolResultRewrite 校验失败）——load 抛
-    // "invalid seed event ... must target a current tool/result"。导出
-    // （readRaw）把该 replace 降级为 append,产出的 artifact 导入后即可加载。
     const path = await freshDbPath();
     const b = await backend(path);
     const m = meta("export-tool-result");
@@ -1821,8 +1774,7 @@ describe("SessionPersistenceSqlite: export-time repair (readRaw)", () => {
             source: { kind: "tool", callId },
           }),
         },
-        // 非法 replace：range [1,1] 的当前 surface 节点是 user/message @1，
-        // 不是 tool/result（上游 assertToolResultRewrite 校验失败）。
+
         surfaceOp: { op: "replace", startSeq: 1, endSeq: 1 },
       },
       {
@@ -1834,12 +1786,9 @@ describe("SessionPersistenceSqlite: export-time repair (readRaw)", () => {
     ] as unknown as SessionEvent[];
     await rdb(b.ctx).createAndAppend(m, log);
 
-    // 源会话：新版模型下持久化层原样返回存储事件（surface 语义校验由
-    // 消费方 Session 构造负责，load 不做）。
     const sourceLoaded = await rdb(b.ctx).load(m.id);
     expect(sourceLoaded.events.at(-1)?.type).toBe("turn/end");
 
-    // 导出即修复：非法 replace 降级为 append,artifact 完备可用。
     const persistence = rdb(b.ctx) as SessionPersistenceSqlite;
     const raw = await persistence.readRaw(m.id);
     expect(raw).toBeDefined();
@@ -1847,7 +1796,6 @@ describe("SessionPersistenceSqlite: export-time repair (readRaw)", () => {
     const result = parsed.events.find((e) => e.type === "tool/result")!;
     expect((result as SurfaceEvent).surfaceOp).toBe("append");
 
-    // 导入 artifact 后无需任何修复即可完整加载。
     const importedId = `session-imported` as SessionId;
     await persistence.createAndAppend(
       { ...parsed.meta, id: importedId },
@@ -1862,12 +1810,10 @@ describe("SessionPersistenceSqlite: export-time repair (readRaw)", () => {
   });
 
   it("readRaw repairs without mutating storage (export-time repair is view-only)", async () => {
-    // 导出即修复只作用于导出视图,不落库——写路径零转换不变量不变：导出前后
-    // 存储行（f_surface_op）与 revision 完全一致。
     const path = await freshDbPath();
     const b = await backend(path);
     const m = meta("export-view-only");
-    // 原样存储的 log（含 ignorable 版本效果事件，与 JSONL 一致原样落库）。
+
     const log = [
       { type: "turn/start", seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       {
@@ -1919,14 +1865,12 @@ describe("SessionPersistenceSqlite: export-time repair (readRaw)", () => {
     const rowsBefore = await backendApi.getEventRows(m.id);
     const revisionBefore = await persistence.readStoredRevision(m.id);
 
-    // 导出（含修复）不落库。
     const raw = await persistence.readRaw(m.id);
     expect(raw).toBeDefined();
     const rowsAfter = await backendApi.getEventRows(m.id);
     expect(rowsAfter).toEqual(rowsBefore);
     expect(await persistence.readStoredRevision(m.id)).toBe(revisionBefore);
 
-    // 存储视图不变：读取仍原样返回存储事件。
     const loaded = await rdb(b.ctx).load(m.id);
     expect(loaded.events.at(-1)?.type).toBe("turn/end");
     await b.dispose();
@@ -1936,7 +1880,7 @@ describe("SessionPersistenceSqlite: export-time repair (readRaw)", () => {
 describe("SessionPersistenceSqlite: edge cases", () => {
   it("rejects and closes a current-schema database with an invalid store identity", async () => {
     const path = await freshDbPath();
-    const db = openDatabase(path, "wal");
+    const db = await openDatabase(path, "wal");
     db.exec("UPDATE t_persistence_state SET f_store_id = '' WHERE f_singleton = 1");
     db.close();
 
@@ -2007,7 +1951,7 @@ describe("SessionPersistenceSqlite: edge cases", () => {
     const walPath = await freshDbPath();
     const bWal = await backend(walPath);
     await rdb(bWal.ctx).create(meta("jm-wal"));
-    const probe = openDatabase(walPath, "wal");
+    const probe = await openDatabase(walPath, "wal");
     expect(
       (probe.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
     ).toBe("wal");
@@ -2024,26 +1968,24 @@ describe("SessionPersistenceSqlite: edge cases", () => {
       journalMode: "delete",
     });
     await rdb(ctx).create(meta("jm-delete"));
-    const db = openDatabase(deletePath, "delete");
+    const db = await openDatabase(deletePath, "delete");
     expect((db.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode).toBe(
       "delete",
     );
     db.close();
-    expect(existsSync(`${deletePath}-wal`)).toBe(false);
+    await expect(stat(`${deletePath}-wal`)).rejects.toThrow();
     await fiber.dispose();
   });
 
   it("HMR: a DIFFERENT session colliding with a materialized on-disk id is rejected", async () => {
     const path = await freshDbPath();
-    // Instance 1 materializes a session and disposes.
+
     const b1 = await backend(path);
     const s1 = b1.ctx.sessions.create(SessionId("hmr-collide"));
     appendLog(s1, oneTurnLog());
     await b1.ctx.sessions.flush(s1);
     await b1.dispose();
 
-    // A fresh context with an UNRELATED live session reusing the id meets a
-    // materialized row that is NOT a prefix of its events → reject.
     const ctx = new Context();
     await ctx.plugin(EmptySettings);
     await ctx.plugin(SessionStore);
@@ -2153,7 +2095,7 @@ describe("surface field round-trip", () => {
     expect((um as SurfaceEvent).sourceEventSeqs).toBeUndefined();
     const am = loaded.events[3]!;
     expect((am as SurfaceEvent).surfaceOp).toBe("append");
-    // v2 语义：assistant/message 嵌入 stream，禁止携带 sourceEventSeqs。
+
     expect((am as SurfaceEvent).sourceEventSeqs).toBeUndefined();
     await fiber.dispose();
   });

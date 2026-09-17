@@ -43,8 +43,7 @@ export async function harness(provide?: (ctx: Context) => void): Promise<Harness
   await ctx.plugin(SessionStore);
   new SessionProjectionRegistry(ctx);
   const fiber = await ctx.plugin(SessionPersistenceSqlite, { type: "sqlite", path: ":memory:" });
-  // 额外服务（如 HTTP 面测试的 webServer 替身）必须在 SessionEditor 构造前
-  // 就绪：构造函数内的 effect 只在服务可解析时注册路由。
+
   provide?.(ctx);
   await ctx.plugin(SessionEditor);
   return { ctx, editor: ctx.sessionEditor, dispose: () => fiber.dispose() };
@@ -78,7 +77,6 @@ export async function createPersisted(
   }
 }
 
-/** 构造一条 user/message 事件。 */
 export function userMessage(seq: number, id: string, text: string, time = seq): SessionEvent {
   return {
     type: "user/message",
@@ -94,7 +92,6 @@ export function userMessage(seq: number, id: string, text: string, time = seq): 
   } as SessionEvent;
 }
 
-/** 构造一条 assistant/message 事件（纯文本回复）。 */
 export function assistantMessage(
   seq: number,
   turn: number,
@@ -122,7 +119,6 @@ export function assistantMessage(
   } as unknown as SessionEvent;
 }
 
-/** 真实 agent-loop 形状的一轮：轮首输入 + 可选 followup，可闭合。 */
 export function turnLog(
   base: number,
   turn: number,

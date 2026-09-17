@@ -8,12 +8,12 @@
 
 上游沙箱策略只有两个字段：`mode`（`read-only` / `workspace-write` /
 `danger-full-access`）与 `workspaceRoot`；`workspace-write` 的可写路径是硬编码的
-`[工作区, /tmp, os.tmpdir()]`（`packages/sandbox/sandbox/src/roots.ts:52-55`），
+`[工作区, /tmp, os.tmpdir()]`（`vendor/deepseek-harness/packages/sandbox/sandbox/src/roots.ts:52-55`），
 没有任何追加可写根或拒绝项的配置面。于是「让 agent 能写 `$XDG_CACHE_HOME`，
 但永远不许碰项目里的 `mise.*.toml`」这类诉求只能整块放弃隔离。上游自己实现过拒绝项
 （`readDenyPaths`）又撤回：bwrap 要在已置只读的树里创建挂载点、Landlock 无法从自己的
 `/` 读授权里减除，一个「在能生效的地方破坏隔离、在不能生效的地方谎报」的保护被判为
-不如明确的缺失（`.agents/notes/implemented/architecture/2026-07-30-credential-boundaries-and-atomic-registration.md:29`）。
+不如明确的缺失（`vendor/deepseek-harness/.agents/notes/implemented/architecture/2026-07-30-credential-boundaries-and-atomic-registration.md:29`）。
 
 本包把「能表达多少就说多少」明确下来：Seatbelt 完整生效，其余平台按方言降级，
 并在加载期告警，而不是静默失效。

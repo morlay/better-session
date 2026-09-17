@@ -1,6 +1,7 @@
 // Shared IconActions chrome for user and assistant messages: copy
 // live, optional branch wiring, and an optional date-aware clock.
 
+import { styling } from "@morlay/dsh-client-ui-primitives/client";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   IconBranchOutline16,
@@ -11,7 +12,7 @@ import {
   Tooltip,
   writeClipboard,
 } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-chat/client";
+import type { ChatViewSlotProps } from "@morlay/dsh-client-ui-chat/client";
 import {
   formatLatencySeconds,
   formatMessageClock,
@@ -19,7 +20,7 @@ import {
   formatTokensPerSecond,
 } from "./message-chrome.ts";
 import { useCalendarDay } from "./use-calendar-day.ts";
-import css from "./MessageIconActions.module.css";
+import { styles } from "./MessageIconActions.styles.ts";
 
 export interface MessageIconActionsProps {
   text: string;
@@ -101,12 +102,15 @@ export function MessageIconActions({
   // instead of three facts.
   const clockEl =
     time === undefined ? null : (
-      <span className={clock === "start" ? css.timeStart : css.timeEnd}>
+      <span
+        data-time-label=""
+        {...styling.props(clock === "start" ? styles.timeStart : styles.timeEnd)}
+      >
         {formatMessageClock(time, t, day)}
         {runMs !== undefined && (
           <>
             {" "}
-            <span className={css.runTimeDot} aria-hidden>
+            <span {...styling.props(styles.runTimeDot)} aria-hidden>
               ·
             </span>{" "}
             {t("message.ranFor", { duration: formatRunDuration(runMs, t) })}
@@ -115,7 +119,7 @@ export function MessageIconActions({
         {ttftMs !== undefined && (
           <>
             {" "}
-            <span className={css.runTimeDot} aria-hidden>
+            <span {...styling.props(styles.runTimeDot)} aria-hidden>
               ·
             </span>{" "}
             {t("message.turnTime.ttft")}{" "}
@@ -125,7 +129,7 @@ export function MessageIconActions({
         {tokensPerSecond !== undefined && (
           <>
             {" "}
-            <span className={css.runTimeDot} aria-hidden>
+            <span {...styling.props(styles.runTimeDot)} aria-hidden>
               ·
             </span>{" "}
             {t("message.tokensPerSecond", { tps: formatTokensPerSecond(tokensPerSecond) })}
@@ -133,13 +137,18 @@ export function MessageIconActions({
         )}
       </span>
     );
+  // 外部 className 需要拼接：给 actions 一个真实类名（而不是 data-css 属性）。
+  const actionsClass = styling.className(styles.actions);
   return (
-    <div className={className === undefined ? css.actions : `${css.actions} ${className}`}>
+    <div
+      data-time-hover-root=""
+      className={className === undefined ? actionsClass : `${actionsClass} ${className}`}
+    >
       {clock === "start" ? clockEl : null}
       <Tooltip label={copied ? t("copied" as never) : t("copy" as never)} side="bottom">
         <button
           type="button"
-          className={css.action}
+          {...styling.props(styles.action)}
           aria-label={copied ? t("copied" as never) : t("copy" as never)}
           onClick={onCopy}
         >
@@ -149,14 +158,24 @@ export function MessageIconActions({
       {extraActions}
       {onEdit !== undefined && (
         <Tooltip label="编辑" side="bottom">
-          <button type="button" className={css.action} aria-label="编辑" onClick={onEdit}>
+          <button
+            type="button"
+            {...styling.props(styles.action)}
+            aria-label="编辑"
+            onClick={onEdit}
+          >
             <IconEditOutline16 />
           </button>
         </Tooltip>
       )}
       {onRetry !== undefined && (
         <Tooltip label="重试此回合" side="bottom">
-          <button type="button" className={css.action} aria-label="重试此回合" onClick={onRetry}>
+          <button
+            type="button"
+            {...styling.props(styles.action)}
+            aria-label="重试此回合"
+            onClick={onRetry}
+          >
             <IconRefreshOutline16 />
           </button>
         </Tooltip>
@@ -169,7 +188,7 @@ export function MessageIconActions({
           {/* Native disabled buttons do not deliver the hover/focus events Tooltip needs. */}
           <button
             type="button"
-            className={css.action}
+            {...styling.props(styles.action)}
             aria-label={t("message.branch")}
             aria-disabled={branchUnavailable || undefined}
             aria-describedby={branchUnavailable ? reasonId : undefined}
@@ -181,7 +200,7 @@ export function MessageIconActions({
         </Tooltip>
       )}
       {onBranch !== undefined && branchUnavailable && (
-        <span id={reasonId} className={css.visuallyHidden}>
+        <span id={reasonId} {...styling.props(styles.visuallyHidden)}>
           {t("message.branchUnavailable")}
         </span>
       )}

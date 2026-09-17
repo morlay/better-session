@@ -45,6 +45,18 @@ async function harness(): Promise<{
   return { ctx, persistence, provider, dispose: () => fiber.dispose() };
 }
 
+// ctx.logger 的默认 exporter 阈值是 INFO（warn 不进内置 buffer），这里挂一个收集 warn 的 exporter
+function captureWarnings(ctx: Context): () => string[] {
+  const messages: string[] = [];
+  ctx.logger.exporter({
+    levels: { default: 3 },
+    export: (message) => {
+      if (message.type === "warn") messages.push(String(message.args[0]));
+    },
+  });
+  return () => messages;
+}
+
 function twoTurnLog(): SessionEvent[] {
   const first = oneTurnLog();
   const second: SessionEvent[] = oneTurnLog().map(
@@ -158,7 +170,7 @@ describe("forkFrom", () => {
       expect(child.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
       expect(child.events[0]?.type).toBe("turn/start");
       expect(child.events[5]?.type).toBe("turn/end");
-      // 源会话不变
+
       const source = await persistence.load(SessionId("src"));
       expect(source.events).toHaveLength(12);
     } finally {
@@ -186,8 +198,6 @@ describe("forkFrom", () => {
           },
           inverse: { kind: "restore-version", sessionId: SessionId("src") },
         },
-        // `ignorable` 是下游信封扩展（上游 SessionEvent 无此字段），
-        // 结构化构造版本效果事件信封。
       } as unknown as SessionEvent;
       await provider.forkFrom(SessionId("src"), {
         atSeq: 6,
@@ -196,7 +206,7 @@ describe("forkFrom", () => {
         seedSuffix: [version],
       });
       const child = await persistence.load(SessionId("child"));
-      // ignorable 版本效果事件原样落库（与 JSONL 一致）：7 事件（6 前缀 + 版本）。
+
       expect(child.events).toHaveLength(7);
       expect(child.events.some((e) => (e.type as string) === "session-branch/version")).toBe(true);
       expect(child.meta.isSeeded).toBe(true);
@@ -222,14 +232,12 @@ describe("forkFrom", () => {
         childSessionId: SessionId("child"),
       });
 
-      // 事件行复用是存储层事实：子会话桥接行引用父会话前 6 个事件行
-      // （f_event_id 复用，不复制事件行）。
       const childRows = await backend.getEventRows(SessionId("child"));
       expect(childRows).toHaveLength(6);
       expect(childRows.map((r) => r.fEventId)).toEqual(
         parentRows.slice(0, 6).map((r) => r.fEventId),
       );
-      // 子会话桥接行的 f_sequence 是子会话自己的上游空间（0..5）。
+
       const childBridges = await backend.getEventRows(SessionId("child"));
       expect(childBridges.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5]);
     } finally {
@@ -284,8 +292,6 @@ describe("rewind", () => {
   it("invalidates live projection cells on rewind so replayed events fold again", async () => {
     const { ctx, dispose } = await harness();
     try {
-      // 自定义 host-only 投影：折叠后等于已折入的事件数。水位用事件数即可
-      // 暴露 rewind 后 drive() 因 observedSeq 未回退而跳过新事件的问题。
       const projections = ctx.sessionProjections as unknown as {
         register(definition: unknown): () => void;
         stateOf(session: Session, key: never): unknown;
@@ -301,15 +307,13 @@ describe("rewind", () => {
       ctx.sessions.create(SessionId("proj"), { meta: meta("proj"), seed: [...twoTurnLog()] });
       const live = ctx.sessions.get(SessionId("proj"))!;
       await ctx.sessions.flush(live);
-      // 先物化水位：投影已折过完整 log（12 个 seed 事件 + session/end-seed）。
+
       expect(projections.stateOf(live, "test/count" as never)).toBe(13);
 
-      // 走服务面 rewind（SessionBranchRdb），确保投影失效钩子被触发。
       await ctx.sessionBranch.rewind(SessionId("proj"), 5);
       const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
       liveAppend.append("turn/start", { turn: 3 });
 
-      // 截断后 append 的事件必须重新折入：保留 6 个事件 + 新事件。
       expect(projections.stateOf(live, "test/count" as never)).toBe(7);
     } finally {
       await dispose();
@@ -349,7 +353,6 @@ describe("rewind", () => {
 
       await ctx.sessionBranch.rewind(SessionId("pending"), 5);
 
-      // 保留 6 个事件（0..5）+ 取消 splice（seq 6）——rewind 返回前已落盘。
       const backend = persistence.internals().backend as unknown as {
         getHead(id: SessionId): Promise<{ fHeadSequence: number }>;
       };
@@ -365,34 +368,29 @@ describe("rewind", () => {
   it("rewinds a live session in place (memory log, RDB head, and coordinator resynced)", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
-      // live 会话：create 时 seed 直接落盘（coordinator onCreated case 4）。
       const events = twoTurnLog();
       ctx.sessions.create(SessionId("live"), { meta: meta("live"), seed: [...events] });
       const live = ctx.sessions.get(SessionId("live"))!;
       await ctx.sessions.flush(live);
-      // 12 seed 事件 + 构造时自动补记的 session/end-seed（seq 12）。
+
       expect(live.snapshotEvents()).toHaveLength(13);
 
       const snapshot = await provider.rewind(SessionId("live"), 5);
       expect(snapshot.header.id).toBe("live");
 
-      // live 内存 log 截断到边界（含派生缓存与 surface 状态复位）。
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
-      // RDB head 截断（load/inspect 在 live 时读内存，直接校验后端 head）。
+
       const backend = persistence.internals().backend as unknown as {
         getHead(id: SessionId): Promise<{ fHeadSequence: number }>;
       };
       const head = await backend.getHead(SessionId("live"));
       expect(head.fHeadSequence).toBe(5);
 
-      // coordinator 内存状态已同步：截断后继续 append（seq 6 续接）成功——
-      // 说明 cursor 已对齐新尾部，没有残留的旧 cursor。
       const liveAppend = live as unknown as { append(type: string, data: unknown): SessionEvent };
       liveAppend.append("turn/start", { turn: 3 });
       await ctx.sessions.flush(live);
       expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
 
-      // surface 派生缓存重建：仍能派生截断前缀的完整消息历史。
       expect(live.deriveMessages().map((m) => m.content[0])).toEqual([
         expect.objectContaining({ type: "text", text: "hi" }),
         expect.objectContaining({ type: "text", text: "hello" }),
@@ -408,7 +406,6 @@ describe("rewind", () => {
       await createPersisted(ctx, "s1", twoTurnLog());
       await provider.rewind(SessionId("s1"), 5);
 
-      // 通过 coordinator 标准路径续写（rewind 后 state.cursor 已同步为 6）。
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
@@ -442,9 +439,6 @@ describe("rewind", () => {
   });
 
   it("shrinks the inherited prefix length when rewind cuts into the seed", async () => {
-    // fork 派生会话（seeded）：rewind 截断进入继承前缀后，`f_seed_length`
-    // 必须收缩到保留事件数——否则存储出现「继承前缀超过存储事件数」的矛盾
-    // （上游 load 拒绝），且下一次 append 的 upsert 会把旧值写回固化。
     const { ctx, persistence, provider, dispose } = await harness();
     try {
       await createPersisted(ctx, "src", twoTurnLog());
@@ -453,22 +447,20 @@ describe("rewind", () => {
         anchorMode: "before",
         childSessionId: SessionId("child"),
       });
-      // 子会话：继承前缀 6 + 无 seedSuffix = 6 事件（轮 1：seq 0..5）。
+
       const before = await persistence.load(SessionId("child"));
       expect(before.inheritedEventCount).toBe(6);
       expect(before.events).toHaveLength(6);
 
-      // 截断到轮 1 的 user/message（seq 1，exclusive）：保留 turn/start @0。
       const snapshot = await provider.rewind(SessionId("child"), 1);
       expect(snapshot.header.id).toBe("child");
-      // 原始存储事件（readLog 不补合成 closers）：仅 turn/start @0；
-      // 收缩后的继承前缀长度 = 保留事件数（存储自洽）。
+
       const stored = await persistence.readLog(SessionId("child"));
       expect(stored).toBeDefined();
       expect(stored!.events).toHaveLength(1);
       expect(stored!.events[0]?.type).toBe("turn/start");
       expect(stored!.inheritedEventCount).toBe(1);
-      // 继续 append 后 upsert 不再把旧 seedLength 写回（矛盾不复发）。
+
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
@@ -490,8 +482,6 @@ describe("rewind", () => {
   it("rewinds to a user/message boundary (exclusive: drops the message and its tail)", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
-      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合）+ 轮 3 未闭合：
-      // turn/start + user/message（seq 12）+ step/start + assistant/message（seq 14）。
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         {
@@ -526,12 +516,9 @@ describe("rewind", () => {
       ];
       await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
 
-      // rewind 到轮 3 的 user/message（seq 13）：exclusive——该消息及其后
-      // （step/start、assistant/message）全部 drop，保留 seq 0..12。
       const snapshot = await provider.rewind(SessionId("s1"), 13);
       expect(snapshot.header.id).toBe("s1");
 
-      // 真实流程：rewind 后立即 append 编辑版重放（完整闭合轮，seq 13 起）。
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
@@ -543,7 +530,7 @@ describe("rewind", () => {
       );
       await persistence.append(SessionId("s1"), continuation);
       const after = await persistence.load(SessionId("s1"));
-      // 截断前缀（0..12，含 turn/start 12）+ 重放闭合轮（13..18）。
+
       expect(after.events.map((e) => e.seq)).toEqual([
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
       ]);
@@ -551,7 +538,7 @@ describe("rewind", () => {
       expect(after.events[13]?.type).toBe("turn/start");
       expect(after.events[14]?.type).toBe("user/message");
       expect(after.events.at(-1)?.type).toBe("turn/end");
-      // 被 drop 的旧 user/message 不在 log 中。
+
       expect(
         after.events.some((e) => e.type === "user/message" && e.data.id === "turn3-user"),
       ).toBe(false);
@@ -564,7 +551,7 @@ describe("rewind", () => {
     const { ctx, provider, dispose } = await harness();
     try {
       await createPersisted(ctx, "s1", twoTurnLog());
-      // seq 4 是 step/end——不是合法 rewind 边界。
+
       await expect(provider.rewind(SessionId("s1"), 4)).rejects.toThrow(
         /not a turn\/end or user\/message/,
       );
@@ -576,9 +563,6 @@ describe("rewind", () => {
   it("rewinds to a user/message boundary in real agent-loop order (orphan step/start dropped)", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
-      // 真实 agent-loop 的 append 顺序：turn/start → step/start → user/message
-      // → assistant/message（stream 内嵌 delta，原样落库）→ step/end
-      // （无 turn/end）。轮 1（seq 0..5）+ 轮 2（seq 6..11）闭合，轮 3 未闭合。
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
@@ -628,13 +612,8 @@ describe("rewind", () => {
       ];
       await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
 
-      // rewind 到轮 3 的 user/message（seq 14）：exclusive——该消息及其后
-      // drop。真实顺序下 step/start（13）在 user/message 之前，会残留为
-      // 孤儿（其 step/end 在 drop 区）——修复前 token meter 重放报
-      // "step/start ... arrived before turn ... ended"。
       await provider.rewind(SessionId("s1"), 14);
 
-      // 平衡化：孤儿 step/start 被剔除，保留前缀以 turn/start（12）结尾。
       const backend = (
         persistence as unknown as {
           internals(): {
@@ -649,7 +628,6 @@ describe("rewind", () => {
       expect(rows.at(-1)?.fType).toBe("turn/start");
       expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 13)).toBe(false);
 
-      // 续写重放轮（完整闭合轮，seq 13 起）后，完整 log 对 token meter 合法。
       const continuation: SessionEvent[] = oneTurnLog().map(
         (event) =>
           ({
@@ -673,7 +651,6 @@ describe("rewind", () => {
   it("loads a rewind-to-user-message session without an orphan step/start (token-meter replay safe)", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
-      // 真实 agent-loop 顺序的未闭合轮 3（step/start 在 user/message 之前）。
       const openTail: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 12, data: { turn: 3 } },
         { type: "step/start", seq: SessionSeq(13), time: 13, data: { turn: 3, step: 1 } },
@@ -710,8 +687,6 @@ describe("rewind", () => {
       await createPersisted(ctx, "s1", [...twoTurnLog(), ...openTail]);
       await provider.rewind(SessionId("s1"), 14);
 
-      // 用户 resume 场景：rewind 后直接 load（coordinator 补合成 turn/end，
-      // 但不会补孤儿 step/start 的配对——平衡化已把它剔除）。
       const after = await persistence.load(SessionId("s1"));
       expect(after.events.some((e) => e.type === "step/start" && e.data.turn === 3)).toBe(false);
       const meter = new TokenMeter(ctx);
@@ -725,9 +700,6 @@ describe("rewind", () => {
   it("rewind keeps a surviving replace loadable (range intact, provenance recomputed)", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
-      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..11 闭合，含 compaction replace）。
-      // 轮 2 的 compaction/summary（seq 10）claim 范围 [1..5]，紧随的
-      // assistant/message（seq 11）replace 同一范围。
       const compacted = [
         ...twoTurnLog().slice(0, 6),
         { type: "turn/start", seq: SessionSeq(6), time: 6, data: { turn: 2 } },
@@ -766,12 +738,11 @@ describe("rewind", () => {
       ] as unknown as SessionEvent[];
       await createPersisted(ctx, "s1", compacted);
 
-      // rewind 到轮 1 末尾（boundary 5）：轮 2 全部删除，轮 1 保留。
       await provider.rewind(SessionId("s1"), 5);
       const after = await persistence.load(SessionId("s1"));
       expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
       expect(after.events.at(-1)?.type).toBe("turn/end");
-      // 保留区无 replace（轮 2 的 replace 被删）——load 必须成功。
+
       const meter = new TokenMeter(ctx);
       const session = Session.create(SessionId("s1"), [...after.events]);
       expect(() => meter.measure(session)).not.toThrow();
@@ -783,7 +754,6 @@ describe("rewind", () => {
   it("rewind to a boundary before a surviving replace keeps the replace loadable", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
-      // 轮 1（seq 0..5）+ 轮 2（seq 6..11，含 replace [1..5]）+ 轮 3（seq 12..17）。
       const compacted = [
         ...twoTurnLog().slice(0, 6),
         { type: "turn/start", seq: SessionSeq(6), time: 6, data: { turn: 2 } },
@@ -825,18 +795,17 @@ describe("rewind", () => {
       ] as unknown as SessionEvent[];
       await createPersisted(ctx, "s1", compacted);
 
-      // rewind 到轮 2 末尾（boundary 11）：轮 3 删除，轮 1/2 保留（含 replace）。
       await provider.rewind(SessionId("s1"), 11);
       const after = await persistence.load(SessionId("s1"));
       expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-      // 保留区 replace 的 range [1..5] 完整（range 引用更早事件 ⇒ 截断尾部不破坏）。
+
       const replacement = after.events.find((e) => e.type === "user/message" && e.seq === 9)!;
       expect((replacement as SurfaceEvent).surfaceOp).toEqual({
         op: "replace",
         startSeq: 1,
         endSeq: 3,
       });
-      // provenance 读取时重计算（覆盖 range 内全部 surface 节点）。
+
       expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
       const meter = new TokenMeter(ctx);
       const session = Session.create(SessionId("s1"), [...after.events]);
@@ -849,9 +818,6 @@ describe("rewind", () => {
   it("rewinds to a mid-turn followup of a CLOSED turn, then agent-style continuation keeps the session loadable", async () => {
     const { ctx, persistence, provider, dispose } = await harness();
     try {
-      // 轮 1（seq 0..5 闭合）+ 轮 2（seq 6..14 闭合），轮 2 内 followup：
-      // turn/start(6) step/start(7) user q1(8) assistant a1(9) step/end(10)
-      // step/start(11) user followup(12) step/end(13) turn/end(14)。
       const turn2: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
         { type: "step/start", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
@@ -908,7 +874,6 @@ describe("rewind", () => {
       ];
       await createPersisted(ctx, "s1", [...oneTurnLog(), ...turn2]);
 
-      // 编辑 followup（seq 12）→ rewind exclusive 到该消息。
       await provider.rewind(SessionId("s1"), 12);
 
       const backend = (
@@ -921,11 +886,10 @@ describe("rewind", () => {
         }
       ).internals().backend;
       const rows = await backend.getEventRows(SessionId("s1"));
-      // 截断前缀 0..10；孤儿 step/start(11) 被平衡化剔除。
+
       expect(rows.map((r) => r.fSequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
       expect(rows.some((r) => r.fType === "step/start" && r.fSequence === 11)).toBe(false);
 
-      // agent 风格续写：新 step/start → 编辑版 followup → 回复 → 闭合。
       const continuation: SessionEvent[] = [
         { type: "step/start", seq: SessionSeq(11), time: 16, data: { turn: 2, step: 3 } },
         {
@@ -967,7 +931,6 @@ describe("rewind", () => {
       ];
       await persistence.append(SessionId("s1"), continuation);
 
-      // 完整 log 可 load、token meter 重放合法（无孤儿、无残缺 step）。
       const after = await persistence.load(SessionId("s1"));
       expect(after.events.at(-1)?.type).toBe("turn/end");
       const meter = new TokenMeter(ctx);
@@ -981,10 +944,8 @@ describe("rewind", () => {
   it("invalidates the token meter fold so a rewound live session stays measurable", async () => {
     const { ctx, dispose } = await harness();
     try {
-      // harness 的 SessionPersistenceSqlite 构造即装配 SessionBranchRdb，
-      // rewind 的 live 失效钩子（投影单元 + token meter）都在它上面。
       const meter = new TokenMeter(ctx);
-      // 三轮闭合日志（seq 0..17）+ 构造时自动补记的 session/end-seed（seq 18）。
+
       const log = [
         ...oneTurnLog(),
         ...oneTurnLog().map(
@@ -1010,18 +971,15 @@ describe("rewind", () => {
       const live = ctx.sessions.get(SessionId("s1"))!;
       await ctx.sessions.flush(live);
       meter.measure(live);
-      // meter 的折叠水位（上游私有状态）——续写必须越过它才暴露错位。
+
       const inner = meter as unknown as { states: WeakMap<object, { consumedEvents: number }> };
       const foldedWatermark = inner.states.get(live)!.consumedEvents;
 
-      // 编辑最后一轮的 user/message：rewind exclusive 截断到轮 2 末尾。
       await ctx.sessionBranch.rewind(SessionId("s1"), 11);
       expect(live.snapshotEvents().map((event) => event.seq)).toEqual([
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
       ]);
 
-      // 续写：先填 user/message 到水位，再让水位正好落在一条 step/end 上——
-      // 失效遗漏时 meter 从水位继续折叠，step/end 找不到配对的 step/start。
       const continuation: SessionEvent[] = [
         { type: "turn/start", seq: SessionSeq(12), time: 500, data: { turn: 4 } } as SessionEvent,
         {
@@ -1062,14 +1020,191 @@ describe("rewind", () => {
       appendLog(live, continuation);
       await ctx.sessions.flush(live);
 
-      // 修复前：meter 从旧水位继续折叠，抛
-      // "token meter: step/end at seq N has no matching step/start event"
-      // （压缩测量即在此失败）。
       expect(() => meter.measure(live)).not.toThrow();
-      // 被丢弃的折叠从零重放到截断后的新 tail。
+
       expect(inner.states.get(live)?.consumedEvents).toBe(live.snapshotEvents().length);
     } finally {
       await dispose();
+    }
+  });
+});
+
+// 破损形状：turn 2 的 step/start 已丢失，只在日志里留下 step/end（历史遗留 / 导入带来的残尾）
+function orphanStepEndLog(): SessionEvent[] {
+  return [
+    ...oneTurnLog(),
+    { type: "turn/start", seq: SessionSeq(6), time: 7, data: { turn: 2 } },
+    { type: "step/end", seq: SessionSeq(7), time: 8, data: { turn: 2, step: 1 } },
+    {
+      type: "turn/end",
+      seq: SessionSeq(8),
+      time: 9,
+      data: { turn: 2, reason: { kind: "completed" } },
+    },
+  ];
+}
+
+describe("rewind step balance self-heal", () => {
+  it("balances only the tail window (an inner orphan step/end stays; the log is not read in full)", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      await createPersisted(ctx, "s1", orphanStepEndLog());
+
+      const backend = (persistence.internals() as unknown as { backend: Record<string, unknown> })
+        .backend;
+      const reads: string[] = [];
+      for (const name of ["getEventRows", "getEventTypesBefore"]) {
+        const original = (backend[name] as (...args: unknown[]) => Promise<unknown>).bind(backend);
+        backend[name] = async (...args: unknown[]) => {
+          reads.push(name);
+          return original(...args);
+        };
+      }
+
+      await provider.rewind(SessionId("s1"), 8);
+
+      // 内部孤儿（seq 7 的 step/end）不在尾部窗口内：rewind 不改写它，破损由整段日志的路径（导出/导入）自愈
+      expect([...reads]).not.toContain("getEventRows");
+      expect([...reads]).toContain("getEventTypesBefore");
+
+      const after = await persistence.load(SessionId("s1"));
+      expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(after.events.some((e) => e.type === "step/end" && e.data.turn === 2)).toBe(true);
+
+      // 尾部窗口（turn/end 边界 + 之后没有孤儿）不动保留前缀
+      await provider.rewind(SessionId("s1"), 5);
+      expect((await persistence.load(SessionId("s1"))).events.map((e) => e.seq)).toEqual([
+        0, 1, 2, 3, 4, 5,
+      ]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("live rewind follows the same tail-window rule (no full log read)", async () => {
+    const { ctx, persistence, dispose } = await harness();
+    try {
+      await createPersisted(ctx, "s1", orphanStepEndLog());
+      ctx.sessions.create(SessionId("s1"), { meta: meta("s1"), seed: [...orphanStepEndLog()] });
+      const live = ctx.sessions.get(SessionId("s1"))!;
+      await ctx.sessions.flush(live);
+
+      const backend = (persistence.internals() as unknown as { backend: Record<string, unknown> })
+        .backend;
+      const reads: string[] = [];
+      for (const name of ["getEventRows", "getEventTypesBefore"]) {
+        const original = (backend[name] as (...args: unknown[]) => Promise<unknown>).bind(backend);
+        backend[name] = async (...args: unknown[]) => {
+          reads.push(name);
+          return original(...args);
+        };
+      }
+
+      await ctx.sessionBranch.rewind(SessionId("s1"), 8);
+
+      expect([...reads]).not.toContain("getEventRows");
+      expect([...reads]).toContain("getEventTypesBefore");
+
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+      const after = await persistence.load(SessionId("s1"));
+      expect(after.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("drops the tail from an orphan step/end in a forked seed", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      await createPersisted(ctx, "src", orphanStepEndLog());
+
+      const childId = await provider.forkFrom(SessionId("src"), {
+        atSeq: 8,
+        childSessionId: SessionId("child"),
+      });
+
+      const child = await persistence.load(childId);
+      expect(child.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect(child.inheritedEventCount).toBe(7);
+      const session = Session.create(childId, [...child.events]);
+      expect(() => new TokenMeter(ctx).measure(session)).not.toThrow();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("keeps a forked seed whose steps are already paired untouched", async () => {
+    const { ctx, persistence, provider, dispose } = await harness();
+    try {
+      await createPersisted(ctx, "src", twoTurnLog());
+
+      const childId = await provider.forkFrom(SessionId("src"), {
+        atSeq: 6,
+        anchorMode: "before",
+        childSessionId: SessionId("child"),
+      });
+
+      const child = await persistence.load(childId);
+      expect(child.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      expect(child.inheritedEventCount).toBe(6);
+      const session = Session.create(childId, [...child.events]);
+      expect(() => new TokenMeter(ctx).measure(session)).not.toThrow();
+    } finally {
+      await dispose();
+    }
+  });
+});
+
+describe("rewind derived-state invalidation", () => {
+  it("warns once per plugin instance when the token meter service is missing", async () => {
+    const { ctx, dispose } = await harness();
+    try {
+      const warnings = captureWarnings(ctx);
+
+      ctx.sessions.create(SessionId("s1"), { meta: meta("s1"), seed: [...twoTurnLog()] });
+      const live = ctx.sessions.get(SessionId("s1"))!;
+      await ctx.sessions.flush(live);
+
+      await ctx.sessionBranch.rewind(SessionId("s1"), 5);
+      await ctx.sessionBranch.rewind(SessionId("s1"), 1);
+      await ctx.sessionBranch.rewind(SessionId("s1"), -1);
+
+      expect(warnings().filter((message) => message.includes("tokenMeter"))).toHaveLength(1);
+      expect(warnings().join("\n")).toContain("token-meter");
+      expect(warnings().join("\n")).toContain("step/end");
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("warns once when the token meter and projection registry shapes change", async () => {
+    const ctx = new Context();
+    await ctx.plugin(EmptySettings);
+    await ctx.plugin(SessionStore);
+    const provide = (name: string, value: unknown): (() => void) => ctx.provide(name, value);
+    provide("sessionProjections", { registrations: null });
+    provide("tokenMeter", { states: new Map() });
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, {
+      type: "sqlite",
+      path: ":memory:",
+    });
+    try {
+      const warnings = captureWarnings(ctx);
+
+      ctx.sessions.create(SessionId("s1"), { meta: meta("s1"), seed: [...twoTurnLog()] });
+      const live = ctx.sessions.get(SessionId("s1"))!;
+      await ctx.sessions.flush(live);
+
+      await ctx.sessionBranch.rewind(SessionId("s1"), 5);
+      await ctx.sessionBranch.rewind(SessionId("s1"), 1);
+
+      expect(warnings().filter((message) => message.includes("tokenMeter.states"))).toHaveLength(1);
+      expect(
+        warnings().filter((message) => message.includes("registrations is not a Map")),
+      ).toHaveLength(1);
+      expect(live.snapshotEvents().map((e) => e.seq)).toEqual([0]);
+    } finally {
+      await fiber.dispose();
     }
   });
 });
