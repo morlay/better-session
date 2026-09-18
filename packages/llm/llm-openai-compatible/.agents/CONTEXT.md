@@ -54,7 +54,7 @@ _避免使用_：空闲超时、流超时
 
 **错误归一化（error normalization）**：
 HTTP 状态 + 错误体 → harness `LlmError` 码（映射表见
-[README](../README.md#传输)）。
+[ADR-传输层复用ai-sdk-openai-compatible而非自研wire序列化](./adrs/20260917-传输层复用ai-sdk-openai-compatible而非自研wire序列化.md)）。
 _避免使用_：错误映射、错误翻译
 
 **凭据策略（credential policy）**：

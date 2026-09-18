@@ -14,14 +14,10 @@
 
 ## 装配
 
-部署侧（preset / profile bundle）加一行：
+部署侧（preset / profile bundle）插入一行即可；本部署的装配在 `@morlay/dsh-preset` 的 bundle patch 里
+（`packages/preset/dsh-preset/cordis.patch.yml`）。
 
-    - insert:
-        - id: reference-injection
-          name: "@morlay/dsh-reference-injection"
+## 范围
 
-`packages/preset/dsh-preset/cordis.patch.yml` 已带这一行。
-
-## 已知限制
-
-- 只处理 `protocol === 'skill'` 的引用。文件引用的正文后注入尚未实现：现在模型自己 `read`。
+只处理 `protocol === 'skill'` 的引用；文件引用的解析与渲染不在本插件，判定见
+[ADR-引用的统一解析与渲染转换](../../session/ui-conversation-message-actions/.agents/adrs/20260917-引用的统一解析与渲染转换.md)。

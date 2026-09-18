@@ -36,7 +36,7 @@ interface SessionBranchProvider {
   边界前缀 + `seedSuffix`，不触碰源会话。
 - `rewind`：唯一的显式回退原语，事务整体提交或回滚；**支持 live 会话**
   （内存 log 截断 + 派生缓存复位 + handle cursor / 继承前缀对齐，详见
-  `@morlay/session-rdb` 的 [分支能力](../session-rdb/.agents/designs/0002-分支能力.md)）。
+  `@morlay/session-rdb` 的 [分支能力](../session-rdb/.agents/designs/20260917-分支能力.md)）。
 
 ## 版本树
 
@@ -44,6 +44,5 @@ interface SessionBranchProvider {
 lineage）+ 每会话自有后缀（`seq >= seedLength` 的 `session-branch/version`
 事件）投影完整版本树。
 
-> 版本效果事件携带 `ignorable: true`：非 branch 读者凭信封安全跳过，事件
-> 本身原样落库——live 会话从内存 log 读到效果，cold 会话经读路径恢复效果
-> 详情（见 [ADR-0002](./.agents/adrs/0002-版本效果以ignorable事件原样落库.md)）。
+版本效果事件携带 `ignorable: true` 并**原样落库**，因此 cold 会话也能恢复效果详情
+（见 [ADR-版本效果以ignorable事件原样落库](./.agents/adrs/20260917-版本效果以ignorable事件原样落库.md)）。

@@ -10,10 +10,7 @@
 `danger-full-access`）与 `workspaceRoot`；`workspace-write` 的可写路径是硬编码的
 `[工作区, /tmp, os.tmpdir()]`（`vendor/deepseek-harness/packages/sandbox/sandbox/src/roots.ts:52-55`），
 没有任何追加可写根或拒绝项的配置面。于是「让 agent 能写 `$XDG_CACHE_HOME`，
-但永远不许碰项目里的 `mise.*.toml`」这类诉求只能整块放弃隔离。上游自己实现过拒绝项
-（`readDenyPaths`）又撤回：bwrap 要在已置只读的树里创建挂载点、Landlock 无法从自己的
-`/` 读授权里减除，一个「在能生效的地方破坏隔离、在不能生效的地方谎报」的保护被判为
-不如明确的缺失（`vendor/deepseek-harness/.agents/notes/implemented/architecture/2026-07-30-credential-boundaries-and-atomic-registration.md:29`）。
+但永远不许碰项目里的 `mise.*.toml`」这类诉求只能整块放弃隔离。
 
 本包把「能表达多少就说多少」明确下来：Seatbelt 完整生效，其余平台按方言降级，
 并在加载期告警，而不是静默失效。
@@ -92,38 +89,16 @@
 
 ## 装配
 
-本包自带 `cordis.patch.yml`（禁用官方两行 + 插入自己的一行），把本包作为独立 bundle 采用
-的部署直接列进 `dsh.profile.bundles` 即可；行不带 config（schema 默认是空规则）：
+本包自带 `cordis.patch.yml`（禁用官方 `sandbox` / `fs-sandbox` 两行 + 插入自己的一行），
+把本包作为**独立 bundle** 采用的部署直接列进 `dsh.profile.bundles` 即可；行不带 config
+（schema 默认是空规则），patch 内容见该文件。
 
-```yaml
-- id: sandbox
-  disabled: true
-
-- id: fs-sandbox
-  disabled: true
-
-- insert:
-    - id: sandbox-local
-      name: "@morlay/dsh-sandbox-local"
-```
-
-**本部署（`@morlay/dsh-preset`）不走这条路径**：它的 patch 自己禁用官方两行、插入
-`- id: sandbox-local` 行并写上规则，因此示例 app 的 `dsh.profile.bundles` 不需要列出本包，
-只需要 profile 的依赖树能解析模块名（`@morlay/dsh-preset` 已在 `dependencies` 声明本包）。
+**本部署（`@morlay/dsh-preset`）不走这条路径**：装配（禁用官方两行 + 插入
+`sandbox-local` 行）与 `access` 规则一起维护在 preset 的 bundle patch 里，因此示例 app 的
+`dsh.profile.bundles` 不需要列出本包，只需要 profile 的依赖树能解析模块名
+（`@morlay/dsh-preset` 已在 `dependencies` 声明本包）。patch 层级的合并顺序与放置理由见
+[设计 预设生成与装配](../../preset/dsh-preset/.agents/designs/20260917-预设生成与装配.md)。
 两种采用方式互斥：同时上线会重复插入同一行。
-
-**规则写在哪里才会生效**（patch 层按 `[bundle patches, profile patches, home patches,
-overlays]` 合并，后应用者整块替换同一行的 `config`）：
-
-| 载体                                                                          | 生效范围                                              |
-| ----------------------------------------------------------------------------- | ----------------------------------------------------- |
-| profile 的 `cordis.patch.yml`（`$DSH_HOME/profiles/<name>/cordis.patch.yml`） | dev 与打包形态都生效，但只属于本机 home               |
-| app 的 `cordis.patch.yml`                                                     | 打包（`bundle`）形态：作为 seed 的 profile patch 生效 |
-| 一个自有 bundle 的 patch                                                      | 所有形态（随包分发）                                  |
-
-本部署采用最后一种：**装配与规则在 `@morlay/dsh-preset` 的 bundle patch 里一起维护**
-（禁用官方两行 + 插入本包行 + `access` 规则，跨 dev / 打包形态一致），不依赖 app 的
-`dsh.profile.bundles` 再列一层。
 
 ## 前提
 
@@ -154,7 +129,7 @@ overlays]` 合并，后应用者整块替换同一行的 `config`）：
 - **Windows 额外授权未实现**：官方 `AclWriteGrant` 可以做预授权，但没有把 `AclWriteGrant`
   接进 `confine` 的现成路径，本版只告警。
 
-## 本地开发
+## 验证
 
-根目录 `just test`（vitest，含 `seatbelt.e2e.spec.ts`——非 macOS 或被更外层 Seatbelt
-拦住时自动跳过）、`just lint`（oxlint typeAware）、`just build`（tsdown 构建本包）。
+构建、测试与 lint 走根 `justfile`（含 `seatbelt.e2e.spec.ts`——非 macOS 或被更外层 Seatbelt
+拦住时自动跳过）；本包的接缝与判据见 [`.agents/standards/`](./.agents/standards/)。

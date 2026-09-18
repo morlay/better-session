@@ -3,14 +3,14 @@
 DeepSeek Harness 的 **OpenAI 兼容 LLM 适配器**插件。与内置 `llm-pi-ai` /
 `llm-deepseek` 不同，本插件的配置 schema 支持 **profile 级默认采样参数**
 （`temperature` / `topP` / `topK` / `presencePenalty` / `frequencyPenalty` /
-`seed`），请求级 `GenerateOptions.temperature` 优先于 profile 默认值。用
-`providers` dict 多路由结构（与 `llm-pi-ai` 一致），用户可将现有
-`llm-pi-ai` 配置近乎无缝迁移。
+`seed`），请求级 `GenerateOptions.temperature` 优先于 profile 默认值；`providers`
+用 dict 多路由结构（与 `llm-pi-ai` 一致）。
 
 传输层复用 **[@ai-sdk/openai-compatible](https://www.npmjs.com/package/@ai-sdk/openai-compatible)**
-（`LanguageModelV4.doStream`：wire 序列化与 SSE 解析由 SDK 负责）；本插件负责
-harness 消息 → AI SDK prompt 转换、采样默认合并、stream part → `StreamChunk`
-翻译、错误归一化与凭据策略。
+（wire 序列化与 SSE 解析由 SDK 负责）；本插件负责 harness 消息 → AI SDK prompt
+转换、采样默认合并、stream part → `StreamChunk` 翻译、错误归一化与凭据策略。
+
+本文件只给配置面与用法；每条规则与取舍的 home 是各自 ADR（见下）。
 
 ## 配置
 
@@ -55,77 +55,31 @@ llm-openai-compatible:
         maxRetries: 5
 ```
 
-### 采样默认值合并规则
+## 规则与取舍
 
-| wire 字段                                                   | 取值                                                               | 省略语义                    |
-| ----------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------- |
-| `temperature`                                               | `options.temperature ?? profile.temperature`                       | 都不给 → 不发送，提供方默认 |
-| `max_tokens`                                                | `options.maxTokens ?? model.maxTokens ?? profile.defaultMaxTokens` | 都不给 → 不发送             |
-| `top_p` / `presence_penalty` / `frequency_penalty` / `seed` | `profile` 值                                                       | undefined → 不发送          |
-| `top_k`                                                     | `profile.topK`，经 `providerOptions` 透传进请求体                  | undefined → 不发送          |
-| `reasoning_effort`                                          | 见下                                                               | 解析不出 → 不发送           |
+规则细节（合并表、wire 字段落点、端点与错误映射）在各自 ADR 里维护，这里只列结论：
 
-### reasoning 映射（OpenAI 风格）
-
-- 模型声明 `reasoningEfforts`（对象）后，该模型的选器公开 `efforts`（按声明
-  顺序）+ `defaultEffort`（= `profile.reasoning`，须在模型能力内，否则视为无
-  默认值——**描述模型时绝不抛错**）。
-- wire：非 `off` 档位发送 `reasoning_effort: <声明值>`；`off` → 不发送。
-- 请求级 `options.reasoningEffort` 不在模型能力内 → 网络 I/O 前抛
-  `LlmError('UNSUPPORTED_REASONING_EFFORT')`。`profile.reasoning` 配了模型不
-  支持的档位 → 请求执行处失败（同一错误码），配置页面仍可编辑。
-- 模型不声明 `reasoningEfforts`（或 `false`）→ 不公开 reasoning 能力。
-
-### 模型目录
-
-- `models` 缺省 = 服务**空目录**：`listModels` 返回空，未列出的 id 原样透传
-  （`resolveModel` 返回基础信息 + `defaultContextWindow` / `defaultMaxTokens`）。
-- 模型 `maxTokens` 配置后成为该模型的 per-request 默认输出上限。
-- `inputModalities` 缺省 `[text]`；声明含 `image` 的模型接受图片输入
-  （attachments seam，base64 data-URL parts）。
-- 图片请求预算 `maxRequestImageBytes` 按 base64 长度计：合计超限抛
-  `LlmError('IMAGE_OFFLOAD_REQUIRED')`（携带还需 offload 的最旧出现次数），
-  由上游 `compaction-image-offload` 记录 durable offload 后重试同一请求，
-  本适配器不自行裁剪（[ADR 0007](./.agents/adrs/0007-图片超预算报错交由durable-offload重试.md)）。
-
-### 凭据
-
-- profile 设置 `apiKeyEnv` 后：存在 `ctx.credentials` 服务时经它解析
-  （credentials-local 覆盖进程环境 / `.env`）；服务缺失时回退
-  `launchEnvironmentOf(ctx)`。解析不到 → `LlmError('MISSING_CREDENTIAL')`。
-- profile 不设置 `apiKeyEnv` → 请求不带 `authorization` 头（无认证端点，
-  如本地 Ollama）。
-
-## 传输
-
-- 端点 = `baseURL` + `/chat/completions`（streaming，`stream_options.include_usage`）。
-- 每个请求携带 `attributionHeaders()` + `x-…-harness-user-id`（+ session-id /
-  compaction 标头），并带 SDK 的 `ai-sdk/openai-compatible` user-agent 后缀。
-- `streamIdleTimeoutMs` 控制流空闲超时（`TIMEOUT`）；`timeoutMs` 控制整体请求
-  超时（缺省不设）。
-- 错误映射：401/403 → `AUTH`、429 → `RATE_LIMIT`、400+上下文 →
-  `CONTEXT_WINDOW_EXCEEDED`、5xx → `SERVER`、配额 → `QUOTA_EXCEEDED`。
-- 用量：`prompt_tokens_details.cached_tokens` 与 DeepSeek 方言的
-  `prompt_cache_hit_tokens` 都被拆出为 `cacheReadTokens`（disjoint 计数）。
+- **采样默认值与省略语义**：请求级优先于 profile 默认，缺省一律**不发送**（= 提供方
+  默认）——见 [ADR-采样默认值合并规则与省略语义](./.agents/adrs/20260917-采样默认值合并规则与省略语义.md)。
+- **模型目录缺省为空、描述模型绝不抛错**：未列出的 id 原样透传，不支持的能力配置推迟到
+  请求执行处失败——见 [ADR-模型目录缺省为空且描述模型绝不抛错](./.agents/adrs/20260917-模型目录缺省为空且描述模型绝不抛错.md)。
+- **传输层复用 SDK**：非标准字段（`top_k`）与用量方言在本层显式处理——见
+  [ADR-传输层复用ai-sdk-openai-compatible而非自研wire序列化](./.agents/adrs/20260917-传输层复用ai-sdk-openai-compatible而非自研wire序列化.md)。
+- **凭据经 `ctx.credentials` 解析**（服务缺失回退 launch environment）：见
+  [ADR-凭据经credentials服务解析而非直接读环境变量](./.agents/adrs/20260917-凭据经credentials服务解析而非直接读环境变量.md)。
+- **图片超预算报错交由 durable offload 重试**（本适配器不自行裁剪请求图片）：见
+  [ADR-图片超预算报错交由durable-offload重试](./.agents/adrs/20260917-图片超预算报错交由durable-offload重试.md)。
+- **多路由结构对齐 `llm-pi-ai`**（数组式 profiles 被拒绝）：见
+  [ADR-providers采用dict多路由结构对齐llm-pi-ai](./.agents/adrs/20260917-providers采用dict多路由结构对齐llm-pi-ai.md)
+  与 [ADR-起因llm-pi-ai的请求参数配置不完整](./.agents/adrs/20260917-起因llm-pi-ai的请求参数配置不完整.md)。
+- **未做（YAGNI）**：`modelOverrides`、模型 discovery（`GET /models`）、OAuth / 非
+  bearer 认证——理由见模型目录 ADR。
 
 ## 从 `llm-pi-ai` 迁移
 
-把 `llm-pi-ai.providers.<route>` 的 `baseURL`/`models`/采样字段平移到
+把 `llm-pi-ai.providers.<route>` 的 `baseURL` / `models` / 采样字段平移到
 `llm-openai-compatible.providers.<route>`（无 `api` 字段——协议固定
-chat-completions），`apiKeyEnv` 与 `retryPolicy` 原样保留；
-`reasoningEfforts` 的 `off` 空值语义一致。
+chat-completions），`apiKeyEnv` 与 `retryPolicy` 原样保留；`reasoningEfforts`
+的 `off` 空值语义一致。
 
-## 暂缓能力（YAGNI）
-
-- 不做 `modelOverrides`（providers 里每个路由自己写 `models` 即可）。
-- 不做模型 discovery（端点询问 `GET /models`）；需要时手写 `models`。
-- 不做 OAuth / 非 bearer 认证。
-
-## 构建与验证
-
-```bash
-pnpm install
-pnpm --filter @morlay/dsh-llm-openai-compatible run build     # → dist/*.mjs + *.d.mts
-pnpm exec tsc --noEmit
-pnpm exec vitest run
-```
+构建、测试与类型检查的命令见根 `justfile` 与 `mise.toml`。

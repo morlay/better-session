@@ -316,7 +316,7 @@ export class SessionBranchRdbProvider implements SessionBranchProvider {
 
     const internals = this.persistence.internals();
 
-    // SessionBranch 是「先停止、再操作」的排他面（ADR 0003）：rewind 直连 DB 做最小工作，
+    // SessionBranch 是「先停止、再操作」的排他面（ADR-rewind绕过handle模型直接截断）：rewind 直连 DB 做最小工作，
     // 不走持久化抽象的全量读路径（readLog 会拉全部事件 + legacy 转换 + 读视图修复）。
     const row = await internals.backend.getSession(id);
     if (row === undefined) {

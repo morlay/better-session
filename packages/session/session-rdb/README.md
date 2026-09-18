@@ -2,8 +2,8 @@
 
 RDB（SQLite / PostgreSQL）持久会话后端（`ctx.sessionPersistence`）：实现上游
 `SessionHandle` 模型（`create`/`open`/`flush`/`stat`/`list`），支持配置选择
-SQLite 或 PostgreSQL 后端。设计细节（表结构、原样存储、并发写、方言差异、
-仓库结构）见 [设计总览](.agents/designs/0001-设计总览.md)。
+SQLite 或 PostgreSQL 后端。表结构、原样存储与各条流程的设计见
+[设计总览](.agents/designs/20260917-设计总览.md)，决策见 [`.agents/adrs/`](.agents/adrs)。
 
 ## 配置
 
@@ -50,23 +50,18 @@ type Config =
       type: "postgres";
       /** node-postgres 连接串；首次打开自动建表并写入 store 身份。 */
       connectionString: string;
-      /** 目标 schema（默认 public，必须已存在）；见 .agents/designs/0003-表结构.md。 */
+      /** 目标 schema（默认 public，必须已存在）。 */
       schema?: string;
     };
 ```
 
 ## 分支能力（session-branch 闭环）
 
-除 `ctx.sessionPersistence` 外，本包还实现 `@morlay/session-branch` 的
-provider 抽象并**随插件自动注册 `ctx.sessionBranch`**（`SessionBranchRdb`），
-在不修改上游代码的前提下提供 `rewind / retry / fork` 的持久化闭环：
-
-- `forkFrom`：纯 append 从闭合边界派生新会话（事件行复用，不复制）；
-- `rewind`：直接操作后端事务截断（只删桥接行），支持 live 与 cold 会话；
-- `timeline`：lineage 版本树投影。
-
-三个原语的完整语义（含 live 同步步骤、事件行复用机制、坐标论证与已知限制）
-见 [分支能力](.agents/designs/0002-分支能力.md)。
+除 `ctx.sessionPersistence` 外，本包还实现 `@morlay/session-branch` 的 provider
+抽象并**随插件自动注册 `ctx.sessionBranch`**（`SessionBranchRdb`），在不修改上游
+代码的前提下提供 `rewind / retry / fork` 的持久化闭环（原语：`forkFrom` 纯 append
+派生、`rewind` 后端事务截断、`timeline` 版本树投影）——语义、坐标论证与已知限制见
+[分支能力](.agents/designs/20260917-分支能力.md)。
 
 上层编排（edit / reroll / retry / rewind / fork 完整功能）由
 `@morlay/ui-conversation-message-actions` 提供，或直接在 `ctx.sessionBranch` /
@@ -74,34 +69,21 @@ provider 抽象并**随插件自动注册 `ctx.sessionBranch`**（`SessionBranch
 
 ## 会话删除（仅已归档）
 
-上游没有会话删除面（`SessionPersistence` 无 delete、workspace 服务无移除
-归属、UI 无会话级插槽），删除由本包自持：`deleteSession(id)` 在一个事务内删除
-桥接行、孤儿事件行（fork 子会话仍引用的事件保留）、投影 checkpoint、workspace
-归属行与会话行。只允许删除**已归档**会话（未归档报 `SESSION_NOT_ARCHIVED`）；
-live（有打开的 handle 或未 materialize）报 `SESSION_LIVE`；删除前经
-`ctx.workspaceRegistry.unarchiveSession` 取消归档，归档集与 feed 增量立即一致。
+delete 面由本包自持：`deleteSession(id)` 只允许删除**已归档**会话（未归档报
+`SESSION_NOT_ARCHIVED`），live（有打开的 handle 或未 materialize）报 `SESSION_LIVE`。
 
 web 模式经 `POST /api/session.delete`（body `{ sessionId }`）暴露，状态映射：
 200 已删除 / 404 不存在 / 409 未归档或 live。决策与边界见
-[ADR-0011](.agents/adrs/0011-会话删除仅限已归档且硬删.md)（UI 入口等官方插槽）。
+[ADR-会话删除仅限已归档且硬删](.agents/adrs/20260917-会话删除仅限已归档且硬删.md)。
 
 ## storages 接管（workspace 与投影缓存）
 
 `$DSH_HOME/storages` 不再产生文件：官方 `storage-json` 与
-`session-projection-cache` 由 `@morlay/better-session` 的 patch 禁用，数据落本包
-的语义专用表（表结构见 [表结构](.agents/designs/0003-表结构.md)，决策见
-[ADR-0009](.agents/adrs/0009-接管storages到rdb语义表.md)）：
-
-- **workspace 域**：官方 `workspace` 插件保留，本包在 storage hub 注册 `rdb`
-  KV 后端（`storage-domain` 的 backend 路由为 `rdb`），记录、归属、显示顺序
-  与归档分别落 `t_workspaces` / `t_workspace_sessions` / `t_workspace_state`
-  与 `t_sessions.f_archived_at`；
-- **投影 checkpoint**：本包提供 `ctx.sessionProjectionCache` 服务（替换官方
-  插件，API 与语义逐一对齐），每个投影 key 一行落 `t_session_projcache_row`
-  （identity 直接复用 `t_sessions` 的会话行）；SQLite 下读路径**直接查表**
-  （进程内不再维护 checkpoint 镜像），PostgreSQL 因驱动异步保留写穿镜像。
-- **会话标题是会话数据**：`t_sessions.f_title` 由 rdb 按 `session/title` 事件
-  维护（rewind 截断后重算），列表消费在没有 checkpoint 行时直接取该列。
+`session-projection-cache` 由 `@morlay/better-session` 的 patch 禁用，数据落本包的
+语义专用表——workspace 域经本包注册的 `rdb` KV 后端，投影 checkpoint 经本包的
+`ctx.sessionProjectionCache` 服务。表结构见
+[表结构](.agents/designs/20260917-表结构.md)，决策见
+[ADR-接管storages到rdb语义表](.agents/adrs/20260917-接管storages到rdb语义表.md)。
 
 写节流参数（默认 200 / 5000，与官方 base 装配一致）可经 settings 覆盖：
 
@@ -114,11 +96,9 @@ session-rdb:
     writeIntervalMs: 5000
 ```
 
-旧 `storages` JSON 导入是**包内 API**（先停掉 dsh，旧文件保留不删）——目前没有 CLI
-入口、也不在 `exports` 里，用法见 `src/import-storages.ts` 与
-`src/__tests__/storage-takeover.spec.ts`：
+旧 `storages` JSON 的导入是**包内 API**（先停掉 dsh，旧文件保留不删）——没有 CLI
+入口、也不在 `exports` 里：
 
 ```ts
-const result = await importStorages(backend.storage, { dshHome });
-// { workspaces: 1, workspaceState: true, projcache: 1 }
+await importStorages(repository, { dshHome }); // 用法见 src/import-storages.ts
 ```

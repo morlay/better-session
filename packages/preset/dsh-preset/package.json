@@ -39,8 +39,7 @@
   "dependencies": {
     "@morlay/dsh-prompt-reminder": "workspace:^",
     "@morlay/dsh-reference-injection": "workspace:^",
-    "@morlay/dsh-sandbox-local": "workspace:^",
-    "dsh-context": "0.52.2"
+    "@morlay/dsh-sandbox-local": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/cordis-plugin-include": "workspace:^",
