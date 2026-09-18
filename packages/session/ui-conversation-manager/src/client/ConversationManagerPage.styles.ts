@@ -40,6 +40,13 @@ export const styles = {
     fontWeight: "500",
   },
   // 与官方会话头部的 tab 条同形（ConversationRoot.module.css 的 .tabs/.tab/.tabActive）。
+  // 时间范围是一组筛选（Pill），与维度 tab 分开。
+  ranges: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    flex: "none",
+  },
   tabs: {
     position: "relative",
     zIndex: "1",

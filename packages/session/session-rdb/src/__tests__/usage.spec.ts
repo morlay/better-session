@@ -161,19 +161,25 @@ function fakeResponse(): Response {
   return state;
 }
 
-function fakeRequest(): import("node:http").IncomingMessage {
+function fakeRequest(body: unknown = {}): import("node:http").IncomingMessage {
+  const chunk = Buffer.from(JSON.stringify(body));
   return {
     method: "POST",
     headers: {},
     async *[Symbol.asyncIterator]() {
-      // 统计请求不带请求体。
+      yield chunk;
     },
   } as unknown as import("node:http").IncomingMessage;
 }
 
+/** 一个 ctx 只 provide 一次：同一用例可能查两次（不同时间范围）。 */
+const routeCache = new WeakMap<Context, (req: unknown, res: unknown) => void | Promise<void>>();
+
 async function usageRoute(
   ctx: Context,
 ): Promise<(req: unknown, res: unknown) => void | Promise<void>> {
+  const cached = routeCache.get(ctx);
+  if (cached !== undefined) return cached;
   const routes = new Map<string, (req: unknown, res: unknown) => void | Promise<void>>();
   ctx.provide("webServer", {
     register: (route: {
@@ -188,13 +194,14 @@ async function usageRoute(
   for (let i = 0; i < 1000 && !routes.has(SESSION_USAGE_PATH); i += 1) await Promise.resolve();
   const handler = routes.get(SESSION_USAGE_PATH);
   if (handler === undefined) throw new Error("usage route was not registered");
+  routeCache.set(ctx, handler);
   return handler;
 }
 
-async function report(ctx: Context): Promise<UsageReport> {
+async function report(ctx: Context, body: unknown = {}): Promise<UsageReport> {
   const handler = await usageRoute(ctx);
   const response = fakeResponse();
-  await handler(fakeRequest(), response.res);
+  await handler(fakeRequest(body), response.res);
   expect(response.code).toBe(200);
   return JSON.parse(response.body) as UsageReport;
 }
@@ -304,6 +311,29 @@ describe("用量统计口径", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("时间范围过滤：只算范围内的事件行", async () => {
+    const { ctx } = await harness();
+    const now = Date.now();
+    await createPersisted(
+      ctx,
+      meta("recent"),
+      turnWithUsage(now - 60_000, { provider: "p", model: "m" }, usageOf(100, 10)),
+    );
+    await createPersisted(
+      ctx,
+      meta("stale"),
+      turnWithUsage(now - 40 * DAY_MS, { provider: "p", model: "m" }, usageOf(7, 3)),
+    );
+
+    const all = await report(ctx);
+    expect(all.totals.events).toBe(2);
+
+    const week = await report(ctx, { rangeDays: 7 });
+    expect(week.totals.events).toBe(1);
+    expect(week.totals.inputTokens).toBe(100);
+    expect(week.sessions.map((row) => row.sessionId)).toEqual(["recent"]);
   });
 
   it("被删除会话留下的事件行（无引用）不计入统计", async () => {

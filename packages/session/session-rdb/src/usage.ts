@@ -3,6 +3,8 @@ import type { SessionPersistenceRdb } from "./index.ts";
 
 export const SESSION_USAGE_PATH = "/api/session.usage";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** 一段用量合计（token 字段直接取事件里模型报的 usage）。 */
 export interface UsageTotals {
   events: number;
@@ -108,8 +110,26 @@ export function registerSessionUsage(ctx: Context, persistence: SessionPersisten
               res.end(JSON.stringify({ error: "method not allowed" }));
               return;
             }
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) chunks.push(chunk as Buffer);
+            const raw = Buffer.concat(chunks).toString("utf8");
+            let envelope: { rangeDays?: unknown } = {};
+            if (raw !== "") {
+              try {
+                envelope = JSON.parse(raw) as { rangeDays?: unknown };
+              } catch {
+                res.writeHead(400, { "content-type": "application/json" });
+                res.end(JSON.stringify({ error: "request body is not JSON" }));
+                return;
+              }
+            }
+            const days = envelope.rangeDays;
+            const rangeDays =
+              typeof days === "number" && Number.isFinite(days) && days > 0 ? days : undefined;
             try {
-              const aggregate = await persistence.usageReport();
+              const aggregate = await persistence.usageReport(
+                rangeDays === undefined ? undefined : Date.now() - rangeDays * DAY_MS,
+              );
               const totals = sumUsage(aggregate.buckets);
               const subagent = sumUsage(aggregate.buckets.filter((bucket) => bucket.subagent));
               const human = sumUsage(aggregate.buckets.filter((bucket) => !bucket.subagent));

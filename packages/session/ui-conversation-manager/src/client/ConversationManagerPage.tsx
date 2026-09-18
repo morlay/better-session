@@ -7,6 +7,7 @@ import {
   IconSearchOutline16,
   Input,
   Modal,
+  Pill,
   Tag,
   relativeTime,
 } from "@deepseek-ai/dsh-client-ui-primitives";
@@ -94,6 +95,7 @@ export function ConversationManagerPage({
   const [showSubagents, setShowSubagents] = useState(false);
   const [view, setView] = useState<PageView>("sessions");
   const [usageTab, setUsageTab] = useState<UsageTab>("overview");
+  const [usageRange, setUsageRange] = useState<UsageRange>(null);
   const [usage, setUsage] = useState<SessionUsageReport | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState<string | null>(null);
@@ -162,13 +164,12 @@ export function ConversationManagerPage({
     );
   };
 
-  // 统计是重查询（全库聚合）：只在第一次进入统计视图时拉一次，维度切换不再请求。
-  const openUsage = (): void => {
-    setView("usage");
-    if (usage !== null || usageLoading) return;
+  // 统计是按时间范围在 host 侧聚合的：进入统计视图拉一次，换范围再拉一次；维度切换本地折叠。
+  const requestUsage = (range: UsageRange): void => {
+    setUsageRange(range);
     setUsageLoading(true);
     setUsageError(null);
-    void loadUsage()
+    void loadUsage(range)
       .then(
         (report) => {
           setUsage(report);
@@ -180,6 +181,11 @@ export function ConversationManagerPage({
       .finally(() => {
         setUsageLoading(false);
       });
+  };
+
+  const openUsage = (): void => {
+    setView("usage");
+    if (usage === null && !usageLoading) requestUsage(usageRange);
   };
 
   if (sessions.phase !== "ready") {
@@ -286,6 +292,8 @@ export function ConversationManagerPage({
           error={usageError}
           tab={usageTab}
           onTab={setUsageTab}
+          range={usageRange}
+          onRange={requestUsage}
           t={t}
         />
       ) : (
@@ -515,8 +523,12 @@ export function ConversationManagerPage({
 /** 一层视图：会话列表 / 用量统计。 */
 type PageView = "sessions" | "usage";
 
-/** 统计视图的二层维度。 */
-type UsageTab = "overview" | "daily" | "models" | "sessions";
+/** 统计视图的二层维度（时间范围取代了原来的「按天」）。 */
+type UsageTab = "overview" | "models" | "sessions";
+
+/** 时间范围选项：`null` 为不限，其余为最近 N 天。 */
+const USAGE_RANGES = [null, 7, 30, 90] as const;
+type UsageRange = (typeof USAGE_RANGES)[number];
 
 /** 一个用量单项：标签在上、值在下；单项之间横向排布。 */
 interface UsageMetric {
@@ -671,13 +683,15 @@ function UsageOverview({ report, t }: { report: SessionUsageReport; t: Translate
   );
 }
 
-/** 统计视图：二层维度切换 + 总览网格 / 三个折叠列表（按天 / 按模型 / 按会话）。 */
+/** 统计视图：时间范围过滤 + 二层维度切换（总览 / 按模型 / 按会话）。 */
 function UsageView({
   report,
   loading,
   error,
   tab,
   onTab,
+  range,
+  onRange,
   t,
 }: {
   report: SessionUsageReport | null;
@@ -685,36 +699,53 @@ function UsageView({
   error: string | null;
   tab: UsageTab;
   onTab: (tab: UsageTab) => void;
+  range: UsageRange;
+  onRange: (range: UsageRange) => void;
   t: Translate;
 }): ReactNode {
-  const items: UsageTab[] = ["overview", "daily", "models", "sessions"];
+  const items: UsageTab[] = ["overview", "models", "sessions"];
   const labels: Record<UsageTab, string> = {
     overview: t("usage.overview"),
-    daily: t("usage.daily"),
     models: t("usage.models"),
     sessions: t("usage.sessions"),
   };
   const rows: readonly UsageListRow[] =
     report === null || tab === "overview"
       ? []
-      : tab === "daily"
-        ? foldBuckets(report.buckets, (bucket) => bucket.day)
-        : tab === "models"
-          ? foldBuckets(
-              report.buckets,
-              (bucket) =>
-                `${bucket.provider ?? t("usage.unknownModel")} / ${bucket.model ?? t("usage.unknownModel")}`,
-            )
-          : report.sessions
-              .map((row) => ({
-                key: row.sessionId,
-                label: row.title ?? row.sessionId,
-                totals: row,
-              }))
-              .sort((left, right) => sortWeight(right.totals) - sortWeight(left.totals))
-              .slice(0, USAGE_SESSION_ROWS);
+      : tab === "models"
+        ? foldBuckets(
+            report.buckets,
+            (bucket) =>
+              `${bucket.provider ?? t("usage.unknownModel")} / ${bucket.model ?? t("usage.unknownModel")}`,
+          )
+        : report.sessions
+            .map((row) => ({
+              key: row.sessionId,
+              label: row.title ?? row.sessionId,
+              totals: row,
+            }))
+            .sort((left, right) => sortWeight(right.totals) - sortWeight(left.totals))
+            .slice(0, USAGE_SESSION_ROWS);
   return (
-    <div {...styling.props(styles.usage)} data-usage-view={tab}>
+    <div
+      {...styling.props(styles.usage)}
+      data-usage-view={tab}
+      data-usage-range={range === null ? "all" : String(range)}
+    >
+      <div {...styling.props(styles.ranges)} role="group" aria-label={t("usage.range")}>
+        {USAGE_RANGES.map((option) => (
+          <Pill
+            key={String(option)}
+            active={range === option}
+            data-range={option === null ? "all" : String(option)}
+            onClick={() => {
+              onRange(option);
+            }}
+          >
+            {option === null ? t("usage.range.all") : t("usage.range.days", { n: option })}
+          </Pill>
+        ))}
+      </div>
       <div {...styling.props(styles.tabs)} role="tablist">
         {items.map((item) => (
           <button

@@ -25,6 +25,36 @@ function stubFetch(status: number, payload: unknown): FetchCall[] {
   return calls;
 }
 
+/** 一份最小的用量回报（与 host 的 ./usage 结构一致）。 */
+const REPORT_PAYLOAD = {
+  totals: {
+    events: 2,
+    inputTokens: 150,
+    outputTokens: 15,
+    cacheReadTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 165,
+  },
+  subagent: {
+    events: 1,
+    inputTokens: 50,
+    outputTokens: 5,
+    cacheReadTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 55,
+  },
+  human: {
+    events: 1,
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 110,
+  },
+  buckets: [],
+  sessions: [],
+};
+
 function bench(): {
   ports: ConversationManagerPorts & { archived: string[]; unarchived: string[]; refreshes: number };
   controller: ConversationManagerController;
@@ -184,38 +214,11 @@ describe("对话管理注入面", () => {
 
   it("用量统计打 usage 路由并回传三份数据", async () => {
     const b = bench();
-    const calls = stubFetch(200, {
-      totals: {
-        events: 2,
-        inputTokens: 150,
-        outputTokens: 15,
-        cacheReadTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 165,
-      },
-      subagent: {
-        events: 1,
-        inputTokens: 50,
-        outputTokens: 5,
-        cacheReadTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 55,
-      },
-      human: {
-        events: 1,
-        inputTokens: 100,
-        outputTokens: 10,
-        cacheReadTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 110,
-      },
-      buckets: [],
-      sessions: [],
-    });
+    const calls = stubFetch(200, REPORT_PAYLOAD);
 
-    const report = await b.controller.face.loadUsage();
+    const report = await b.controller.face.loadUsage(null);
 
-    expect(calls).toEqual([{ url: "/api/session.usage", body: {} }]);
+    expect(calls).toEqual([{ url: "/api/session.usage", body: { rangeDays: null } }]);
     expect(report.totals.totalTokens).toBe(165);
     expect(report.subagent.inputTokens).toBe(50);
     expect(b.ports.refreshes).toBe(0);
@@ -224,6 +227,13 @@ describe("对话管理注入面", () => {
   it("用量统计响应不可用时给出失败原因", async () => {
     const b = bench();
     stubFetch(200, { totals: {} });
-    await expect(b.controller.face.loadUsage()).rejects.toThrow("用量统计响应不可用");
+    await expect(b.controller.face.loadUsage(null)).rejects.toThrow("用量统计响应不可用");
+  });
+
+  it("时间范围随请求带给 host", async () => {
+    const b = bench();
+    const calls = stubFetch(200, REPORT_PAYLOAD);
+    await b.controller.face.loadUsage(7);
+    expect(calls).toEqual([{ url: "/api/session.usage", body: { rangeDays: 7 } }]);
   });
 });

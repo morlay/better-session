@@ -551,7 +551,8 @@ export class PostgresBackend implements Backend {
   }
 
   /** 用量聚合：与 SQLite 侧同形，读 `t_event_usage`，数值列回来是字符串。 */
-  async usageReport(): Promise<UsageAggregate> {
+  async usageReport(sinceMs?: number): Promise<UsageAggregate> {
+    const sinceClause = sinceMs === undefined ? sql`` : sql` AND u.f_created_at >= ${sinceMs}`;
     const tEventUsage = this.tables["t_event_usage"];
     const tSessionEvents = this.tables["t_session_events"];
     const tSessions = this.tables["t_sessions"];
@@ -569,7 +570,7 @@ export class PostgresBackend implements Backend {
              sum(u.f_reasoning_tokens) AS reasoning_tokens,
              sum(u.f_total_tokens) AS total_tokens
         FROM ${tEventUsage} u
-       WHERE EXISTS (SELECT 1 FROM ${tSessionEvents} rb WHERE rb.f_event_id = u.f_event_id)
+       WHERE EXISTS (SELECT 1 FROM ${tSessionEvents} rb WHERE rb.f_event_id = u.f_event_id)${sinceClause}
        GROUP BY 1, 2, 3, 4
     `)) as unknown as { rows: Array<Record<string, unknown>> };
     const sessions = (await this.db.execute(sql`
@@ -586,6 +587,7 @@ export class PostgresBackend implements Backend {
         FROM ${tSessionEvents} b
         JOIN ${tEventUsage} u ON u.f_event_id = b.f_event_id
         JOIN ${tSessions} s ON s.f_session_id = b.f_session_id
+       WHERE 1 = 1${sinceClause}
        GROUP BY b.f_session_id, s.f_title, s.f_origin, s.f_archived_at
     `)) as unknown as { rows: Array<Record<string, unknown>> };
     return {

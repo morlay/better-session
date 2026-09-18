@@ -65,7 +65,7 @@ export interface ConversationManagerFace {
   exportZip: (sessionId: SessionId) => Promise<void>;
   importZip: (file: File) => Promise<SessionId>;
   collectGarbage: () => Promise<ConversationManagerGcResult>;
-  loadUsage: () => Promise<SessionUsageReport>;
+  loadUsage: (rangeDays: number | null) => Promise<SessionUsageReport>;
 }
 
 /** 带 host 错误码的请求失败：页面据此选本地化文案。 */
@@ -125,7 +125,7 @@ export class ConversationManagerController {
       exportZip: (sessionId) => this.exportZip(sessionId),
       importZip: (file) => this.importZip(file),
       collectGarbage: () => this.collectGarbage(),
-      loadUsage: () => this.loadUsage(),
+      loadUsage: (rangeDays) => this.loadUsage(rangeDays),
     };
   }
 
@@ -173,9 +173,12 @@ export class ConversationManagerController {
     };
   }
 
-  /** 用量统计：host 侧一次聚合，前端各维度本地折叠。响应是 wire 值，先确认三份数据都在。 */
-  private async loadUsage(): Promise<SessionUsageReport> {
-    const value = await postJson(SESSION_USAGE_PATH, {});
+  /**
+   * 用量统计：host 侧聚合，前端各维度本地折叠。
+   * @param rangeDays - 只算最近这些天；`null` 为不限。
+   */
+  private async loadUsage(rangeDays: number | null): Promise<SessionUsageReport> {
+    const value = await postJson(SESSION_USAGE_PATH, { rangeDays });
     const report = value as unknown as Partial<SessionUsageReport>;
     if (
       report.totals === undefined ||

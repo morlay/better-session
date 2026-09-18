@@ -597,8 +597,10 @@ export class SqliteBackend implements Backend {
     return Number(info.changes);
   }
 
-  /** 用量聚合：`f_role = 'assistant'` 与 `assistant/message` 等价且走索引，避免全表扫描。 */
-  async usageReport(): Promise<UsageAggregate> {
+  /** 用量聚合：只读 `t_event_usage`；可选只算 `sinceMs` 之后的事件行。 */
+  async usageReport(sinceMs?: number): Promise<UsageAggregate> {
+    const sinceClause = sinceMs === undefined ? "" : " AND u.f_created_at >= ?";
+    const sinceParams = sinceMs === undefined ? [] : [sinceMs];
     const buckets = this.db.$client
       .prepare(
         `SELECT date(u.f_created_at / 1000, 'unixepoch', 'localtime') AS day,
@@ -614,10 +616,10 @@ export class SqliteBackend implements Backend {
                 sum(u.f_reasoning_tokens) AS reasoning_tokens,
                 sum(u.f_total_tokens) AS total_tokens
            FROM t_event_usage u
-          WHERE EXISTS (SELECT 1 FROM t_session_events rb WHERE rb.f_event_id = u.f_event_id)
+          WHERE EXISTS (SELECT 1 FROM t_session_events rb WHERE rb.f_event_id = u.f_event_id)${sinceClause}
           GROUP BY day, provider, model, subagent`,
       )
-      .all() as unknown as RawUsageRow[];
+      .all(...sinceParams) as unknown as RawUsageRow[];
     const sessions = this.db.$client
       .prepare(
         `SELECT b.f_session_id AS session_id,
@@ -633,9 +635,10 @@ export class SqliteBackend implements Backend {
            FROM t_session_events b
            JOIN t_event_usage u ON u.f_event_id = b.f_event_id
            JOIN t_sessions s ON s.f_session_id = b.f_session_id
+          WHERE 1 = 1${sinceClause}
           GROUP BY b.f_session_id, s.f_title, s.f_origin, s.f_archived_at`,
       )
-      .all() as unknown as Array<
+      .all(...sinceParams) as unknown as Array<
       RawUsageRow & { session_id: string; title: string | null; archived: number }
     >;
     return {

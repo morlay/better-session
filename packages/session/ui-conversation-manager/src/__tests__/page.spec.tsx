@@ -477,19 +477,26 @@ describe("对话管理页面：token 用量统计", () => {
     expect(container.querySelector('[data-usage-cell="total"]')).toBeNull();
   });
 
-  it("第二层切维度：按天 / 按模型 / 按会话", async () => {
-    renderPage({ archived: [], faces: { loadUsage: vi.fn(async () => REPORT) } });
+  it("二层切维度（按模型 / 按会话），时间范围切换会带参数重新请求", async () => {
+    const loadUsage = vi.fn(async () => REPORT);
+    renderPage({ archived: [], faces: { loadUsage } });
     fireEvent.click(screen.getByRole("tab", { name: "统计" }));
     await screen.findByText("总览");
-
-    fireEvent.click(screen.getByRole("tab", { name: "按天" }));
-    expect(screen.getByText("2026-09-08")).toBeTruthy();
+    expect(loadUsage).toHaveBeenCalledWith(null);
 
     fireEvent.click(screen.getByRole("tab", { name: "按模型" }));
     expect(screen.getByText("deepseek-official / v4")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "按会话" }));
     expect(screen.getByText("会话 A")).toBeTruthy();
+
+    // 「按天」这一栏已被时间范围取代。
+    expect(screen.queryByRole("tab", { name: "按天" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "近 7 天" }));
+    await waitFor(() => {
+      expect(loadUsage).toHaveBeenLastCalledWith(7);
+    });
   });
 
   it("输入在显示上含缓存读取（单项原始值随之）", async () => {
@@ -552,9 +559,12 @@ describe("对话管理页面：token 用量统计", () => {
     ).toBe("65");
     expect(container.querySelector('[data-usage-key="subagent"]')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("tab", { name: "按天" }));
-    expect(container.querySelector('[data-usage-key="2026-09-08"]')).toBeTruthy();
-    expect(container.querySelector('[data-usage-tab="daily"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "按模型" }));
+    expect(container.querySelector('[data-usage-key="deepseek-official / v4"]')).toBeTruthy();
+    expect(container.querySelector('[data-usage-tab="models"]')).toBeTruthy();
+    expect(container.querySelector("[data-usage-range]")?.getAttribute("data-usage-range")).toBe(
+      "all",
+    );
   });
 
   it("统计失败时给出原因", async () => {

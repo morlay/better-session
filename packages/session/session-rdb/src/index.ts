@@ -769,9 +769,9 @@ export class SessionPersistenceRdb extends SessionPersistence {
   }
 
   /** 用量统计：SQL 聚合的按天 × 模型桶与按会话行（事件行去重、排除孤儿行）。 */
-  async usageReport(): Promise<UsageAggregate> {
+  async usageReport(sinceMs?: number): Promise<UsageAggregate> {
     await this.ready;
-    return this.backend.usageReport();
+    return this.backend.usageReport(sinceMs);
   }
 
   /** GC 通道：VACUUM；调用方需先停止运行中的写路径（见 `registerSessionGc`）。 */
