@@ -48,15 +48,25 @@ autoInstallPeers: true
   });
   ```
 
-  client 构建（`defineCordisClientConfig`：ModuleLoader 手递、react 与
-  `@deepseek-ai/*` external、CSS Modules 内联）由 devkit 内部组装进返回
-  数组——exports 只在 host 声明一次（含 `./client` customExport，否则
-  tsdown devExports 重写会清掉它），避免 tsdown 多配置 exports 冲突。
+  client 构建由 devkit 组装进同一次构建：`clientEntryPlugin` 用现场打包的单文件字节
+  替掉 tsdown 的 client chunk（host/client 共享模块在分块模型下无法各留一份），
+  `cssInlinePlugins` 补上样式解析——`.module.css` 交 lightningcss 编译出
+  `[hash]_[local]` 的 class 映射并注入 `<style>`，其余 `.css` 只注入，`.css?inline`
+  导出编译后的文本；`addWatchFile` 让样式文件进 watch 图。exports 只在 host 声明一次
+  （含 `./client` customExport，否则 tsdown devExports 重写会清掉它），避免 tsdown
+  多配置 exports 冲突。
+
+- **样式内联自己实现，不复用 vendor 的同一份逻辑**：上游那三个插件内联在未导出的
+  `clientConfig` 里（导出面只有 `clientBundle`），复用会拖进 `REPOSITORY_ROOT`、
+  `packages/*/*` 清单扫描、`PLATFORM_MODULES` 等上游仓库内部路径。代价是语义有一份
+  重复，由 devkit 自己的单测钉住（`devpackages/devkit/src/__tests__/css.spec.ts`，
+  含「样式 import 不残留」「class 映射与上游同形」「watch 图登记」）；`resolveId` 用
+  `order: 'pre'`，与上游 patch（`patches/css-inline-query.patch`）保持同一口径。
 
 ## 考虑过的选项
 
-- **每个包独立 tsconfig + 独立 tsdown.config.ts 复制**：早期形态，配置
-  模板重复；升级编译选项 / 构建选项要逐包改，易漂移。
+- **每个包独立 tsconfig + 独立 tsdown.config.ts 复制**：配置模板重复，
+  升级编译选项 / 构建选项要逐包改，易漂移。
 - **工具链放根 package.json devDeps 共享、不抽象**：tsdown 公共选项仍
   逐包复制，没有"生成"能力。
 
@@ -68,3 +78,8 @@ autoInstallPeers: true
   模板复制。
 - devkit 是 TS 源码直出（`exports: { ".": "./src/index.ts", "./tsconfig.json":
 "./tsconfig.json" }`），由 tsdown / tsx 等 TS 加载器消费，无需自身构建链。
+- 已知限制（样式内联只覆盖**代码**图，不覆盖 client 的**声明**图）：client 入口把
+  `?inline` 的文本**再导出**时，tsdown 的 dts 这一步失败——生成的 `.d.ts` 保留
+  `import x from "../x.css?inline"`，而声明图里没有样式解析。样式只在内部分使用
+  （含组件内 `import css from "./X.module.css"`）不受影响。上游把 client 的 dts 关掉
+  （类型走 `lib/types`）绕开了同类问题。

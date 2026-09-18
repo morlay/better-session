@@ -21,11 +21,9 @@ disable-model-invocation: true
 
 接口守三条：**接受依赖而不自己创建、返回结果而不产生副作用、表面尽量小**。
 
-词汇来源是 `/codebase-design` 技能。本仓库现有的接缝（契约层 `ctx.sessionBranch`、编排层
-`ctx.sessionEditor`、传输面 `/session-editor`、数据层 `ctx.sessionPersistence`、装配面
-`cordis.patch.yml`、client bundle）在 [`.agents/standards/how-to-write.md`](../../standards/how-to-write.md)
-的「接缝在哪」表；上游侧的扩展面（服务注册、上游抽象实现、事件合并、配置、settings 覆盖、client bundle、
-不变量）与只读红线见 [`dsh-plugin-upstream-sync`](../dsh-plugin-upstream-sync/SKILL.md)。
+本仓库现有的接缝落在**改动所属层**的 `.agents/standards/`（如何写 /
+如何验证）——**逐条对照，本技能不复制其中条目**；上游侧的扩展面与只读红线见
+[`dsh-plugin-upstream-sync`](../dsh-plugin-upstream-sync/SKILL.md)。
 
 ## 二、领域建模在会话中做
 
@@ -54,11 +52,13 @@ disable-model-invocation: true
 | 包 / 应用的门面与用法 | 该包的 `README.md`                 | —                                                  | GitHub 惯例：一句话定位 + 用法 + 链接            |
 | 怎么做（流程）        | 仓库根 `.agents/skills/*/SKILL.md` | —                                                  | frontmatter `name` + `description`（写清何时用） |
 
-命名：`NNNN-标题.md`，编号在**各层目录内**唯一且**不复用**（删掉的编号作废）；designs 标题写主题、adr
-标题写结论句、debts 标题写现象。小节名、段落名照模板，不另创。
+命名：三类记录都用 `<YYYYMMDD>-标题.md`（日期是采纳 / 创建日期；同一天多篇靠标题区分，没有序号）。H1 就是标题
+本身，不带日期或序号。designs 标题写主题、adr 标题写结论句、debts 标题写现象。小节名、段落名照模板，不另创。
 
-引用：**同层**用短号 `ADR-NNNN`、`设计 NNNN`、`债务 NNNN`（本层编号可解析到唯一文件）；**跨层**一律给
-相对链接。决策变了不改旧文件：新写一份，旧文件状态行指向新编号。
+引用：**同层**写 `ADR-<slug>` / `设计 <slug>` / `债务 <slug>`（同层日期相同，省掉日期；都能解析到层内唯一
+文件）；**跨层**一律给相对链接，链接目标用完整文件名 `<YYYYMMDD>-<slug>.md`，链接文本写
+`ADR-<YYYYMMDD>-<slug>` / `设计 <YYYYMMDD>-<slug>` / `债务 <YYYYMMDD>-<slug>` 或一句简短描述。决策变了不改旧
+文件：新写一份，旧文件状态行指向新的 slug。
 
 ## 四、写文档的底线
 

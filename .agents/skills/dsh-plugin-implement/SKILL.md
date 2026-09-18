@@ -20,7 +20,7 @@ description: 实现插件改动时用——先约定接缝再写测试（红→�
 - **装配面**——`cordis.patch.yml`、依赖声明（`workspace:^` 放 peer 还是 dev）、client 声明；
 - **出口与命令**——包暴露什么、HTTP 路由（如 `/session-editor`）与命令行 / just 命令的对外行为。
 
-本仓库这些接缝具体落在哪，见 [`how-to-write.md`](../../standards/how-to-write.md) 的「接缝在哪」表。
+本仓库这些接缝具体落在哪，见**改动所属层**的 `.agents/standards/`——不复制其中条目。
 
 没确认接缝就不写测试。测试只写在接缝上：不 mock 内部协作者、不测私有成员、不绕过接口查内部状态
 （直读库表、读私有字段）。
@@ -35,16 +35,14 @@ description: 实现插件改动时用——先约定接缝再写测试（红→�
 - 重构不属于循环——它在 `dsh-plugin-review`；结构性重构在 `dsh-plugin-improve`。
 - 上游侧的改动（vendor 内容、patch、EXCLUDE、版本跟随）走 `dsh-plugin-upstream-sync`，不在本循环内。
 
-测试写在 `packages/<family>/<pkg>/src/__tests__/*.spec.ts(x)`、怎么命名、跑在什么环境（node / jsdom、
-SQLite `:memory:`、`TEST_PG_URL` 门控）→ [`how-to-verify.md`](../../standards/how-to-verify.md)；
-装配辅助（`@morlay/session-rdb/testing`、`@morlay/ui-conversation-message-actions/testing` 的
-`harness()` 与日志 fixture）也记在那里。
+测试落在哪、怎么命名、跑在什么环境、各包的测试装配辅助与日志 fixture → **改动所属层**的
+`.agents/standards/`（通用部分在根 `standards/how-to-verify.md`）。
 
 三条反模式 → [`references/testing-antipatterns.md`](./references/testing-antipatterns.md)。
 
 ## 三、验证与完成判据
 
-按 [`how-to-verify.md`](../../standards/how-to-verify.md) 的证据矩阵选**最小充分**证据；命令入口是仓库根的
+按 `.agents/standards/`（通用）与改动所属层 standards（包特有）选**最小充分**证据；命令入口是仓库根的
 `justfile`（`just --list` 看全量：`just test` / `just lint` / `just build`；上游或 pg 相关加
 `just vendor …` / `just pg test`）。
 
@@ -60,6 +58,6 @@ SQLite `:memory:`、`TEST_PG_URL` 门控）→ [`how-to-verify.md`](../../standa
 ## 四、边界与交接
 
 - 只读区（上游 `@deepseek-ai/*`、`node_modules`）、依赖方向、发布纪律（发布走 CI，严禁本地 publish）
-  → [`AGENTS.md`](../../../AGENTS.md) 与 [`how-to-verify.md`](../../standards/how-to-verify.md)。
+  → [`AGENTS.md`](../../../AGENTS.md) 与 `.agents/standards/`。
 - 上游（只读依赖）侧的改动 → `dsh-plugin-upstream-sync`。
 - 实现完待审 → `dsh-plugin-review`。

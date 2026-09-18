@@ -1,16 +1,12 @@
 # AGENTS.md
 
-better-session：DeepSeek Harness 的**分支式会话编辑** monorepo——在上游 `@deepseek-ai/*`
-（vendor 锁定的完整源码）之上为会话提供就地编辑 / 重试 / 撤回 / 分支（rewind / retry / recall / fork）
-闭环，按契约、编排、RDB 持久化、装配四层组织。
-
 ## 必读
 
 - 技术栈 [mise.toml](./mise.toml)；命令 [justfile](./justfile)（`just --list`）
 - 记录树与分层规则 [`.agents/README.md`](./.agents/README.md)
 - 术语与上下文边界 [`.agents/CONTEXT-MAP.md`](./.agents/CONTEXT-MAP.md)
 - 规范（如何写 / 如何验证）[`.agents/standards/`](./.agents/standards)
-- 整体设计（布局 / 分层 / 装配 / 操作语义）[`.agents/designs/0001-系统设计.md`](./.agents/designs/0001-系统设计.md)
+- 整体设计（布局 / 分层 / 装配 / 操作语义）[`.agents/designs/20260917-系统设计.md`](./.agents/designs/20260917-系统设计.md)
 
 ## 一个事实只有一个 home
 

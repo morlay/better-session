@@ -2,20 +2,19 @@
 
 这份术语表只管**跨包共享**的词——契约层 / 编排层 / 实现层 / 聚合层与对话 UI 接管包共用的语言：
 在不修改上游 `@deepseek-ai/*` 的前提下，重写同一会话或从闭合边界派生新会话，并投影版本树。
-上下文边界见 [`CONTEXT-MAP.md`](./CONTEXT-MAP.md)，分层与设计背景见 [`0001 系统设计`](./designs/0001-系统设计.md)。
+上下文边界见 [`CONTEXT-MAP.md`](./CONTEXT-MAP.md)，分层与设计背景见 [`系统设计`](./designs/20260917-系统设计.md)。
 
 ## 装配
 
 **装配（assembly）**：
-把契约 / 编排 / 实现三层一次性装进 DeepSeek Harness web profile 的决策
-（`cordis.patch.yml`：禁用官方 jsonl、插入三个插件、settings namespace
-覆盖）——归聚合层 `@morlay/better-session`。
+把契约 / 编排 / 实现三层一次性装进 DeepSeek Harness web profile 的动作——归聚合层
+`@morlay/better-session`（装了什么见其 [`cordis.patch.yml`](../packages/session/better-session/cordis.patch.yml)）。
 _避免使用_：接线、wiring
 
 **rdb 替换（rdb replacement）**：
-禁用官方 `session-persistence-jsonl`、用 `@morlay/session-rdb` 实现
-`ctx.sessionPersistence`——因为 rewind 需要原子截断，JSONL 顺序介质
-提供不了。
+用 `@morlay/session-rdb` 实现 `ctx.sessionPersistence`、禁用官方
+`session-persistence-jsonl`（理由见
+[ADR-20260917-rdb替换官方jsonl持久化](../packages/session/better-session/.agents/adrs/20260917-rdb替换官方jsonl持久化.md)）。
 _避免使用_：持久化迁移、storage swap
 
 ## 会话与编辑
@@ -45,8 +44,8 @@ _避免使用_：回合、round
 
 **空轮（empty turn）**：
 已闭合但既无用户输入也无助手回复的轮次（`turn/start` 后直接 `turn/end`）
-——早期重放缺陷的遗留形状。就地编辑把它随目标轮一起截断，重放按保留
-前缀续号，轮次导航不留空项与轮号空洞。
+——可能存在于历史数据中的形状；就地编辑与重放怎么处理它见
+[设计 编排层操作语义](../packages/session/ui-conversation-message-actions/.agents/designs/20260917-编排层操作语义.md) 的「就地编辑语义」。
 _避免使用_：空回合、幽灵轮次
 
 **闭合边界（closed boundary）**：
@@ -71,8 +70,9 @@ fork / rewind）的目标轮次、变更前后文本与逆操作。
 _避免使用_：版本事件、变更记录
 
 **ignorable 事件**：
-携带 `ignorable: true` 信封、非 branch 读者可安全跳过的事件——**原样落库**
-（写路径不按信封过滤，与 JSONL 一致），读侧凭信封决定是否参与投影。
+携带 `ignorable: true` 信封、非 branch 读者可安全跳过的事件——**原样落库**、
+读侧凭信封决定是否参与投影
+（[ADR-20260917-版本效果以ignorable事件原样落库](../packages/session/session-branch/.agents/adrs/20260917-版本效果以ignorable事件原样落库.md)）。
 _避免使用_：瞬时事件（瞬时事件是另一概念）
 
 **canonical log**：

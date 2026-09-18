@@ -178,6 +178,6 @@ build`），直接 `tsx` 调用脚本，语义与流程一致。
 ## 交接
 
 - 适配改动落地走 `dsh-plugin-implement`（先接缝、先测试）；同步后要跑哪些证据按
-  [`.agents/standards/how-to-verify.md`](../../standards/how-to-verify.md) 的证据矩阵选。
+  `.agents/standards/`（含改动所属层）的证据口径选。
 - 上游变更带来的适配决策落哪个 home（ADR / 设计 / 债务）的判据与模板见 `dsh-plugin-design`；
   改完审查走 `dsh-plugin-review`。

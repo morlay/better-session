@@ -7,10 +7,8 @@
 mock 内部协作者、测私有方法、绕过接口查内部状态（直接读库表、读私有字段）来断言。
 
 - 征兆：行为没变，重构却让测试碎掉；或测试替身比被测代码还长。
-- 本仓库的判据：数据层测试用真实 SQLite `:memory:` 穿 `ctx.sessionPersistence` 接缝
-  （`packages/session/session-rdb/src/__tests__/rdb.spec.ts`），不 mock 内部 repository；
-  编排层测试穿 `ctx.sessionEditor` / HTTP 面（`ui-conversation-message-actions/src/__tests__/http.spec.ts`），
-  不断言 `SessionEditor` 的私有字段。
+- 判据：数据层测试用真实存储（如 SQLite `:memory:`）穿持久化服务接缝，不 mock 内部 repository；
+  编排层测试穿编排服务 / HTTP 面，不断言实现类的私有字段。
 - 改：把断言移回接缝（调用方与测试共同的边界），只依赖接口承诺。
 
 ## 同义反复
@@ -28,9 +26,9 @@ mock 内部协作者、测私有方法、绕过接口查内部状态（直接读
 不从调用方与测试共同的边界进，而是直接构造实现内部状态、或按实现内部形状写断言。
 
 - 征兆：测试 import 的是包的内部路径而非包门面 / `testing` 出口；改一个私有函数名就红。
-- 本仓库的判据：跨包消费只经包出口（含 `@morlay/*/testing`），装配面经 `cordis.patch.yml` 的声明
-  （`session/better-session/src/__tests__/assembly.spec.ts`）而非手搓插件列表。
-- 改：回到 [`how-to-write.md`](../../../standards/how-to-write.md) 的「接缝在哪」表里对应的那一面，从那一面写测试。
+- 判据：跨包消费只经包出口（含各包的 `testing` 出口），装配面经 `cordis.patch.yml` 的声明而非手搓
+  插件列表。
+- 改：回到 `.agents/standards/` 里对应的那一面（改动所属层），从那一面写测试。
 
 ## 水平切片
 

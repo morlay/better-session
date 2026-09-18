@@ -59,7 +59,7 @@ Done when：上游满足任一项，我们侧的 duck-type 失效被删除：
 ## 基线
 
 - 基线版本：`DEEPSEEK_HARNESS_VERSION`（见根 `mise.toml`）；
-- 失败模式与截断语义：[packages/session/session-rdb/.agents/designs/0002-分支能力.md](../../packages/session/session-rdb/.agents/designs/0002-分支能力.md)；
+- 失败模式与截断语义：[packages/session/session-rdb/.agents/designs/20260917-分支能力.md](../../packages/session/session-rdb/.agents/designs/20260917-分支能力.md)；
 - 守护测试（同一 meter 实例 + 预热水位）：
   `packages/session/session-rdb/src/__tests__/{branch,import}.spec.ts`、
   `packages/session/ui-conversation-message-actions/src/__tests__/meter-watermark.spec.ts`
