@@ -22,14 +22,18 @@ import {
   IconTrashOutline16,
   Tooltip,
 } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { QueueAction, QueueItemId, QueueRow } from "../contract/queue.ts";
-import { NS } from "../locales.ts";
-import { queueTextOf } from "./queue-text.ts";
+import type { InboxState } from "@deepseek-ai/dsh-agent/types";
+import type { QueueAction } from "@deepseek-ai/dsh-api-session-controller/types";
+import type { MessageId } from "@deepseek-ai/dsh-llm/brand";
+import { NS } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/locales.ts";
+import { queueRowTextOf, queueTextOf } from "./queue-text.ts";
 import { styles } from "./QueueDock.styles.ts";
+
+const EMPTY_QUEUE = [] as const;
 
 /** Queue operations injected by the session-scoped registration. */
 export interface QueueDockInjected {
-  updateQueue: (itemId: QueueItemId, action: QueueAction) => Promise<void>;
+  updateQueue: (itemId: MessageId, action: QueueAction) => Promise<void>;
   notify: (level: "info" | "error", text: string) => void;
   /** Resolve one durable queued image into a session-scoped browser URL. */
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>;
@@ -43,7 +47,7 @@ export interface QueueDockInjected {
  * @returns the row's durable image references in block order.
  */
 function queueAttachments(
-  content: QueueRow["content"],
+  content: InboxState["next-turn"][number]["content"],
 ): Array<
   | { readonly type: "image"; readonly attachment: ImageAttachmentRef }
   | { readonly type: "file"; readonly attachment: FileAttachmentRef }
@@ -120,12 +124,21 @@ export type QueueDockProps = PropsRuntime<"conversation.input.dock"> &
  * collapsible count header; an empty queue renders nothing. Local submissions
  * show sending status and disabled actions until their Host queue rows arrive.
  */
-export function QueueDock({ useSession, updateQueue, notify, loadImage, t }: QueueDockProps) {
-  const inbox = useSession((s) => s.queue);
-  const queue = useMemo(() => inbox.filter((row) => row.placement === "queued"), [inbox]);
+export function QueueDock({
+  useSession,
+  useProjection,
+  updateQueue,
+  notify,
+  loadImage,
+  t,
+}: QueueDockProps) {
+  const inbox = useProjection("inbox") as unknown as InboxState | undefined;
+  const queue = inbox?.["next-turn"] ?? EMPTY_QUEUE;
   const pendingSubmissions = useSession((s) => s.pendingSubmissions);
   const pendingQueue = useMemo(() => {
-    const admitted = new Set(queue.flatMap((row) => (row.rpcId === undefined ? [] : [row.rpcId])));
+    const admitted = new Set(
+      queue.flatMap(({ source }) => (source.kind === "user" && "rpcId" in source ? [source.rpcId] : [])),
+    );
     return pendingSubmissions.filter(
       (submission) => submission.placement === "queued" && !admitted.has(submission.requestId),
     );
@@ -135,8 +148,8 @@ export function QueueDock({ useSession, updateQueue, notify, loadImage, t }: Que
   const queueMutable = useSession(
     (s) => s.subagent === null || s.subagent.address.mode === "continuable",
   );
-  const [editing, setEditing] = useState<{ id: QueueItemId; text: string } | null>(null);
-  const [busy, setBusy] = useState<QueueItemId | null>(null);
+  const [editing, setEditing] = useState<{ id: MessageId; text: string } | null>(null);
+  const [busy, setBusy] = useState<MessageId | null>(null);
   const [collapsed, setCollapsed] = useState(true);
   const listId = useId();
   // labels 按 locale revision 稳定（官方 MarkdownText 在它上面 memo 渲染缓存）。
@@ -156,7 +169,7 @@ export function QueueDock({ useSession, updateQueue, notify, loadImage, t }: Que
   const listVisible = rowCount === 1 || expanded;
 
   const applyAction = async (
-    itemId: QueueItemId,
+    itemId: MessageId,
     action: QueueAction,
     failure: string,
   ): Promise<boolean> => {
@@ -216,6 +229,7 @@ export function QueueDock({ useSession, updateQueue, notify, loadImage, t }: Que
           {listVisible &&
             queue.map((row) => {
               const attachments = queueAttachments(row.content);
+              const rowText = queueRowTextOf(row.content);
               return (
                 <li key={row.id} {...styling.props(styles.row)} data-queue-row="">
                   {/* Single-item strip has no count header, so the row itself carries the queue glyph. */}
@@ -267,7 +281,7 @@ export function QueueDock({ useSession, updateQueue, notify, loadImage, t }: Que
                         </span>
                       )}
                       <span {...styling.props(styles.preview)}>
-                        <ReferenceMarkdown text={queueTextOf(row)} labels={labels} />
+                        <ReferenceMarkdown text={queueTextOf(rowText)} labels={labels} />
                       </span>
                     </>
                   )}
@@ -308,7 +322,7 @@ export function QueueDock({ useSession, updateQueue, notify, loadImage, t }: Que
                             label={t("queue.edit")}
                             side="bottom"
                             delayMs={500}
-                            disabled={row.text === null}
+                            disabled={rowText.text === null}
                           >
                             <button
                               type="button"
@@ -316,10 +330,11 @@ export function QueueDock({ useSession, updateQueue, notify, loadImage, t }: Que
                               aria-label={t("queue.edit")}
                               // Disabled buttons fire no hover events, so the
                               // unsupported hint stays a native title.
-                              title={row.text === null ? t("queue.edit.unsupported") : undefined}
-                              disabled={busy !== null || row.text === null}
+                              title={rowText.text === null ? t("queue.edit.unsupported") : undefined}
+                              disabled={busy !== null || rowText.text === null}
                               onClick={() => {
-                                if (row.text !== null) setEditing({ id: row.id, text: row.text });
+                                if (rowText.text !== null)
+                                  setEditing({ id: row.id, text: rowText.text });
                               }}
                             >
                               <IconEditOutline16 size={14} />

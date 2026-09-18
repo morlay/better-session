@@ -10,7 +10,7 @@ import {
   PASTE_COMMAND,
 } from "lexical";
 import { mergeRegister } from "@lexical/utils";
-import type { ArbitrateKey, ArbitrateOutcome } from "../../contract/draft-editor.ts";
+import type { ArbitrateKey, ArbitrateOutcome } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/draft-editor.ts";
 import { clipboardSources, pasteTextOf, resolveClipboardData } from "../clipboard-resource.ts";
 
 export interface ComposerKeymapHandlers {
@@ -84,7 +84,13 @@ export function registerComposerKeymap(
     editor.registerCommand(KEY_ARROW_UP_COMMAND, arrow("up"), COMMAND_PRIORITY_CRITICAL),
     editor.registerCommand(KEY_ARROW_DOWN_COMMAND, arrow("down"), COMMAND_PRIORITY_CRITICAL),
 
-    editor.registerCommand(KEY_TAB_COMMAND, arrow("tab"), COMMAND_PRIORITY_CRITICAL),
+    // Tab 只在触发菜单有高亮项时消费；Shift+Tab 只要菜单开着就按 Escape 处理
+    // （有无高亮都一样），两个 Tab 手势对草稿的消费口径因此不会分歧。
+    editor.registerCommand(
+      KEY_TAB_COMMAND,
+      (event) => arrow(event.shiftKey ? "tabBack" : "tab")(event),
+      COMMAND_PRIORITY_CRITICAL,
+    ),
     editor.registerCommand(
       KEY_ESCAPE_COMMAND,
       (event) => {

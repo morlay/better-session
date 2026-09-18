@@ -1,4 +1,5 @@
 import type { Context } from "@deepseek-ai/cordis";
+import type { InboxState } from "@deepseek-ai/dsh-agent/types";
 import {
   createSnapshotStore,
   type ObservableSnapshot,
@@ -9,18 +10,17 @@ import type {
   CommandClaim,
   ConsumeTokenRequest,
   DraftAttachmentId,
-  InputActions,
   InputEffect,
   InputNotice,
   InputState,
   InputTriggerController,
   PickOutcome,
-  QueuedMessage,
-  SessionInput,
   SubmitAttempt,
   SubmitAttachment,
   SubmitOutcome,
-} from "../contract/input.ts";
+} from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/input.ts";
+// fork 扩宽的那两项（`restoreDraft` 与它在动作面上的入口）来自本地契约文件。
+import type { InputActions, SessionInput } from "../contract/input.ts";
 import type {
   ArbitrateKey,
   ArbitrateOutcome,
@@ -28,12 +28,12 @@ import type {
   Occurrence,
   ReferenceInsert,
   TokenSpan,
-} from "../contract/draft-editor.ts";
-import type { InputSubmitMode } from "../contract/composer-submission.ts";
+} from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/draft-editor.ts";
+import type { InputSubmitMode } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/composer-submission.ts";
 import { clipboardUriOf } from "./clipboard-resource.ts";
-import { SubmitMachine } from "./machine.ts";
+import { SubmitMachine } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/machine.ts";
 import { DraftEditorRuntime } from "./editor/runtime.ts";
-import type { EditorProjection } from "./editor/projection.ts";
+import type { EditorProjection } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/projection.ts";
 
 export interface PopupDismissFace {
   dismiss(): void;
@@ -46,7 +46,8 @@ export interface SessionInputDeps {
 
   popup?: (() => PopupDismissFace | undefined) | undefined;
 
-  queue?: ObservableSnapshot<readonly QueuedMessage[]> | undefined;
+  /** Agent inbox 投影；next-turn 列表叠到 InputState.queue 上（缺省即空）。 */
+  inbox?: ObservableSnapshot<InboxState | undefined> | undefined;
 
   cwd?: (() => string | undefined) | undefined;
 
@@ -90,7 +91,7 @@ function projectionContentChanged(prev: EditorProjection, next: EditorProjection
   });
 }
 
-const EMPTY_QUEUE: readonly QueuedMessage[] = [];
+const EMPTY_QUEUE: InboxState["next-turn"] = [];
 
 const EMPTY_LEXICON: ReadonlyMap<"/" | "@", readonly string[]> = new Map();
 
@@ -162,6 +163,8 @@ export class SessionInputShell implements SessionInput {
     }
   >();
 
+  private readonly unsubscribeInbox: (() => void) | undefined;
+
   constructor(private readonly deps: SessionInputDeps) {
     this.draftEditor = new DraftEditorRuntime({
       onUpdate: () => {
@@ -175,7 +178,7 @@ export class SessionInputShell implements SessionInput {
     });
     this.unregister = this.draftEditor.register();
     this.state = createSnapshotStore<InputState>(this.compose());
-    deps.queue?.subscribe(() => {
+    this.unsubscribeInbox = deps.inbox?.subscribe(() => {
       this.publish();
     });
   }
@@ -369,6 +372,15 @@ export class SessionInputShell implements SessionInput {
     this.notices.set({ level, text, seq: this.noticeSeq });
   }
 
+  /**
+   * 把键盘交回 composer，并复原它上次的插入点：Lexical 自己的 focus 会还原它记住的
+   * 选区，而直接给 contenteditable 做 DOM focus 会把插入点落到开头。
+   */
+  focus(): void {
+    this.editor.getRootElement()?.focus({ preventScroll: true });
+    this.editor.focus();
+  }
+
   dispose(): readonly DraftAttachmentId[] {
     if (this.disposed) return [];
     const retained = new Set(this.attachmentIds);
@@ -381,6 +393,7 @@ export class SessionInputShell implements SessionInput {
     }
     this.disposed = true;
     this.dispatchRun({ type: "release" });
+    this.unsubscribeInbox?.();
     this.unregister();
     this.detachedDrafts.clear();
     this.failedDetached.clear();
@@ -671,7 +684,7 @@ export class SessionInputShell implements SessionInput {
       phase: core.phase,
       ...(core.claim !== undefined ? { claim: core.claim } : {}),
       occurrences: this.projection.occurrences,
-      queue: this.deps.queue?.getSnapshot() ?? EMPTY_QUEUE,
+      queue: this.deps.inbox?.getSnapshot()?.["next-turn"] ?? EMPTY_QUEUE,
     };
   }
 

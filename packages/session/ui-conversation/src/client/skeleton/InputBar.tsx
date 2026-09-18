@@ -31,8 +31,8 @@ import type {} from "@deepseek-ai/dsh-goal/client";
 // wire types: apiproxy's sessions contract declares it, and client-runtime's
 // api-remotes import already places it in every client program.
 import type { Translate } from "@deepseek-ai/dsh-client-ui-slots";
-import type { ComposerBarProps } from "../contract/slots.ts";
-import { DraftEditor } from "../input/editor/DraftEditor.tsx";
+import type { ComposerBarProps } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/slots.ts";
+import { DraftEditor } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/DraftEditor.tsx";
 import {
   focusDraftEditor,
   installDraftFilePicker,
@@ -41,9 +41,9 @@ import {
   keepDraftFocus,
   revealDraftSelection,
 } from "../input/editor/view-binding.ts";
-import { resolveSubmitMode } from "../input/submission-policy.ts";
-import { attachmentErrorText, imageSizeText } from "../image-labels.ts";
-import { ContextMeter } from "./ContextMeter.tsx";
+import { resolveSubmitMode } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/submission-policy.ts";
+import { attachmentErrorText, imageSizeText } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/image-labels.ts";
+import { ContextMeter } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx";
 import { styles } from "./InputBar.styles.ts";
 
 export type InputBarProps = ComposerBarProps;
@@ -138,6 +138,10 @@ export const InputBar = memo(function InputBar({
   useEffect(() => {
     if (promptError === null) return;
     const { error } = promptError;
+    if (error.code === "session/writer-held") {
+      showToast(t("error.sessionInUse"));
+      return;
+    }
     showToast(
       error.code === "session/attachment-invalid" || error.code === "subagent/attachment-invalid"
         ? attachmentErrorText(t, error.details.reason, imageLimits)
@@ -181,7 +185,7 @@ export const InputBar = memo(function InputBar({
     empty &&
     running &&
     steeringAvailable &&
-    input.queue.some((row) => row.placement === "queued");
+    input.queue.length > 0;
 
   useEffect(() => {
     if (input === undefined || inputActions === undefined) return;
@@ -324,7 +328,11 @@ export const InputBar = memo(function InputBar({
   };
 
   const onToggleCommandMenu = (): void => {
-    if (keyboard !== undefined) toggleCommandMenu?.(keyboard.caretSpan());
+    if (keyboard === undefined) return;
+    // 菜单是编辑器上的 combobox，键盘得先在编辑器里：用键盘触发按钮时焦点
+    // 留在按钮上，事后再复原会把空草稿重新 track 一遍，菜单又被关掉。
+    if (editor !== null) focusDraftEditor(editor, revealSelection);
+    toggleCommandMenu?.(keyboard.caretSpan());
   };
 
   // The no-session Workspace trigger: the resident editable div acts as the
@@ -582,9 +590,11 @@ export const InputBar = memo(function InputBar({
           </div>
         </div>
       </div>
-      {variant === "composer" && input !== undefined && sessionId !== undefined
-        ? renderSlot("conversation.composer.dock", {})
-        : null}
+      <div {...styling.props(styles.dock)} data-composer-dock>
+        {variant === "composer" && input !== undefined && sessionId !== undefined
+          ? renderSlot("conversation.composer.dock", {})
+          : null}
+      </div>
     </div>
   );
 });

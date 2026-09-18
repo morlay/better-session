@@ -15,13 +15,13 @@ import {
 import { registerPlainText } from "@lexical/plain-text";
 import { createEmptyHistoryState, registerHistory } from "@lexical/history";
 import { mergeRegister } from "@lexical/utils";
-import type { Occurrence, ReferenceInsert } from "../../contract/draft-editor.ts";
-import { registerReferenceActivation } from "./reference-activation.ts";
-import { ReferenceChipNode } from "./chip-node.tsx";
-import { refreshClaimDecoration, registerClaimDecoration } from "./claim-decor.ts";
-import { registerTextRefDecoration, rescanTextRefs, TextRefNode } from "./text-ref.ts";
-import type { EditorProjection } from "./projection.ts";
-import { $composerLayout, $projectComposer, detectOffsetOfClipboardOffset } from "./projection.ts";
+import type { Occurrence, ReferenceInsert } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/draft-editor.ts";
+import { registerReferenceActivation } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/reference-activation.ts";
+import { ReferenceChipNode } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/chip-node.tsx";
+import { refreshClaimDecoration, registerClaimDecoration } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/claim-decor.ts";
+import { registerTextRefDecoration, rescanTextRefs, TextRefNode } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/text-ref.ts";
+import type { EditorProjection } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/projection.ts";
+import { $composerLayout, $projectComposer, detectOffsetOfClipboardOffset } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/projection.ts";
 import { $replaceDetectSpanWithText } from "./span-map.ts";
 import type { DetectSpan } from "./span-map.ts";
 

@@ -1,9 +1,9 @@
 import type { MouseEvent, MutableRefObject, RefObject } from "react";
 import type { LexicalEditor } from "lexical";
-import type { ComposerKeyboard } from "../../contract/draft-editor.ts";
-import type { ComposerBarProps } from "../../contract/slots.ts";
-import type { BusyEnterBehavior } from "../../contract/composer-submission.ts";
-import { resolveSubmitMode } from "../submission-policy.ts";
+import type { ComposerKeyboard } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/draft-editor.ts";
+import type { ComposerBarProps } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/slots.ts";
+import type { BusyEnterBehavior } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/composer-submission.ts";
+import { resolveSubmitMode } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/submission-policy.ts";
 import { registerComposerKeymap } from "./keymap.ts";
 
 interface DraftViewGate {
@@ -76,6 +76,14 @@ export function installDraftFilePicker(
   });
 }
 
+/**
+ * fork 扩宽：键盘面比上游多一个「把工作区路径落成 `file:` 相对 URI」的注入。上游那份
+ * `ComposerKeyboard` 的公开面（`conversation.composer.bar` 的 inject 面）里没有它，而
+ * 运行期的 shell 一定带（`SessionInputShell.clipboardUri`），所以这里按事实收窄一次 ——
+ * 全包仅此一处 cast。
+ */
+type ClipboardKeyboard = ComposerKeyboard & { clipboardUri(path: string): string };
+
 export function installDraftKeymap(
   editor: LexicalEditor,
   keyboard: ComposerKeyboard,
@@ -118,7 +126,7 @@ export function installDraftKeymap(
       if (gate.current.machineBusy || gate.current.locked) return;
       keyboard.paste(text);
     },
-    clipboardUri: (path) => keyboard.clipboardUri(path),
+    clipboardUri: (path) => (keyboard as ClipboardKeyboard).clipboardUri(path),
   });
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ReferenceInsert } from "../client/contract/draft-editor.ts";
+import type { ReferenceInsert } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/draft-editor.ts";
 import { insertTextOf, referenceTextOf } from "../client/input/reference-text.ts";
 
 const fileInsert: ReferenceInsert = {

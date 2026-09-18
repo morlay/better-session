@@ -22,6 +22,20 @@ export const styles = {
       WebkitLineClamp: "2",
       lineClamp: "2",
     },
+    // 跟上游 `.hero .dock:empty`：空的开位在 hero 里不占位（hero 不渲染 dock 内容，
+    // 只有容器在）。
+    "& [data-composer-dock]:empty": {
+      display: "none",
+    },
+  },
+  // 卡片下方的一条开位行（上游 `.dock`）：queue / todo 这些 ambient 条目并排居中。
+  dock: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "12px",
+    maxWidth: "100%",
+    paddingTop: "4px",
   },
   notice: {
     width: "100%",

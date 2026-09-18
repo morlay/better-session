@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
-// fork 差异点（docs/debt/0001）：引用插入走纯文本、提交回上游 sink、restoreDraft 收窄、
+// fork 差异点（见本包 .agents/debts/20260917-临时接管上游对话UI的client半.md）：引用插入走纯文本、提交回上游 sink、restoreDraft 收窄、
 // cwd 注入。接缝是 SessionInputShell 的公开面（SessionInput / ComposerKeyboard）。
 import { Context } from "@deepseek-ai/cordis";
 import type { ObservableSnapshot } from "@deepseek-ai/dsh-client-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReferenceInsert, TokenSpan } from "../client/contract/draft-editor.ts";
-import type { InputSubmitMode } from "../client/contract/composer-submission.ts";
+import type { ReferenceInsert, TokenSpan } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/draft-editor.ts";
+import type { InputSubmitMode } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/composer-submission.ts";
 import type {
   DraftAttachmentId,
   InputTriggerController,
   SubmitOutcome,
-} from "../client/contract/input.ts";
+} from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/input.ts";
 import { SessionInputShell } from "../client/input/facade.ts";
 
 const FILE_INSERT: ReferenceInsert = {

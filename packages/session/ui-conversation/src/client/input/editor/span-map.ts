@@ -1,7 +1,7 @@
 import type { RangeSelection } from "lexical";
 import { $createRangeSelection, $getRoot, $setSelection } from "lexical";
-import type { ComposerLayout } from "./projection.ts";
-import { $composerLayout } from "./projection.ts";
+import type { ComposerLayout } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/projection.ts";
+import { $composerLayout } from "../../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/editor/projection.ts";
 
 export interface DetectSpan {
   readonly start: number;

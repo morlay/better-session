@@ -1,252 +1,33 @@
+/**
+ * fork 的输入契约扩宽：上游 `contract/input.ts` 是**同一声明实例**（我们没复制它），
+ * 这里只加 fork 多出来的面。上游那些声明继续从 vendor 源引用，两边的跨包比较因此
+ * 落在同一份类型上，不会出现「结构相同但是两条类型实例」的失败。
+ *
+ * 为什么不直接对 vendor 模块做 augmentation：`dts` 打包会把上游那份声明**内联**进
+ * 我们的产物（内联的是未扩宽的那一份），augmentation 只会作为一条悬空的 `declare
+ * module` 留下 —— 发布出去的类型面反而丢了扩宽。显式声明在这里，产物里的类型面就
+ * 和运行期一致。
+ */
 import type { Context } from "@deepseek-ai/cordis";
-import type { ObservableSnapshot, SnapshotStore } from "@deepseek-ai/dsh-client-store";
-import type { Branded } from "@deepseek-ai/dsh-brand";
 import type {
-  ArbitrateKey,
-  ArbitrateOutcome,
-  Occurrence,
-  ReferenceInsert,
-  TokenSpan,
-} from "./draft-editor.ts";
-import type { QueueRow } from "./queue.ts";
-import type { InputSubmitMode } from "./composer-submission.ts";
+  InputActions as UpstreamInputActions,
+  SessionInput as UpstreamSessionInput,
+  SessionInputResolver as UpstreamSessionInputResolver,
+} from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/input.ts";
 
-export type SubmitAttachment =
-  | {
-      readonly type: "image";
-      readonly mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
-      readonly data: string;
-      readonly name?: string;
-    }
-  | { readonly type: "file"; readonly receiptId: string };
-
-export interface DraftAttachmentSerializationResult {
-  readonly attachments: readonly SubmitAttachment[];
-}
-
-export interface SubmitOutcome {
-  readonly kind: "success" | "error";
-  readonly text?: string;
-}
-
-export interface CommandClaim {
-  readonly name: string;
-
-  readonly token: string;
-  readonly hint?: string;
-  readonly attachments?: boolean;
-
-  submit(
-    args: string,
-    actx: Context,
-    attachments: readonly SubmitAttachment[],
-  ): Promise<SubmitOutcome>;
-}
-
-export type PickOutcome =
-  | { readonly claim: CommandClaim }
-  | { readonly insert: ReferenceInsert }
-  | { readonly text: string; readonly continue?: boolean }
-  | "handled"
-  | undefined;
-
-export interface BeginCommandRequest {
-  readonly claim: CommandClaim;
-  readonly span: TokenSpan;
-}
-
-export interface InsertReferenceRequest {
-  readonly reference: ReferenceInsert;
-  readonly span: TokenSpan;
-}
-
-export interface ConsumeTokenRequest {
-  readonly guard:
-    | { readonly kind: "span"; readonly span: TokenSpan }
-    | { readonly kind: "bare-token"; readonly token: string };
-}
-
-export interface InsertTextRequest {
-  readonly text: string;
-  readonly span: TokenSpan;
-  readonly continue?: boolean;
-}
-
-export interface InputTriggerHit {
-  readonly trigger: "/" | "@";
-  readonly query: string;
-  readonly quoted: boolean;
-  readonly position: "leading" | "inline";
-  readonly span: TokenSpan;
-}
-
-export interface InputTriggerController {
-  readonly launcher: ObservableSnapshot<string | null>;
-  readonly lexicon: ObservableSnapshot<ReadonlyMap<"/" | "@", readonly string[]>>;
-
-  track(
-    draft: string,
-    caret: number,
-    guard: { readonly tier: "plain" | "claimed" | "frozen" },
-    draftRev: number,
-  ): void;
-
-  arbitrate(key: ArbitrateKey, composing: boolean): ArbitrateOutcome;
-
-  onSpace(): boolean;
-
-  serializeReference(source: string, ref: string, signal: AbortSignal): Promise<string>;
-
-  adjudicate(
-    line: string,
-    signal: AbortSignal,
-    envelope: { readonly attachments: number },
-  ): Promise<PickOutcome>;
-
-  openReference(
-    source: string | undefined,
-    reference: Pick<ReferenceInsert, "ref" | "appearance">,
-  ): boolean;
-
-  toggleSource(source: string, hit: InputTriggerHit): void;
-}
-
-declare module "@deepseek-ai/cordis" {
-  interface Events {
-    "slash/input-begin-command"(request: BeginCommandRequest): true | undefined;
-
-    "slash/input-insert-reference"(request: InsertReferenceRequest): true | undefined;
-
-    "slash/input-consume-token"(request: ConsumeTokenRequest): true | undefined;
-
-    "slash/input-insert-text"(request: InsertTextRequest): true | undefined;
-  }
-}
-
-export type DraftAttachmentId = Branded<"DraftAttachmentId">;
-
-export interface InputTarget {
-  beginCommand(claim: CommandClaim, span: TokenSpan): boolean;
-
-  insertReference(ref: ReferenceInsert, span: TokenSpan): boolean;
-}
-
-export interface SessionInput extends InputTarget {
-  setDraft(text: string): void;
-
+/** 会话输入面：上游那份加上 fork 的草稿还原入口。 */
+export interface SessionInput extends UpstreamSessionInput {
+  /** 把草稿整段换成纯文本（不重建引用出现项）。 */
   restoreDraft(draft: string): void;
-
-  addAttachments(ids: readonly DraftAttachmentId[]): boolean;
-
-  removeAttachment(id: DraftAttachmentId): boolean;
-
-  pruneAttachments(ids: readonly DraftAttachmentId[]): void;
-
-  submit(mode?: InputSubmitMode): void;
-
-  notify(level: "info" | "error", text: string): void;
-
-  readonly state: SnapshotStore<InputState>;
 }
 
-export interface SessionInputResolver {
+/** 会话寻址的输入解析器：`for` 收窄到带 `restoreDraft` 的那份 facade。 */
+export interface SessionInputResolver extends Omit<UpstreamSessionInputResolver, "for"> {
   for(actx: Context): SessionInput;
 }
 
-export interface InputActions {
-  setDraft(text: string): void;
-
+/** 公共输入动作面：同样带上草稿还原。 */
+export interface InputActions extends UpstreamInputActions {
+  /** 把草稿整段换成纯文本（不重建引用出现项）。 */
   restoreDraft(draft: string): void;
-
-  addAttachments(ids: readonly DraftAttachmentId[]): boolean;
-
-  removeAttachment(id: DraftAttachmentId): void;
-
-  pruneAttachments(ids: readonly DraftAttachmentId[]): void;
-
-  submit(): void;
 }
-
-export interface InputNotice {
-  readonly level: "info" | "error";
-  readonly text: string;
-  readonly seq: number;
-}
-
-export type QueuedMessage = QueueRow;
-
-export type ConsumeTokenGuard = ConsumeTokenRequest["guard"];
-
-export interface InputState {
-  readonly draft: string;
-
-  readonly attachmentIds: readonly DraftAttachmentId[];
-
-  readonly draftRev: number;
-  readonly phase: "plain" | "adjudicating" | "claimed" | "submitting";
-
-  readonly claim?: {
-    readonly name: string;
-    readonly token: string;
-    readonly hint?: string;
-    readonly attachments?: boolean;
-  };
-
-  readonly occurrences: readonly Occurrence[];
-
-  readonly queue: readonly QueuedMessage[];
-}
-
-export interface SubmitAttempt {
-  readonly seq: number;
-  readonly signal: AbortSignal;
-
-  readonly draftSnapshot: string;
-
-  readonly mode: InputSubmitMode;
-}
-
-export type InputEvent =
-  | { readonly type: "draft-changed"; readonly draft: string }
-  | { readonly type: "claim"; readonly claim: CommandClaim }
-  | { readonly type: "enter"; readonly mode: InputSubmitMode; readonly draft: string }
-  | { readonly type: "adjudicated"; readonly attempt: SubmitAttempt; readonly outcome: PickOutcome }
-  | {
-      readonly type: "adjudication-failed";
-      readonly attempt: SubmitAttempt;
-      readonly message: string;
-    }
-  | {
-      readonly type: "submit-settled";
-      readonly attempt: SubmitAttempt;
-      readonly ok: boolean;
-      readonly draft: string;
-      readonly outcome?: SubmitOutcome;
-      readonly message?: string;
-    }
-  | {
-      readonly type: "sink-settled";
-      readonly attempt: SubmitAttempt;
-      readonly ok: boolean;
-      readonly outcome?: SubmitOutcome;
-      readonly message?: string;
-    }
-  | { readonly type: "send-committed" }
-  | { readonly type: "release" };
-
-export type InputEffect =
-  | { readonly type: "adjudicate"; readonly attempt: SubmitAttempt; readonly draft: string }
-  | {
-      readonly type: "begin-submit";
-      readonly attempt: SubmitAttempt;
-      readonly claim: CommandClaim;
-      readonly args: string;
-    }
-  | {
-      readonly type: "default-sink";
-      readonly attempt: SubmitAttempt;
-      readonly draft: string;
-      readonly mode: InputSubmitMode;
-    }
-  | { readonly type: "notice"; readonly level: "info" | "error"; readonly text: string }
-  | { readonly type: "commit-draft"; readonly retainSuffixOf: string | null };

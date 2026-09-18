@@ -1,6 +1,6 @@
 import type { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
-import type { ISessions } from "@deepseek-ai/dsh-api-session-controller/client";
+import type { ISessions, SessionBinding } from "@deepseek-ai/dsh-api-session-controller/client";
 import { IconPaperclipOutline16 } from "@deepseek-ai/dsh-client-ui-primitives";
 import { createSnapshotStore, type BoundActions } from "@deepseek-ai/dsh-client-store";
 import { resolveSlotLabel } from "@deepseek-ai/dsh-client-ui-slots";
@@ -10,37 +10,38 @@ import type {} from "@deepseek-ai/dsh-client-locale/client";
 import type {} from "@deepseek-ai/dsh-client-ui-renderer/client";
 import type {} from "@deepseek-ai/dsh-client-ui-session/client";
 import type {} from "@deepseek-ai/dsh-client-ui-settings/client";
-import { UiConversation } from "./conversation/assembly.ts";
-import type { ViewTab } from "./contract/views.ts";
+import { UiConversation } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/conversation/assembly.ts";
+import type { ViewTab } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/views.ts";
 import type {
   ComposerBarInjected,
   ConversationInjected,
   ConversationSessionHeaderInjected,
   ConversationSessionInjected,
   DraftFileUploads,
-} from "./contract/slots.ts";
-import type { InputNotice } from "./contract/input.ts";
-import { createConversationStore, readConversationViewPreference } from "./stores.ts";
-import { ConversationController, UnsupportedImageMediaTypeError } from "./service.ts";
-import type { IConversation } from "./service.ts";
-import { ComposerBlockRegistry } from "./input/blocks.ts";
-import type { ComposerBlock } from "./contract/composer-blocks.ts";
+} from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/slots.ts";
+import type { InputNotice } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/input.ts";
+import { createConversationStore, readConversationViewPreference } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/stores.ts";
+import { ConversationController, UnsupportedImageMediaTypeError } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/service.ts";
+import type { IConversation } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/service.ts";
+import { ComposerBlockRegistry } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/blocks.ts";
+import type { ComposerBlock } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/composer-blocks.ts";
 import { InputHub } from "./input/hub.ts";
-import { ComposerSubmissionPolicy } from "./input/submission-policy.ts";
+import { ComposerSubmissionPolicy } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/submission-policy.ts";
 import { queueDockEntry } from "./queue/QueueDock.tsx";
-import { EnterBehaviorRow } from "./settings/EnterBehaviorRow.tsx";
-import type { EnterBehaviorRowInjected } from "./settings/EnterBehaviorRow.tsx";
-import { ConversationRoot } from "./skeleton/ConversationRoot.tsx";
-import { ConversationPanel } from "./skeleton/ConversationPanel.tsx";
-import { ConversationSession, ConversationSessionHeader } from "./skeleton/ConversationSession.tsx";
+import { EnterBehaviorRow } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/settings/EnterBehaviorRow.tsx";
+import type { EnterBehaviorRowInjected } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/settings/EnterBehaviorRow.tsx";
+import { ConversationRoot } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx";
+import { ConversationContent } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx";
+import { ConversationPanel } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/skeleton/ConversationPanel.tsx";
+import { ConversationSession, ConversationSessionHeader } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/skeleton/ConversationSession.tsx";
 import { InputBar } from "./skeleton/InputBar.tsx";
-import { todoDockEntry } from "./skeleton/TodoPanel.tsx";
-import { resolveActiveView } from "./view-selection.ts";
-import { en, NS, zh, type ConversationKey } from "./locales.ts";
+import { todoDockEntry } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx";
+import { resolveActiveView } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/view-selection.ts";
+import { en, NS, zh, type ConversationKey } from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/locales.ts";
 import {
   CONVERSATION_SETTINGS_NAMESPACE,
   type ConversationSettings,
-} from "../submission-settings.ts";
+} from "../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/submission-settings.ts";
 
 declare module "@deepseek-ai/dsh-client-ui-slots" {
   interface LocaleNamespaceMap {
@@ -175,13 +176,22 @@ export function apply(ctx: Context, config: Config = Config({})): void {
   const restoreView = (sessionId: SessionId): void => {
     activateView(sessionId, readConversationViewPreference(sessionId));
   };
-  const restoreCurrentView = (): void => {
-    const sessionId = sessions.list.getSnapshot().current;
-    if (sessionId !== undefined && sessions.binding(sessionId) !== undefined) {
-      restoreView(sessionId);
-    }
-  };
   const conversationViews = createSnapshotStore<readonly ViewTab[]>(viewTabs());
+  // 保留模型换代后没有"当前会话"这个中心：谁被借出过（谁挂载过），谁就需要跟着
+  // View 名单刷新自己选中的 View。身份是 SessionBinding，借出结束时撤销登记。
+  const bindings = new Set<SessionBinding>();
+  const trackedBindings = new WeakSet<SessionBinding>();
+  const trackBinding = (binding: SessionBinding): void => {
+    if (trackedBindings.has(binding)) return;
+    trackedBindings.add(binding);
+    bindings.add(binding);
+    binding.ctx.effect(
+      () => () => {
+        bindings.delete(binding);
+      },
+      "ui-conversation: active Provider binding",
+    );
+  };
   const refreshViews = (): void => {
     const current = conversationViews.getSnapshot();
     const next = viewTabs();
@@ -192,20 +202,12 @@ export function apply(ctx: Context, config: Config = Config({})): void {
         return candidate !== undefined && tab.id === candidate.id && tab.label === candidate.label;
       });
     if (!unchanged) conversationViews.set(next);
-    restoreCurrentView();
+    for (const binding of bindings) restoreView(binding.sessionId);
   };
   ctx.effect(() => {
-    let currentSessionId = sessions.list.getSnapshot().current;
     const disposeViews = slots.subscribe("conversation.view", refreshViews);
     const disposeLocale = ctx.locale.subscribe(refreshViews);
-    const disposeCurrent = sessions.list.subscribe(() => {
-      const nextSessionId = sessions.list.getSnapshot().current;
-      if (nextSessionId === currentSessionId) return;
-      currentSessionId = nextSessionId;
-      restoreCurrentView();
-    });
     return () => {
-      disposeCurrent();
       disposeLocale();
       disposeViews();
     };
@@ -238,6 +240,7 @@ export function apply(ctx: Context, config: Config = Config({})): void {
     hooks: ["conversation", "input"],
     props: ["inputActions"],
     resolve: (binding) => {
+      trackBinding(binding);
       const shell = inputHub.shellFor(binding);
       const conversation = uiConversation.binding(binding);
       restoreView(binding.sessionId);
@@ -255,16 +258,31 @@ export function apply(ctx: Context, config: Config = Config({})): void {
     slots.register(
       {
         name: "main.conversation",
+        children: {
+          "conversation.session.header": { kind: "single", scope: "session" },
+        },
+      },
+      ConversationRoot,
+    );
+
+  const registerConversationContent = () =>
+    slots.registerFactory(
+      {
+        name: "conversation.content",
+        scope: "session-maybe",
         locale: NS,
         children: {
           "conversation.session": { kind: "single", scope: "session" },
-          "conversation.session.header": { kind: "single", scope: "session" },
           "conversation.composer": { kind: "chain", scope: "session" },
           "conversation.composer.bar": { kind: "single", scope: "session-maybe" },
           "conversation.input.dock": { kind: "list", scope: "session" },
           "conversation.hero.brand.mark": { kind: "single", scope: "root" },
           "conversation.hero.workspace": { kind: "single", scope: "root" },
-          "conversation.hero.agentPreset": { kind: "single", scope: "root" },
+          "conversation.hero.agentPreset": { kind: "single", scope: "session-maybe" },
+        },
+        slots: {
+          views: { scope: "session" },
+          widthControls: { scope: "root" },
         },
         inject: (sessionId: SessionId | undefined): ConversationInjected => ({
           hooks: {
@@ -295,7 +313,7 @@ export function apply(ctx: Context, config: Config = Config({})): void {
             }),
         }),
       },
-      ConversationRoot,
+      ConversationContent,
     );
 
   const registerConversationSession = () =>
@@ -328,6 +346,7 @@ export function apply(ctx: Context, config: Config = Config({})): void {
         locale: NS,
         children: {
           "conversation.session.header.lineage": { kind: "single", scope: "session" },
+          "conversation.session.header.leading": { kind: "single", scope: "session" },
           "conversation.session.header.actions": { kind: "list", scope: "session" },
           "conversation.session.header.utilities": { kind: "list", scope: "session" },
           "conversation.session.header.corner": { kind: "single", scope: "session" },
@@ -456,6 +475,7 @@ export function apply(ctx: Context, config: Config = Config({})): void {
       ConversationPanel,
     );
     yield registerConversationRoot();
+    yield registerConversationContent();
     yield registerConversationSession();
     yield registerConversationHeader();
     yield registerComposerBar();

@@ -1,4 +1,4 @@
-import type { ReferenceInsert } from "../contract/draft-editor.ts";
+import type { ReferenceInsert } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/draft-editor.ts";
 import { formatReference, type Reference } from "@morlay/dsh-client-ui-primitives/client";
 
 const AT_PATH = /^@(?:"([^"\n]*)"|([^\s]+))$/u;

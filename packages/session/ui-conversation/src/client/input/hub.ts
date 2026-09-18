@@ -6,17 +6,18 @@ import type {
 } from "@deepseek-ai/dsh-api-session-controller/client";
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
 import type { TranslateNS } from "@deepseek-ai/dsh-client-locale/client";
-import { queueReadFaceOf } from "./queue-store.ts";
+import type { InboxState } from "@deepseek-ai/dsh-agent/types";
+import type { ObservableSnapshot } from "@deepseek-ai/dsh-client-store";
 import type {
   DraftAttachmentId,
   DraftAttachmentSerializationResult,
   InputTriggerController,
-  SessionInputResolver,
-  SessionInput,
   SubmitOutcome,
-} from "../contract/input.ts";
-import type { ComposerKeyboard } from "../contract/draft-editor.ts";
-import type { InputSubmitMode } from "../contract/composer-submission.ts";
+} from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/input.ts";
+// fork 扩宽的那两项（带 `restoreDraft` 的 facade 与其解析器）来自本地契约文件。
+import type { SessionInput, SessionInputResolver } from "../contract/input.ts";
+import type { ComposerKeyboard } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/draft-editor.ts";
+import type { InputSubmitMode } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/contract/composer-submission.ts";
 import type { PopupDismissFace } from "./facade.ts";
 import { SessionInputShell } from "./facade.ts";
 import { insertTextOf, referenceTextOf } from "./reference-text.ts";
@@ -44,7 +45,7 @@ interface ConversationAttachmentFace {
 }
 
 export class InputHub implements SessionInputResolver {
-  private readonly shells = new Map<SessionId, SessionInputShell>();
+  private readonly shells = new WeakMap<SessionBinding, SessionInputShell>();
 
   constructor(
     private readonly rootCtx: Context,
@@ -53,20 +54,23 @@ export class InputHub implements SessionInputResolver {
 
   for(actx: Context): SessionInput {
     const sessions = this.sessions();
-    const id = sessions.scopeOf(actx);
-    if (id === undefined) throw new Error("conversation.input.for requires a session scope");
-    return this.shell(id);
+    const session = sessions.sessionOf(actx);
+    const binding = session === undefined ? undefined : sessions.binding(session.sessionId);
+    if (binding === undefined || binding.session !== session) {
+      throw new Error("conversation.input.for requires a retained Session scope");
+    }
+    return this.shellFor(binding);
   }
 
   shellFor(binding: SessionBinding): SessionInputShell {
-    const existing = this.shells.get(binding.sessionId);
+    const existing = this.shells.get(binding);
     if (existing !== undefined) return existing;
     const { sessionId: id, session, ctx: actx } = binding;
     const shell = new SessionInputShell({
       actx,
       inputTriggers: () => this.controller(actx),
       popup: () => this.popup(actx),
-      queue: queueReadFaceOf(session),
+      inbox: session.projections.faceOf("inbox") as ObservableSnapshot<InboxState | undefined>,
 
       cwd: () => this.sessions().list.getSnapshot().byId[id]?.cwd,
       defaultSink: (text, attachmentIds, mode, signal) =>
@@ -92,7 +96,7 @@ export class InputHub implements SessionInputResolver {
           }),
       },
     });
-    this.shells.set(id, shell);
+    this.shells.set(binding, shell);
 
     actx.effect(() => {
       const offs = [
@@ -114,7 +118,7 @@ export class InputHub implements SessionInputResolver {
       return () => {
         for (const off of offs) off();
         const drafts = shell.dispose();
-        this.shells.delete(id);
+        this.shells.delete(binding);
         const conversation = this.rootCtx.get("conversation") as
           | ConversationAttachmentFace
           | undefined;
@@ -125,8 +129,6 @@ export class InputHub implements SessionInputResolver {
   }
 
   shell(id: SessionId): SessionInputShell {
-    const existing = this.shells.get(id);
-    if (existing !== undefined) return existing;
     const binding = this.sessions().binding(id);
     if (binding === undefined)
       throw new Error(`conversation.input: session "${id}" resolved no binding`);
@@ -138,16 +140,18 @@ export class InputHub implements SessionInputResolver {
   }
 
   canPickFiles(id: SessionId): boolean {
-    return this.shells.get(id)?.canPickFiles() === true;
+    const binding = this.sessions().binding(id);
+    return binding !== undefined && this.shells.get(binding)?.canPickFiles() === true;
   }
 
   pickFiles(id: SessionId): void {
-    this.shells.get(id)?.pickFiles();
+    const binding = this.sessions().binding(id);
+    if (binding !== undefined) this.shells.get(binding)?.pickFiles();
   }
 
   inputTriggers(id: SessionId): InputTriggerController | undefined {
-    const actx = this.sessions().scope(id);
-    return actx === undefined ? undefined : this.controller(actx);
+    const binding = this.sessions().binding(id);
+    return binding === undefined ? undefined : this.controller(binding.ctx);
   }
 
   private sink(
@@ -162,7 +166,8 @@ export class InputHub implements SessionInputResolver {
   }
 
   private async steerQueue(session: SessionFace, shell: SessionInputShell): Promise<void> {
-    const queued = session.getSnapshot().queue.filter((item) => item.placement === "queued");
+    const inbox = session.projections.faceOf("inbox").getSnapshot() as InboxState | undefined;
+    const queued = inbox?.["next-turn"] ?? [];
     if (queued.length === 0) return;
     for (const item of queued) {
       const result = await session.updateQueue(item.id, { kind: "steer" });
@@ -178,11 +183,13 @@ export class InputHub implements SessionInputResolver {
   }
 
   private controller(actx: Context): InputTriggerController | undefined {
+    if (this.sessions().sessionOf(actx) === undefined) return undefined;
     const inputTriggers = this.rootCtx.get("inputTriggers") as InputTriggerServiceFace | undefined;
     return inputTriggers?.sessionOf(actx);
   }
 
   private popup(actx: Context): PopupDismissFace | undefined {
+    if (this.sessions().sessionOf(actx) === undefined) return undefined;
     const command = this.rootCtx.get("commandUi") as CommandFace | undefined;
     return command?.popupFor(actx);
   }
