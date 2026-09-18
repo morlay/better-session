@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-sandbox-local",
-  "version": "0.0.2",
+  "version": "0.0.3-alpha.0",
   "description": "Configurable sandbox bundle: replaces the shipped process-sandbox provider and filesystem fence with implementations that add extra writable roots and access denials on top of the upstream semantics.",
   "keywords": [
     "dsh",
