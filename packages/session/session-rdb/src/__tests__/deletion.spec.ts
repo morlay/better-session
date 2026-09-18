@@ -79,6 +79,20 @@ describe("deleteSession", () => {
     for (const row of kept) expect(row.fEventId).not.toBe("");
   });
 
+  it("只落该会话的行，孤儿事件行留给 GC 回收", async () => {
+    const { ctx, persistence } = await harness();
+    await createPersisted(ctx, "keep-me");
+    await createPersisted(ctx, "drop-me");
+    await archive(persistence, "drop-me");
+
+    await persistence.deleteSession(SessionId("drop-me"));
+
+    // 该会话独占的事件行成为孤儿、仍留在 t_events（删除不再做全库清理）：孤儿回收 + VACUUM 归 GC 通道。
+    const backend = persistence.internals().backend;
+    expect(await backend.collectOrphans()).toBeGreaterThan(0);
+    expect(await backend.collectOrphans()).toBe(0);
+  });
+
   it("rejects a session that is not archived", async () => {
     const { ctx, persistence } = await harness();
     await createPersisted(ctx, "not-archived");

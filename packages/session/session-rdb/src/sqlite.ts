@@ -3,7 +3,7 @@ import { mkdir, open, readdir, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { and, desc, eq, gte, lt, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { migrate } from "drizzle-orm/node-sqlite/migrator";
 import type { SessionId } from "@deepseek-ai/dsh-session";
@@ -351,6 +351,7 @@ export class SqliteBackend implements Backend {
     deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(id, fromSequence),
     getPrevBridge: (id, sequence) => this.getPrevBridge(id, sequence),
     deleteSession: (id) => this.deleteSession(id),
+    deleteSessions: (ids) => this.deleteSessions(ids),
   };
 
   private async upsertSession(storage: SessionStorageMetadata, incarnation: string): Promise<void> {
@@ -485,9 +486,44 @@ export class SqliteBackend implements Backend {
     this.db.delete(tWorkspaceSessions).where(eq(tWorkspaceSessions.fSessionId, id)).run();
     this.db.delete(tSessionProjcacheRows).where(eq(tSessionProjcacheRows.fSessionId, id)).run();
     this.db.delete(tSessions).where(eq(tSessions.fSessionId, id)).run();
+  }
 
+  /** 事件行可能被多个会话共享（fork 派生），所以孤儿只能在全库范围内判定。 */
+  async collectOrphans(): Promise<number> {
     const referenced = this.db.select({ fEventId: tSessionEvents.fEventId }).from(tSessionEvents);
-    this.db.delete(tEvents).where(notInArray(tEvents.fEventId, referenced)).run();
+    const info = this.db.delete(tEvents).where(notInArray(tEvents.fEventId, referenced)).run();
+    return Number(info.changes);
+  }
+
+  /** 父会话被删后留下的 subagent 会话：父已不在表里，或本来就没有父。 */
+  async listOrphanSubagentSessions(): Promise<SessionId[]> {
+    const rows = this.db.$client
+      .prepare(
+        `SELECT f_session_id AS id FROM t_sessions
+         WHERE f_origin = 'subagent'
+           AND (f_parent_session IS NULL
+                OR f_parent_session NOT IN (SELECT f_session_id FROM t_sessions))`,
+      )
+      .all() as Array<{ id: string }>;
+    return rows.map((row) => row.id as SessionId);
+  }
+
+  private async deleteSessions(ids: SessionId[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    this.db.delete(tSessionEvents).where(inArray(tSessionEvents.fSessionId, ids)).run();
+    this.db.delete(tWorkspaceSessions).where(inArray(tWorkspaceSessions.fSessionId, ids)).run();
+    this.db
+      .delete(tSessionProjcacheRows)
+      .where(inArray(tSessionProjcacheRows.fSessionId, ids))
+      .run();
+    const info = this.db.delete(tSessions).where(inArray(tSessions.fSessionId, ids)).run();
+    return Number(info.changes);
+  }
+
+  async vacuum(): Promise<void> {
+    await enqueueSqliteTx(this.dbPath, async () => {
+      this.db.$client.exec("VACUUM");
+    });
   }
 
   private eventRows() {

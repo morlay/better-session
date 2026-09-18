@@ -91,6 +91,9 @@ export interface BackendTx {
   ): Promise<{ fEventId: string; fSequence: number } | undefined>;
 
   deleteSession(id: SessionId): Promise<void>;
+
+  /** 批量删除整条会话：桥接行、workspace 归属行、投影行与会话行。 */
+  deleteSessions(ids: SessionId[]): Promise<number>;
 }
 
 export interface Backend {
@@ -117,6 +120,15 @@ export interface Backend {
   listSessions(): Promise<SessionRow[]>;
 
   transaction<T>(fn: (tx: BackendTx) => Promise<T>): Promise<T>;
+
+  /** 删除已无桥接行引用的事件行（孤儿），返回删除行数。 */
+  collectOrphans(): Promise<number>;
+
+  /** 父会话已不存在（或没有父）的 subagent 会话：父被删后它们成了孤儿。 */
+  listOrphanSubagentSessions(): Promise<SessionId[]>;
+
+  /** 回收空间与统计（含 VACUUM）；不得在事务内执行。 */
+  vacuum(): Promise<void>;
 
   close(): Promise<void>;
 }

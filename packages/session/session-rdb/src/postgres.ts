@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { and, desc, eq, gte, lt, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import type { PgAsyncDatabase, PgAsyncTransaction } from "drizzle-orm/pg-core";
 import type { NodePgDatabase, NodePgQueryResultHKT } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -216,6 +216,7 @@ export class PostgresBackend implements Backend {
       deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(tx, id, fromSequence),
       getPrevBridge: (id, sequence) => this.getPrevBridge(tx, id, sequence),
       deleteSession: (id) => this.deleteSession(tx, id),
+      deleteSessions: (ids) => this.deleteSessions(tx, ids),
     };
   }
 
@@ -396,9 +397,10 @@ export class PostgresBackend implements Backend {
     exec: PgAsyncDatabase<NodePgQueryResultHKT>,
     id: SessionId,
   ): Promise<void> {
-    const tEvents = this.tables["t_events"];
-    const tSessionEvents = this.tables["t_session_events"];
-    await exec.delete(tSessionEvents).where(eq(tSessionEvents.fSessionId, id)).execute();
+    await exec
+      .delete(this.tables["t_session_events"])
+      .where(eq(this.tables["t_session_events"].fSessionId, id))
+      .execute();
     await exec
       .delete(this.tables["t_workspace_sessions"])
       .where(eq(this.tables["t_workspace_sessions"].fSessionId, id))
@@ -411,16 +413,62 @@ export class PostgresBackend implements Backend {
       .delete(this.tables["t_sessions"])
       .where(eq(this.tables["t_sessions"].fSessionId, id))
       .execute();
+  }
 
-    await exec
+  /** 事件行可能被多个会话共享（fork 派生），所以孤儿只能在全库范围内判定。 */
+  async collectOrphans(): Promise<number> {
+    const tEvents = this.tables["t_events"];
+    const tSessionEvents = this.tables["t_session_events"];
+    const result = (await this.db
       .delete(tEvents)
       .where(
         notInArray(
           tEvents.fEventId,
-          exec.select({ fEventId: tSessionEvents.fEventId }).from(tSessionEvents),
+          this.db.select({ fEventId: tSessionEvents.fEventId }).from(tSessionEvents),
         ),
       )
+      .execute()) as unknown as { rowCount?: number | null };
+    return result.rowCount ?? 0;
+  }
+
+  /** 父会话被删后留下的 subagent 会话：父已不在表里，或本来就没有父。 */
+  async listOrphanSubagentSessions(): Promise<SessionId[]> {
+    const tSessions = this.tables["t_sessions"];
+    const result = (await this.db.execute(sql`
+      SELECT s.f_session_id AS id FROM ${tSessions} AS s
+      WHERE s.f_origin = 'subagent'
+        AND (s.f_parent_session IS NULL
+             OR s.f_parent_session NOT IN (SELECT p.f_session_id FROM ${tSessions} AS p))
+    `)) as unknown as { rows: Array<{ id: string }> };
+    return result.rows.map((row) => row.id as SessionId);
+  }
+
+  private async deleteSessions(
+    exec: PgAsyncDatabase<NodePgQueryResultHKT>,
+    ids: SessionId[],
+  ): Promise<number> {
+    if (ids.length === 0) return 0;
+    await exec
+      .delete(this.tables["t_session_events"])
+      .where(inArray(this.tables["t_session_events"].fSessionId, ids))
       .execute();
+    await exec
+      .delete(this.tables["t_workspace_sessions"])
+      .where(inArray(this.tables["t_workspace_sessions"].fSessionId, ids))
+      .execute();
+    await exec
+      .delete(this.tables["t_session_projcache_row"])
+      .where(inArray(this.tables["t_session_projcache_row"].fSessionId, ids))
+      .execute();
+    const result = (await exec
+      .delete(this.tables["t_sessions"])
+      .where(inArray(this.tables["t_sessions"].fSessionId, ids))
+      .execute()) as unknown as { rowCount?: number | null };
+    return result.rowCount ?? 0;
+  }
+
+  async vacuum(): Promise<void> {
+    await this.db.execute(sql`VACUUM ANALYZE`);
   }
 
   private async getPrevBridge(

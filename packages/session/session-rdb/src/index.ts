@@ -54,6 +54,8 @@ import { SessionBranchRdb } from "./branch.ts";
 import { balanceRewindPrefix } from "@morlay/session-branch";
 import { registerSessionImport } from "./import.ts";
 import { registerSessionDeletion } from "./deletion.ts";
+import { registerSessionExport } from "./export.ts";
+import { registerSessionGc } from "./gc.ts";
 import { SessionQueryRdb } from "./session-query.ts";
 import { adoptLegacyRows, convertLegacyRows, isLegacyVersion } from "./legacy.ts";
 import { installStorageTakeover } from "./storage-takeover/index.ts";
@@ -545,6 +547,10 @@ export class SessionPersistenceRdb extends SessionPersistence {
 
     registerSessionDeletion(this.ctx, this);
 
+    registerSessionExport(this.ctx, this);
+
+    registerSessionGc(this.ctx, this);
+
     installStorageTakeover(this.ctx, {
       repository: this.backend.storage,
       ready: this.ready,
@@ -733,6 +739,35 @@ export class SessionPersistenceRdb extends SessionPersistence {
     this.liveBuffers.delete(id);
     this.liveReady.delete(id);
     this.reuseEventIds.delete(id);
+  }
+
+  /** GC 通道：回收已无桥接行引用的事件行（孤儿），返回删除行数。 */
+  async collectOrphans(): Promise<number> {
+    await this.ready;
+    return this.backend.collectOrphans();
+  }
+
+  /** GC 通道：回收父已不存在的 subagent 会话（live 的跳过），返回删除的会话数。 */
+  async collectOrphanSessions(): Promise<number> {
+    await this.ready;
+    const orphans = await this.backend.listOrphanSubagentSessions();
+    const deletable = orphans.filter(
+      (id) => !this.tracker.hasPending(id) && !this.tracker.hasOpenHandle(id),
+    );
+    if (deletable.length === 0) return 0;
+    const deleted = await this.backend.transaction((tx) => tx.deleteSessions(deletable));
+    for (const id of deletable) {
+      this.liveBuffers.delete(id);
+      this.liveReady.delete(id);
+      this.reuseEventIds.delete(id);
+    }
+    return deleted;
+  }
+
+  /** GC 通道：VACUUM；调用方需先停止运行中的写路径（见 `registerSessionGc`）。 */
+  async vacuum(): Promise<void> {
+    await this.ready;
+    await this.backend.vacuum();
   }
 
   private async unarchiveBeforeDeletion(id: SessionId): Promise<void> {

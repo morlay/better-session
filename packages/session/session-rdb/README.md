@@ -71,10 +71,32 @@ type Config =
 
 delete 面由本包自持：`deleteSession(id)` 只允许删除**已归档**会话（未归档报
 `SESSION_NOT_ARCHIVED`），live（有打开的 handle 或未 materialize）报 `SESSION_LIVE`。
+删除只落该会话的行（桥接行、workspace 归属行、投影 checkpoint、会话行）——被删会话的事件行
+成为**孤儿**留在 `t_events`，不影响删除后的可见性，回收见下节。
 
 web 模式经 `POST /api/session.delete`（body `{ sessionId }`）暴露，状态映射：
 200 已删除 / 404 不存在 / 409 未归档或 live。决策与边界见
-[ADR-会话删除仅限已归档且硬删](.agents/adrs/20260917-会话删除仅限已归档且硬删.md)。
+[ADR-会话删除仅限已归档且硬删](.agents/adrs/20260917-会话删除仅限已归档且硬删.md) 与
+[ADR-删除不再清孤儿与vacuum独立成gc通道](.agents/adrs/20260918-删除不再清孤儿与vacuum独立成gc通道.md)。
+
+## 导出
+
+`POST /api/session.export`（body `{ sessionId }`）直接把会话日志打成 zip **响应体**：
+`content-type: application/zip` + `Content-Disposition` 文件名，包内 artifact 与导入通道读的
+是同一份（`readRaw` 的 `session.vN.jsonl`）。会话不存在 404，body 非法 400。只读，不限归档状态。
+
+## 孤儿回收与 VACUUM（GC）
+
+`POST /api/session.gc` 一次做完四件事：让所有运行中的 agent 退场
+（`ctx.agents.list()` 逐个 cancel 并等 `whenIdle`）→ `collectOrphanSessions()` 回收**父已不存在的
+subagent 会话**（`origin = 'subagent'`、父不在表里；有 open handle / pending 的跳过）→
+`collectOrphans()` 回收已无桥接行引用的事件行 → `vacuum()`（SQLite `VACUUM`、Postgres
+`VACUUM ANALYZE`，均不得在事务内执行）。顺序上先删会话再清事件行，被删会话独占的事件行才刚成为孤儿。
+响应 `{ orphanSessions, orphanEvents, stoppedAgents, vacuumed }`。
+
+为什么独立成通道（而不是删除时顺带做）：实测删除的成本大头就是那句全库孤儿清理
+（1 万行会话：545ms → 加孤儿清理后 2.3s），且它无法让库文件变小。代价是删除后库体积不降，
+直到执行 GC；入口在「对话管理」页，执行期间阻塞界面。
 
 ## storages 接管（workspace 与投影缓存）
 
