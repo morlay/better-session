@@ -1,6 +1,7 @@
 import type { SessionId } from "@deepseek-ai/dsh-session";
 import type { SessionStorageMetadata } from "@deepseek-ai/dsh-session-persistence";
 import type { StorageRepository } from "./storage-takeover/types.ts";
+import type { UsageAggregate } from "./usage.ts";
 
 export interface SessionRow {
   fSessionId: string;
@@ -126,6 +127,9 @@ export interface Backend {
 
   /** 父会话已不存在（或没有父）的 subagent 会话：父被删后它们成了孤儿。 */
   listOrphanSubagentSessions(): Promise<SessionId[]>;
+
+  /** 用量统计的原始聚合：按天×模型×subagent 的桶与按会话的行（事件行去重、排除孤儿）。 */
+  usageReport(): Promise<UsageAggregate>;
 
   /** 回收空间与统计（含 VACUUM）；不得在事务内执行。 */
   vacuum(): Promise<void>;

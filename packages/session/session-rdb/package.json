@@ -34,6 +34,7 @@
     "./invariant": "./src/invariant.ts",
     "./storage": "./src/storage.ts",
     "./testing": "./src/testing.ts",
+    "./usage": "./src/usage.ts",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
@@ -48,6 +49,7 @@
       "./invariant": "./dist/invariant.mjs",
       "./storage": "./dist/storage.mjs",
       "./testing": "./dist/testing.mjs",
+      "./usage": "./dist/usage.mjs",
       "./package.json": "./package.json",
       "./cordis.patch.yml": "./cordis.patch.yml"
     }

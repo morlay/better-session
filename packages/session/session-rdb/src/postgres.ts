@@ -19,8 +19,32 @@ import { postgresTableDefs } from "./entities/index.ts";
 import { sessionConflictRow, sessionInsertRow, titleOfEventData } from "./log.ts";
 import { createStorageRepository } from "./storage-takeover/repository.ts";
 import type { StorageRepository } from "./storage-takeover/types.ts";
+import type { UsageAggregate, UsageTotals } from "./usage.ts";
 
 const postgresMigrationsDir = fileURLToPath(new URL("../drizzle/postgres/", import.meta.url));
+
+/** pg 的 text 列窄化：非字符串（含 null）都不当作文本。 */
+function text(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** pg 的 count/sum 回落成字符串：统一转成有限数。 */
+function numeric(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** SQL 的缺失求和是 NULL：没有 usage 字段的行使该字段计 0。 */
+function totalsOfRow(row: Record<string, unknown>): UsageTotals {
+  return {
+    events: numeric(row["events"]),
+    inputTokens: numeric(row["input_tokens"]),
+    outputTokens: numeric(row["output_tokens"]),
+    cacheReadTokens: numeric(row["cache_read_tokens"]),
+    reasoningTokens: numeric(row["reasoning_tokens"]),
+    totalTokens: numeric(row["total_tokens"]),
+  };
+}
 
 export interface PostgresBackendOptions {
   identityBase: string;
@@ -469,6 +493,76 @@ export class PostgresBackend implements Backend {
 
   async vacuum(): Promise<void> {
     await this.db.execute(sql`VACUUM ANALYZE`);
+  }
+
+  /** 用量聚合：与 SQLite 侧同形，json 提取走 `#>>`，数值列回来是字符串。 */
+  async usageReport(): Promise<UsageAggregate> {
+    const tEvents = this.tables["t_events"];
+    const tSessionEvents = this.tables["t_session_events"];
+    const tSessions = this.tables["t_sessions"];
+    const buckets = (await this.db.execute(sql`
+      SELECT to_char(to_timestamp(e.f_created_at / 1000.0), 'YYYY-MM-DD') AS day,
+             coalesce(e.f_data::json #>> '{data,message,source,provider}',
+                      e.f_data::json #>> '{message,source,provider}') AS provider,
+             coalesce(e.f_data::json #>> '{data,message,source,model}',
+                      e.f_data::json #>> '{message,source,model}') AS model,
+             EXISTS (SELECT 1 FROM ${tSessionEvents} sb
+                       JOIN ${tSessions} ss ON ss.f_session_id = sb.f_session_id
+                      WHERE sb.f_event_id = e.f_event_id AND ss.f_origin = 'subagent') AS subagent,
+             count(*) AS events,
+             sum(coalesce((e.f_data::json #>> '{data,usage,inputTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,inputTokens}')::numeric)) AS input_tokens,
+             sum(coalesce((e.f_data::json #>> '{data,usage,outputTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,outputTokens}')::numeric)) AS output_tokens,
+             sum(coalesce((e.f_data::json #>> '{data,usage,cacheReadTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,cacheReadTokens}')::numeric)) AS cache_read_tokens,
+             sum(coalesce((e.f_data::json #>> '{data,usage,reasoningTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,reasoningTokens}')::numeric)) AS reasoning_tokens,
+             sum(coalesce((e.f_data::json #>> '{data,usage,totalTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,totalTokens}')::numeric)) AS total_tokens
+        FROM ${tEvents} e
+       WHERE e.f_role = 'assistant' AND e.f_type = 'assistant/message'
+         AND EXISTS (SELECT 1 FROM ${tSessionEvents} rb WHERE rb.f_event_id = e.f_event_id)
+       GROUP BY 1, 2, 3, 4
+    `)) as unknown as { rows: Array<Record<string, unknown>> };
+    const sessions = (await this.db.execute(sql`
+      SELECT b.f_session_id AS session_id,
+             s.f_title AS title,
+             (s.f_origin = 'subagent') AS subagent,
+             (s.f_archived_at IS NOT NULL) AS archived,
+             count(*) AS events,
+             sum(coalesce((e.f_data::json #>> '{data,usage,inputTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,inputTokens}')::numeric)) AS input_tokens,
+             sum(coalesce((e.f_data::json #>> '{data,usage,outputTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,outputTokens}')::numeric)) AS output_tokens,
+             sum(coalesce((e.f_data::json #>> '{data,usage,cacheReadTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,cacheReadTokens}')::numeric)) AS cache_read_tokens,
+             sum(coalesce((e.f_data::json #>> '{data,usage,reasoningTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,reasoningTokens}')::numeric)) AS reasoning_tokens,
+             sum(coalesce((e.f_data::json #>> '{data,usage,totalTokens}')::numeric,
+                         (e.f_data::json #>> '{usage,totalTokens}')::numeric)) AS total_tokens
+        FROM ${tSessionEvents} b
+        JOIN ${tEvents} e ON e.f_event_id = b.f_event_id
+        JOIN ${tSessions} s ON s.f_session_id = b.f_session_id
+       WHERE e.f_role = 'assistant' AND e.f_type = 'assistant/message'
+       GROUP BY b.f_session_id, s.f_title, s.f_origin, s.f_archived_at
+    `)) as unknown as { rows: Array<Record<string, unknown>> };
+    return {
+      buckets: buckets.rows.map((row) => ({
+        day: String(row["day"]),
+        provider: text(row["provider"]),
+        model: text(row["model"]),
+        subagent: row["subagent"] === true,
+        ...totalsOfRow(row),
+      })),
+      sessions: sessions.rows.map((row) => ({
+        sessionId: String(row["session_id"]),
+        title: text(row["title"]),
+        subagent: row["subagent"] === true,
+        archived: row["archived"] === true,
+        ...totalsOfRow(row),
+      })),
+    };
   }
 
   private async getPrevBridge(

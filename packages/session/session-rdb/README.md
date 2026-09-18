@@ -98,6 +98,13 @@ subagent 会话**（`origin = 'subagent'`、父不在表里；有 open handle / 
 （1 万行会话：545ms → 加孤儿清理后 2.3s），且它无法让库文件变小。代价是删除后库体积不降，
 直到执行 GC；入口在「对话管理」页，执行期间阻塞界面。
 
+## 用量统计
+
+`POST /api/session.usage` 一次回报三份数据：`totals`（含 `subagent` / `human` 拆分）、按
+天 × provider/model × subagent 的桶、按会话的行。只算被会话引用的事件行（fork 共享行计一次、孤儿行不计），
+走现成的 `f_role` 索引，并同时兼容两种 `f_data` 结构。口径与性能取舍见
+[ADR-用量统计走事件行去重与f_role索引](.agents/adrs/20260918-用量统计走事件行去重与f_role索引.md)。
+
 ## storages 接管（workspace 与投影缓存）
 
 `$DSH_HOME/storages` 不再产生文件：官方 `storage-json` 与

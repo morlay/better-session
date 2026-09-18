@@ -16,6 +16,7 @@ import {
   type SessionRow,
 } from "./backend.ts";
 import { sessionConflictRow, sessionInsertRow, titleOfEventData } from "./log.ts";
+import type { UsageAggregate, UsageTotals } from "./usage.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   SCHEMA_VERSION,
@@ -35,6 +36,32 @@ import { createStorageRepository } from "./storage-takeover/repository.ts";
 import type { StorageRepository } from "./storage-takeover/types.ts";
 
 type SqliteDb = NodeSQLiteDatabase & { $client: DatabaseSync };
+
+/** 用量聚合的原始行（列名是 SQL 别名）。 */
+interface RawUsageRow {
+  day: string;
+  provider: string | null;
+  model: string | null;
+  subagent: number;
+  events: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  reasoning_tokens: number | null;
+  total_tokens: number | null;
+}
+
+/** SQL 的缺失求和是 NULL：没有 usage 字段的行使该字段计 0。 */
+function totalsOf(row: RawUsageRow): UsageTotals {
+  return {
+    events: row.events,
+    inputTokens: row.input_tokens ?? 0,
+    outputTokens: row.output_tokens ?? 0,
+    cacheReadTokens: row.cache_read_tokens ?? 0,
+    reasoningTokens: row.reasoning_tokens ?? 0,
+    totalTokens: row.total_tokens ?? 0,
+  };
+}
 
 const sqliteMigrationsDir = fileURLToPath(new URL("../drizzle/sqlite/", import.meta.url));
 
@@ -518,6 +545,79 @@ export class SqliteBackend implements Backend {
       .run();
     const info = this.db.delete(tSessions).where(inArray(tSessions.fSessionId, ids)).run();
     return Number(info.changes);
+  }
+
+  /** 用量聚合：`f_role = 'assistant'` 与 `assistant/message` 等价且走索引，避免全表扫描。 */
+  async usageReport(): Promise<UsageAggregate> {
+    const buckets = this.db.$client
+      .prepare(
+        `SELECT date(e.f_created_at / 1000, 'unixepoch', 'localtime') AS day,
+                coalesce(json_extract(e.f_data, '$.data.message.source.provider'),
+                         json_extract(e.f_data, '$.message.source.provider')) AS provider,
+                coalesce(json_extract(e.f_data, '$.data.message.source.model'),
+                         json_extract(e.f_data, '$.message.source.model')) AS model,
+                EXISTS (SELECT 1 FROM t_session_events sb
+                          JOIN t_sessions ss ON ss.f_session_id = sb.f_session_id
+                         WHERE sb.f_event_id = e.f_event_id AND ss.f_origin = 'subagent') AS subagent,
+                count(*) AS events,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.inputTokens'),
+                             json_extract(e.f_data, '$.usage.inputTokens'))) AS input_tokens,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.outputTokens'),
+                             json_extract(e.f_data, '$.usage.outputTokens'))) AS output_tokens,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.cacheReadTokens'),
+                             json_extract(e.f_data, '$.usage.cacheReadTokens'))) AS cache_read_tokens,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.reasoningTokens'),
+                             json_extract(e.f_data, '$.usage.reasoningTokens'))) AS reasoning_tokens,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.totalTokens'),
+                             json_extract(e.f_data, '$.usage.totalTokens'))) AS total_tokens
+           FROM t_events e
+          WHERE e.f_role = 'assistant' AND e.f_type = 'assistant/message'
+            AND EXISTS (SELECT 1 FROM t_session_events rb WHERE rb.f_event_id = e.f_event_id)
+          GROUP BY day, provider, model, subagent`,
+      )
+      .all() as unknown as RawUsageRow[];
+    const sessions = this.db.$client
+      .prepare(
+        `SELECT b.f_session_id AS session_id,
+                s.f_title AS title,
+                (s.f_origin = 'subagent') AS subagent,
+                (s.f_archived_at IS NOT NULL) AS archived,
+                count(*) AS events,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.inputTokens'),
+                             json_extract(e.f_data, '$.usage.inputTokens'))) AS input_tokens,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.outputTokens'),
+                             json_extract(e.f_data, '$.usage.outputTokens'))) AS output_tokens,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.cacheReadTokens'),
+                             json_extract(e.f_data, '$.usage.cacheReadTokens'))) AS cache_read_tokens,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.reasoningTokens'),
+                             json_extract(e.f_data, '$.usage.reasoningTokens'))) AS reasoning_tokens,
+                sum(coalesce(json_extract(e.f_data, '$.data.usage.totalTokens'),
+                             json_extract(e.f_data, '$.usage.totalTokens'))) AS total_tokens
+           FROM t_session_events b
+           JOIN t_events e ON e.f_event_id = b.f_event_id
+           JOIN t_sessions s ON s.f_session_id = b.f_session_id
+          WHERE e.f_role = 'assistant' AND e.f_type = 'assistant/message'
+          GROUP BY b.f_session_id, s.f_title, s.f_origin, s.f_archived_at`,
+      )
+      .all() as unknown as Array<
+      RawUsageRow & { session_id: string; title: string | null; archived: number }
+    >;
+    return {
+      buckets: buckets.map((row) => ({
+        day: row.day,
+        provider: row.provider,
+        model: row.model,
+        subagent: row.subagent === 1,
+        ...totalsOf(row),
+      })),
+      sessions: sessions.map((row) => ({
+        sessionId: row.session_id,
+        title: row.title,
+        subagent: row.subagent === 1,
+        archived: row.archived === 1,
+        ...totalsOf(row),
+      })),
+    };
   }
 
   async vacuum(): Promise<void> {

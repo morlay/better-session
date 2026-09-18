@@ -56,6 +56,8 @@ import { registerSessionImport } from "./import.ts";
 import { registerSessionDeletion } from "./deletion.ts";
 import { registerSessionExport } from "./export.ts";
 import { registerSessionGc } from "./gc.ts";
+import { registerSessionUsage } from "./usage.ts";
+import type { UsageAggregate } from "./usage.ts";
 import { SessionQueryRdb } from "./session-query.ts";
 import { adoptLegacyRows, convertLegacyRows, isLegacyVersion } from "./legacy.ts";
 import { installStorageTakeover } from "./storage-takeover/index.ts";
@@ -551,6 +553,8 @@ export class SessionPersistenceRdb extends SessionPersistence {
 
     registerSessionGc(this.ctx, this);
 
+    registerSessionUsage(this.ctx, this);
+
     installStorageTakeover(this.ctx, {
       repository: this.backend.storage,
       ready: this.ready,
@@ -762,6 +766,12 @@ export class SessionPersistenceRdb extends SessionPersistence {
       this.reuseEventIds.delete(id);
     }
     return deleted;
+  }
+
+  /** 用量统计：SQL 聚合的按天 × 模型桶与按会话行（事件行去重、排除孤儿行）。 */
+  async usageReport(): Promise<UsageAggregate> {
+    await this.ready;
+    return this.backend.usageReport();
   }
 
   /** GC 通道：VACUUM；调用方需先停止运行中的写路径（见 `registerSessionGc`）。 */
