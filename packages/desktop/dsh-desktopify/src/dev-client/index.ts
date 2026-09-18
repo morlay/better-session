@@ -2,7 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
-import { bundleClientFactory } from "devkit";
+import { bundleClientFactory } from "@local/devkit";
 import { COMBO_PATH, comboEntryIds, stripSourceMapTrailer } from "./combo.ts";
 
 export const name = "dev-client-bundles";

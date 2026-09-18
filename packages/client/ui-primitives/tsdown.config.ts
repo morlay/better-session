@@ -1,4 +1,4 @@
-import { defineCordisPluginConfig } from "devkit";
+import { defineCordisPluginConfig } from "@local/devkit";
 
 export default defineCordisPluginConfig({
   entries: { index: "./src/index.ts" },
