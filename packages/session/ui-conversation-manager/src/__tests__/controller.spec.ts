@@ -216,9 +216,9 @@ describe("对话管理注入面", () => {
     const b = bench();
     const calls = stubFetch(200, REPORT_PAYLOAD);
 
-    const report = await b.controller.face.loadUsage(null);
+    const report = await b.controller.face.loadUsage("all");
 
-    expect(calls).toEqual([{ url: "/api/session.usage", body: { rangeDays: null } }]);
+    expect(calls).toEqual([{ url: "/api/session.usage", body: { range: "all" } }]);
     expect(report.totals.totalTokens).toBe(165);
     expect(report.subagent.inputTokens).toBe(50);
     expect(b.ports.refreshes).toBe(0);
@@ -227,13 +227,13 @@ describe("对话管理注入面", () => {
   it("用量统计响应不可用时给出失败原因", async () => {
     const b = bench();
     stubFetch(200, { totals: {} });
-    await expect(b.controller.face.loadUsage(null)).rejects.toThrow("用量统计响应不可用");
+    await expect(b.controller.face.loadUsage("all")).rejects.toThrow("用量统计响应不可用");
   });
 
   it("时间范围随请求带给 host", async () => {
     const b = bench();
     const calls = stubFetch(200, REPORT_PAYLOAD);
-    await b.controller.face.loadUsage(7);
-    expect(calls).toEqual([{ url: "/api/session.usage", body: { rangeDays: 7 } }]);
+    await b.controller.face.loadUsage("week");
+    expect(calls).toEqual([{ url: "/api/session.usage", body: { range: "week" } }]);
   });
 });

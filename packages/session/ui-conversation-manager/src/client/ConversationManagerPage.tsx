@@ -19,6 +19,7 @@ import {
   type ConversationManagerFace,
   type SessionUsageReport,
   type UsageBucket,
+  type UsageRangeKey,
   type UsageTotals,
 } from "./controller.ts";
 import { formatPercent, formatTokens } from "./format.ts";
@@ -95,7 +96,7 @@ export function ConversationManagerPage({
   const [showSubagents, setShowSubagents] = useState(false);
   const [view, setView] = useState<PageView>("sessions");
   const [usageTab, setUsageTab] = useState<UsageTab>("overview");
-  const [usageRange, setUsageRange] = useState<UsageRange>(null);
+  const [usageRange, setUsageRange] = useState<UsageRange>("day");
   const [usage, setUsage] = useState<SessionUsageReport | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState<string | null>(null);
@@ -526,9 +527,28 @@ type PageView = "sessions" | "usage";
 /** 统计视图的二层维度（时间范围取代了原来的「按天」）。 */
 type UsageTab = "overview" | "models" | "sessions";
 
-/** 时间范围选项：`null` 为不限，其余为最近 N 天。 */
-const USAGE_RANGES = [null, 7, 30, 90] as const;
-type UsageRange = (typeof USAGE_RANGES)[number];
+/** 时间范围选项：默认本日，其后是本周（周一起算）与最近 N 天，「全部」放在最后。 */
+const USAGE_RANGES: readonly UsageRange[] = ["day", "week", "7d", "30d", "90d", "all"];
+
+type UsageRange = UsageRangeKey;
+
+/** 范围按钮的文案。 */
+function rangeLabel(range: UsageRange, t: Translate): string {
+  switch (range) {
+    case "all":
+      return t("usage.range.all");
+    case "day":
+      return t("usage.range.day");
+    case "week":
+      return t("usage.range.week");
+    case "7d":
+      return t("usage.range.days", { n: 7 });
+    case "30d":
+      return t("usage.range.days", { n: 30 });
+    case "90d":
+      return t("usage.range.days", { n: 90 });
+  }
+}
 
 /** 一个用量单项：标签在上、值在下；单项之间横向排布。 */
 interface UsageMetric {
@@ -727,22 +747,18 @@ function UsageView({
             .sort((left, right) => sortWeight(right.totals) - sortWeight(left.totals))
             .slice(0, USAGE_SESSION_ROWS);
   return (
-    <div
-      {...styling.props(styles.usage)}
-      data-usage-view={tab}
-      data-usage-range={range === null ? "all" : String(range)}
-    >
+    <div {...styling.props(styles.usage)} data-usage-view={tab} data-usage-range={range}>
       <div {...styling.props(styles.ranges)} role="group" aria-label={t("usage.range")}>
         {USAGE_RANGES.map((option) => (
           <Pill
-            key={String(option)}
+            key={option}
             active={range === option}
-            data-range={option === null ? "all" : String(option)}
+            data-range={option}
             onClick={() => {
               onRange(option);
             }}
           >
-            {option === null ? t("usage.range.all") : t("usage.range.days", { n: option })}
+            {rangeLabel(option, t)}
           </Pill>
         ))}
       </div>

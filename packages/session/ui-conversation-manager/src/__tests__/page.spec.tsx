@@ -468,7 +468,7 @@ describe("对话管理页面：token 用量统计", () => {
     });
 
     expect(screen.getByRole("tab", { name: "总览" })).toBeTruthy();
-    expect(screen.getByText("全部")).toBeTruthy();
+    expect(screen.getByText("全部会话")).toBeTruthy();
     expect(screen.getAllByText("输入（含缓存）").length).toBe(2);
     expect(screen.getByText("65")).toBeTruthy();
     expect(screen.getByText("其中子代理")).toBeTruthy();
@@ -482,7 +482,7 @@ describe("对话管理页面：token 用量统计", () => {
     renderPage({ archived: [], faces: { loadUsage } });
     fireEvent.click(screen.getByRole("tab", { name: "统计" }));
     await screen.findByText("总览");
-    expect(loadUsage).toHaveBeenCalledWith(null);
+    expect(loadUsage).toHaveBeenCalledWith("day");
 
     fireEvent.click(screen.getByRole("tab", { name: "按模型" }));
     expect(screen.getByText("deepseek-official / v4")).toBeTruthy();
@@ -495,7 +495,17 @@ describe("对话管理页面：token 用量统计", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "近 7 天" }));
     await waitFor(() => {
-      expect(loadUsage).toHaveBeenLastCalledWith(7);
+      expect(loadUsage).toHaveBeenLastCalledWith("7d");
+    });
+
+    // 自然边界也走同一套语义键。
+    fireEvent.click(screen.getByRole("button", { name: "本日" }));
+    await waitFor(() => {
+      expect(loadUsage).toHaveBeenLastCalledWith("day");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "本周" }));
+    await waitFor(() => {
+      expect(loadUsage).toHaveBeenLastCalledWith("week");
     });
   });
 
@@ -563,7 +573,7 @@ describe("对话管理页面：token 用量统计", () => {
     expect(container.querySelector('[data-usage-key="deepseek-official / v4"]')).toBeTruthy();
     expect(container.querySelector('[data-usage-tab="models"]')).toBeTruthy();
     expect(container.querySelector("[data-usage-range]")?.getAttribute("data-usage-range")).toBe(
-      "all",
+      "day",
     );
   });
 

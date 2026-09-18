@@ -5,6 +5,49 @@ export const SESSION_USAGE_PATH = "/api/session.usage";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * 时间范围的语义键：`all` 不限；`day` / `week` 是**本地自然日 / 自然周**（周一起算）；
+ * `7d` / `30d` / `90d` 是最近 N 天（滚动窗口）。
+ */
+export type UsageRangeKey = "all" | "day" | "week" | "7d" | "30d" | "90d";
+
+const ROLLING_DAYS: Record<"7d" | "30d" | "90d", number> = { "7d": 7, "30d": 30, "90d": 90 };
+
+function localDayStart(now: number): Date {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+/**
+ * 范围起点（含），不限时为 undefined。自然日 / 自然周按 host 的本地时区算，周边界是周一 00:00。
+ * @param range - 语义键。
+ * @param now - 当前时刻。
+ * @returns 起点毫秒时间戳，或 undefined。
+ */
+export function resolveUsageSince(range: UsageRangeKey, now: number): number | undefined {
+  switch (range) {
+    case "all":
+      return undefined;
+    case "day":
+      return localDayStart(now).getTime();
+    case "week": {
+      const start = localDayStart(now);
+      // getDay(): 0 = 周日；换算成「距离本周一几天」。
+      start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+      return start.getTime();
+    }
+    default:
+      return now - ROLLING_DAYS[range] * DAY_MS;
+  }
+}
+
+function parseUsageRange(value: unknown): UsageRangeKey {
+  return value === "day" || value === "week" || value === "7d" || value === "30d" || value === "90d"
+    ? value
+    : "all";
+}
+
 /** 一段用量合计（token 字段直接取事件里模型报的 usage）。 */
 export interface UsageTotals {
   events: number;
@@ -113,22 +156,19 @@ export function registerSessionUsage(ctx: Context, persistence: SessionPersisten
             const chunks: Buffer[] = [];
             for await (const chunk of req) chunks.push(chunk as Buffer);
             const raw = Buffer.concat(chunks).toString("utf8");
-            let envelope: { rangeDays?: unknown } = {};
+            let envelope: { range?: unknown } = {};
             if (raw !== "") {
               try {
-                envelope = JSON.parse(raw) as { rangeDays?: unknown };
+                envelope = JSON.parse(raw) as { range?: unknown };
               } catch {
                 res.writeHead(400, { "content-type": "application/json" });
                 res.end(JSON.stringify({ error: "request body is not JSON" }));
                 return;
               }
             }
-            const days = envelope.rangeDays;
-            const rangeDays =
-              typeof days === "number" && Number.isFinite(days) && days > 0 ? days : undefined;
             try {
               const aggregate = await persistence.usageReport(
-                rangeDays === undefined ? undefined : Date.now() - rangeDays * DAY_MS,
+                resolveUsageSince(parseUsageRange(envelope.range), Date.now()),
               );
               const totals = sumUsage(aggregate.buckets);
               const subagent = sumUsage(aggregate.buckets.filter((bucket) => bucket.subagent));

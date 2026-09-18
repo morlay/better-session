@@ -330,10 +330,49 @@ describe("用量统计口径", () => {
     const all = await report(ctx);
     expect(all.totals.events).toBe(2);
 
-    const week = await report(ctx, { rangeDays: 7 });
+    const week = await report(ctx, { range: "7d" });
     expect(week.totals.events).toBe(1);
     expect(week.totals.inputTokens).toBe(100);
     expect(week.sessions.map((row) => row.sessionId)).toEqual(["recent"]);
+  });
+
+  it("本自然日 / 本自然周按本地零点与周一起算", async () => {
+    const { ctx } = await harness();
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const weekStart = new Date(dayStart);
+    weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+
+    await createPersisted(
+      ctx,
+      meta("today"),
+      turnWithUsage(dayStart.getTime() + 1_000, { provider: "p", model: "m" }, usageOf(100, 10)),
+    );
+    await createPersisted(
+      ctx,
+      meta("yesterday"),
+      turnWithUsage(dayStart.getTime() - 1_000, { provider: "p", model: "m" }, usageOf(20, 2)),
+    );
+    await createPersisted(
+      ctx,
+      meta("this-week"),
+      turnWithUsage(weekStart.getTime() + 1_000, { provider: "p", model: "m" }, usageOf(7, 1)),
+    );
+    await createPersisted(
+      ctx,
+      meta("last-week"),
+      turnWithUsage(weekStart.getTime() - 1_000, { provider: "p", model: "m" }, usageOf(3, 1)),
+    );
+
+    const today = await report(ctx, { range: "day" });
+    const todayIds = today.sessions.map((row) => row.sessionId);
+    expect(todayIds).toContain("today");
+    expect(todayIds).not.toContain("yesterday");
+
+    const week = await report(ctx, { range: "week" });
+    const weekIds = week.sessions.map((row) => row.sessionId);
+    expect(weekIds).toContain("this-week");
+    expect(weekIds).not.toContain("last-week");
   });
 
   it("被删除会话留下的事件行（无引用）不计入统计", async () => {

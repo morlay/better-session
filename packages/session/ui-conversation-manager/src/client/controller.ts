@@ -7,6 +7,9 @@ export const SESSION_EXPORT_PATH = "/api/session.export";
 export const SESSION_GC_PATH = "/api/session.gc";
 export const SESSION_USAGE_PATH = "/api/session.usage";
 
+/** 时间范围的语义键（与 session-rdb `./usage` 的 `UsageRangeKey` 镜像）。 */
+export type UsageRangeKey = "all" | "day" | "week" | "7d" | "30d" | "90d";
+
 /** 一段用量合计（与 session-rdb `./usage` 的回报结构镜像）。 */
 export interface UsageTotals {
   events: number;
@@ -65,7 +68,7 @@ export interface ConversationManagerFace {
   exportZip: (sessionId: SessionId) => Promise<void>;
   importZip: (file: File) => Promise<SessionId>;
   collectGarbage: () => Promise<ConversationManagerGcResult>;
-  loadUsage: (rangeDays: number | null) => Promise<SessionUsageReport>;
+  loadUsage: (range: UsageRangeKey) => Promise<SessionUsageReport>;
 }
 
 /** 带 host 错误码的请求失败：页面据此选本地化文案。 */
@@ -125,7 +128,7 @@ export class ConversationManagerController {
       exportZip: (sessionId) => this.exportZip(sessionId),
       importZip: (file) => this.importZip(file),
       collectGarbage: () => this.collectGarbage(),
-      loadUsage: (rangeDays) => this.loadUsage(rangeDays),
+      loadUsage: (range) => this.loadUsage(range),
     };
   }
 
@@ -175,10 +178,10 @@ export class ConversationManagerController {
 
   /**
    * 用量统计：host 侧聚合，前端各维度本地折叠。
-   * @param rangeDays - 只算最近这些天；`null` 为不限。
+   * @param range - 时间范围语义键（`all` 不限、`day`/`week` 自然日/周、其余最近 N 天）。
    */
-  private async loadUsage(rangeDays: number | null): Promise<SessionUsageReport> {
-    const value = await postJson(SESSION_USAGE_PATH, { rangeDays });
+  private async loadUsage(range: UsageRangeKey): Promise<SessionUsageReport> {
+    const value = await postJson(SESSION_USAGE_PATH, { range });
     const report = value as unknown as Partial<SessionUsageReport>;
     if (
       report.totals === undefined ||
