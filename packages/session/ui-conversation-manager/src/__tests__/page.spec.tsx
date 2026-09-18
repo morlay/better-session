@@ -41,7 +41,25 @@ interface Faces {
   importZip: ReturnType<typeof vi.fn>;
   exportZip: ReturnType<typeof vi.fn>;
   collectGarbage: ReturnType<typeof vi.fn>;
+  loadUsage: ReturnType<typeof vi.fn>;
 }
+
+const EMPTY_TOTALS = {
+  events: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  reasoningTokens: 0,
+  totalTokens: 0,
+};
+
+const EMPTY_REPORT = {
+  totals: EMPTY_TOTALS,
+  subagent: EMPTY_TOTALS,
+  human: EMPTY_TOTALS,
+  buckets: [],
+  sessions: [],
+};
 
 const A: Row = { id: "s1", title: "会话 A", updatedAt: 3_000 };
 const B: Row = { id: "s2", title: "会话 B", updatedAt: 2_000 };
@@ -65,6 +83,7 @@ function renderPage(options: {
     importZip: vi.fn(async () => "session-new"),
     exportZip: vi.fn(async () => {}),
     collectGarbage: vi.fn(async () => ({ orphanSessions: 0, orphanEvents: 0, stoppedAgents: 0 })),
+    loadUsage: vi.fn(async () => EMPTY_REPORT),
     ...options.faces,
   };
   // 组件 spec 直喂 props：main 座位的框架座位由本文件提供替身。
@@ -389,5 +408,99 @@ describe("对话管理页面：分页、导出与 GC", () => {
       expect(screen.getByText("操作失败：gc failed")).toBeTruthy();
     });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+const TOTALS_165 = {
+  events: 2,
+  inputTokens: 100,
+  outputTokens: 65,
+  cacheReadTokens: 0,
+  reasoningTokens: 0,
+  totalTokens: 165,
+};
+const TOTALS_55 = {
+  events: 1,
+  inputTokens: 0,
+  outputTokens: 55,
+  cacheReadTokens: 0,
+  reasoningTokens: 0,
+  totalTokens: 55,
+};
+
+const REPORT = {
+  totals: TOTALS_165,
+  subagent: TOTALS_55,
+  human: {
+    events: 1,
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 110,
+  },
+  buckets: [
+    {
+      day: "2026-09-08",
+      provider: "deepseek-official",
+      model: "v4",
+      subagent: false,
+      ...TOTALS_165,
+    },
+    { day: "2026-09-08", provider: "deepseek-official", model: "v4", subagent: true, ...TOTALS_55 },
+  ],
+  sessions: [
+    { sessionId: "s1", title: "会话 A", subagent: false, archived: false, ...TOTALS_165 },
+    { sessionId: "s4", title: "子代理会话", subagent: true, archived: false, ...TOTALS_55 },
+  ],
+};
+
+describe("对话管理页面：token 用量统计", () => {
+  it("第一层切到统计：拉一次数据，默认总览含子代理拆分", async () => {
+    const { faces } = renderPage({
+      archived: [],
+      faces: { loadUsage: vi.fn(async () => REPORT) },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "统计" }));
+    await waitFor(() => {
+      expect(faces.loadUsage).toHaveBeenCalledTimes(1);
+    });
+
+    expect(screen.getByText("总览")).toBeTruthy();
+    expect(screen.getByText("输入")).toBeTruthy();
+    expect(screen.getByText("165")).toBeTruthy();
+    expect(screen.getByText("其中子代理")).toBeTruthy();
+    expect(screen.getAllByText("55").length).toBeGreaterThan(0);
+  });
+
+  it("第二层切维度：按天 / 按模型 / 按会话", async () => {
+    renderPage({ archived: [], faces: { loadUsage: vi.fn(async () => REPORT) } });
+    fireEvent.click(screen.getByRole("button", { name: "统计" }));
+    await screen.findByText("总览");
+
+    fireEvent.click(screen.getByRole("button", { name: "按天" }));
+    expect(screen.getByText("2026-09-08")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "按模型" }));
+    expect(screen.getByText("deepseek-official / v4")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "按会话" }));
+    expect(screen.getByText("会话 A")).toBeTruthy();
+  });
+
+  it("统计失败时给出原因", async () => {
+    renderPage({
+      archived: [],
+      faces: {
+        loadUsage: vi.fn(async () => {
+          throw new ConversationManagerRequestError("boom", undefined);
+        }),
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "统计" }));
+    await waitFor(() => {
+      expect(screen.getByText("操作失败：boom")).toBeTruthy();
+    });
   });
 });

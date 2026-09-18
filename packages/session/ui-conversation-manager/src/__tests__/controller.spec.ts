@@ -181,4 +181,49 @@ describe("对话管理注入面", () => {
     expect(result).toEqual({ orphanSessions: 3, orphanEvents: 12, stoppedAgents: 2 });
     expect(b.ports.refreshes).toBe(1);
   });
+
+  it("用量统计打 usage 路由并回传三份数据", async () => {
+    const b = bench();
+    const calls = stubFetch(200, {
+      totals: {
+        events: 2,
+        inputTokens: 150,
+        outputTokens: 15,
+        cacheReadTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 165,
+      },
+      subagent: {
+        events: 1,
+        inputTokens: 50,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 55,
+      },
+      human: {
+        events: 1,
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheReadTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 110,
+      },
+      buckets: [],
+      sessions: [],
+    });
+
+    const report = await b.controller.face.loadUsage();
+
+    expect(calls).toEqual([{ url: "/api/session.usage", body: {} }]);
+    expect(report.totals.totalTokens).toBe(165);
+    expect(report.subagent.inputTokens).toBe(50);
+    expect(b.ports.refreshes).toBe(0);
+  });
+
+  it("用量统计响应不可用时给出失败原因", async () => {
+    const b = bench();
+    stubFetch(200, { totals: {} });
+    await expect(b.controller.face.loadUsage()).rejects.toThrow("用量统计响应不可用");
+  });
 });

@@ -5,6 +5,43 @@ export const SESSION_DELETE_PATH = "/api/session.delete";
 export const SESSION_IMPORT_PATH = "/api/session.import";
 export const SESSION_EXPORT_PATH = "/api/session.export";
 export const SESSION_GC_PATH = "/api/session.gc";
+export const SESSION_USAGE_PATH = "/api/session.usage";
+
+/** 一段用量合计（与 session-rdb `./usage` 的回报结构镜像）。 */
+export interface UsageTotals {
+  events: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+}
+
+/** 一天 × 一个模型 × 是否子代理 的用量桶。 */
+export interface UsageBucket extends UsageTotals {
+  day: string;
+  provider: string | null;
+  model: string | null;
+  subagent: boolean;
+}
+
+/** 一条会话的用量行。 */
+export interface UsageSessionRow extends UsageTotals {
+  sessionId: string;
+  title: string | null;
+  subagent: boolean;
+  archived: boolean;
+}
+
+/** 一次统计请求的回报：总览 + subagent 拆分 + 桶 + 会话行。 */
+export interface SessionUsageReport {
+  totals: UsageTotals;
+  subagent: UsageTotals;
+  /** 只被人类会话引用的部分。 */
+  human: UsageTotals;
+  buckets: UsageBucket[];
+  sessions: UsageSessionRow[];
+}
 
 /** 页面之外的服务面：归档状态与列表刷新都归它们的既有 owner。 */
 export interface ConversationManagerPorts {
@@ -28,6 +65,7 @@ export interface ConversationManagerFace {
   exportZip: (sessionId: SessionId) => Promise<void>;
   importZip: (file: File) => Promise<SessionId>;
   collectGarbage: () => Promise<ConversationManagerGcResult>;
+  loadUsage: () => Promise<SessionUsageReport>;
 }
 
 /** 带 host 错误码的请求失败：页面据此选本地化文案。 */
@@ -87,6 +125,7 @@ export class ConversationManagerController {
       exportZip: (sessionId) => this.exportZip(sessionId),
       importZip: (file) => this.importZip(file),
       collectGarbage: () => this.collectGarbage(),
+      loadUsage: () => this.loadUsage(),
     };
   }
 
@@ -132,6 +171,20 @@ export class ConversationManagerController {
       orphanEvents: typeof value["orphanEvents"] === "number" ? value["orphanEvents"] : 0,
       stoppedAgents: typeof value["stoppedAgents"] === "number" ? value["stoppedAgents"] : 0,
     };
+  }
+
+  /** 用量统计：host 侧一次聚合，前端各维度本地折叠。响应是 wire 值，先确认三份数据都在。 */
+  private async loadUsage(): Promise<SessionUsageReport> {
+    const value = await postJson(SESSION_USAGE_PATH, {});
+    const report = value as unknown as Partial<SessionUsageReport>;
+    if (
+      report.totals === undefined ||
+      !Array.isArray(report.buckets) ||
+      !Array.isArray(report.sessions)
+    ) {
+      throw new ConversationManagerRequestError("用量统计响应不可用", undefined);
+    }
+    return report as SessionUsageReport;
   }
 }
 
