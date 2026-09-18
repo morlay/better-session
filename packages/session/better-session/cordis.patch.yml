@@ -20,18 +20,11 @@
   config:
     backend: rdb
 
-# 对话 UI 的 client 半 fork（见 docs/debt/0001）：官方 input-trigger 的引用域
-# 词表是封闭联合，改由本仓库的包接管（宿主半一并接管，行整体禁用）。
-- id: ui-input-trigger
-  disabled: true
-
-# 官方对话外壳与 chat 渲染同样由 fork 接管：
-# - ui-conversation：composer 草稿要改成块序列、队列行去掉 inline edit；
-# - ui-chat：用户气泡 / assistant 渲染（思考块 Markdown、资源 chip、文件卡片）。
+# 官方对话外壳由 fork 接管：composer 草稿要改成块序列、队列行去掉 inline edit。
+# `ui-chat` 已回退官方行——它剩下的真实差异（token-format 死循环修复、
+# data-composer-stats）已由 `ui-conversation-message-actions` 在
+# `conversation.composer.dock`（id `stats`，priority -1）覆盖承载。
 - id: ui-conversation
-  disabled: true
-
-- id: ui-chat
   disabled: true
 
 - insert:
@@ -49,12 +42,6 @@
 
     - id: ui-conversation-fork
       name: "@morlay/dsh-client-ui-conversation"
-
-    - id: ui-chat-fork
-      name: "@morlay/dsh-client-ui-chat"
-
-    - id: ui-input-trigger-fork
-      name: "@morlay/dsh-client-ui-input-trigger"
 
     # css-in-js 样式层（styled / Token / 官方 token 消费）：fork 包的样式基础。
     - id: ui-primitives-fork

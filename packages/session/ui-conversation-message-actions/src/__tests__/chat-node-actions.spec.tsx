@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// 入口门控（ADR 0004）：编辑（撤回）只要求存在可编辑文本块——轮外消息也能撤回；
+// 入口门控（ADR-编辑入口不依赖轮次归属）：编辑（撤回）只要求存在可编辑文本块——轮外消息也能撤回；
 // 重试只对已闭合轮次开放。两个入口都先弹确认再把操作交给 host。
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";

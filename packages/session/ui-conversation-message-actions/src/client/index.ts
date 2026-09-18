@@ -1,15 +1,16 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type {} from "@morlay/dsh-client-ui-conversation/client";
-import type {} from "@morlay/dsh-client-ui-chat/client";
+import type {} from "@deepseek-ai/dsh-client-ui-chat/client";
 import type {} from "@deepseek-ai/dsh-client-ui-renderer/client";
 import type { SessionId } from "@deepseek-ai/dsh-session";
 import { SessionEditorController } from "./controller.ts";
 import { registerChatNodeRenderers } from "./chat-node/register.ts";
+import { registerComposerStats } from "./composer-stats/register.ts";
 import { SessionImportAction } from "./import-action.tsx";
 import { styling } from "@morlay/dsh-client-ui-primitives/client";
 import { globals as messageIconGlobals } from "./chat-node/MessageIconActions.styles.ts";
 
-export const inject = ["slots", "conversation", "connection", "sessions"];
+export const inject = ["slots", "conversation", "connection", "sessions", "uiWorkspace"];
 
 export function apply(ctx: Context): void {
   styling.injectGlobals(messageIconGlobals);
@@ -29,6 +30,8 @@ export function apply(ctx: Context): void {
   });
 
   registerChatNodeRenderers(ctx, controllerFor);
+
+  ctx.slots.inject("conversation.composer.dock", () => registerComposerStats(ctx.slots));
 
   ctx.slots.inject("conversation.session.header.utilities", () =>
     ctx.slots.register(

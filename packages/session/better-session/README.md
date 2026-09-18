@@ -1,9 +1,9 @@
 # @morlay/better-session
 
 profile 聚合 bundle：一次性装配 `@morlay/session-branch`、
-`@morlay/session-rdb`、`@morlay/ui-conversation-message-actions` 与对话 UI 的
-三个 fork 行到 DeepSeek Harness web profile，提供 **就地编辑 / 重试 / 撤回 /
-分支**（rewind / retry / recall / fork）闭环。
+`@morlay/session-rdb`、`@morlay/ui-conversation-message-actions` 与对话外壳的
+**薄壳 fork 行**（只留我们改过的文件，其余引用上游源码）到 DeepSeek Harness web profile，
+提供 **就地编辑 / 重试 / 撤回 / 分支**（rewind / retry / recall / fork）闭环。
 
 ## 安装
 
@@ -13,7 +13,6 @@ dsh plugin --profile web add "@morlay/better-session"
 
 安装自动带上全部子包（`@morlay/session-branch`、`@morlay/session-rdb`、
 `@morlay/ui-conversation-message-actions`、`@morlay/dsh-client-ui-conversation`、
-`@morlay/dsh-client-ui-chat`、`@morlay/dsh-client-ui-input-trigger`、
 `@morlay/dsh-client-ui-primitives`），并由 bundle 的 patch
 （`cordis.patch.yml`）自动装配：
 
@@ -22,7 +21,9 @@ dsh plugin --profile web add "@morlay/better-session"
 - `ctx.sessionEditor` ← edit / retry / recall / fork 编排
   （HTTP：`/session-editor`；宿主内嵌客户端走 `connection.fetch` 的 `/api/session-editor`）
 - `conversation.chat.node` ← 渲染替换（user 消息行内编辑 / 重试按钮）
-- 对话 UI 的三个官方行（`ui-conversation`、`ui-chat`、`ui-input-trigger`）换成本仓库的 fork 行
+- `conversation.composer.dock` 的 `stats` 行 ← 覆盖注册（priority −1；承载修好的 token 口径）
+- 官方对话 UI 行里只有 `ui-conversation` 换成本仓库的 fork 行；`ui-chat` 与 `ui-input-trigger` 保持官方行
+- `ui-primitives-fork` ← css-in-js 样式层（styled / Token / 官方 token 消费），fork 外壳的样式基础
 - `ctx.sessionProjectionCache` ← 投影 checkpoint（替换官方插件，落 rdb 语义表）
 - `ctx.sessionQuery` ← 会话查询（替换官方 `session-query-sqlite`：精确读 / 过滤 /
   血缘复用上游基类，全文检索维持 disabled，不引入派生索引库）
@@ -33,10 +34,10 @@ dsh plugin --profile web add "@morlay/better-session"
 （`session-telemetry-otel`、`session-log-deepseek`，默认部署零官方外发，需要时
 删行恢复），并把 `storage-domain` 的 backend 路由为 `rdb`：`$DSH_HOME/storages`
 不再产生文件，storages 数据与事件日志同库
-（[ADR 0009](../session-rdb/.agents/adrs/0009-接管storages到rdb语义表.md)）。
+（[ADR-20260917-接管storages到rdb语义表](../session-rdb/.agents/adrs/20260917-接管storages到rdb语义表.md)）。
 
 装配面由 `src/__tests__/patch.spec.ts`（patch 行 ↔ 上游 bundle id）与
-`src/__tests__/assembly.spec.ts`（patch ↔ 依赖 ↔ client 声明）守护。
+`src/__tests__/assembly.spec.ts`（patch ↔ 依赖 ↔ client 声明）守护；逐行以 [`cordis.patch.yml`](./cordis.patch.yml) 为准。
 
 ## 使用
 
@@ -72,4 +73,4 @@ session-rdb:
 本包是 monorepo（pnpm workspaces）的一员：命令入口见根
 [justfile](../../../justfile)，约定见
 [`.agents/standards/`](../../../.agents/standards/README.md)，架构见
-[设计 0001](../../../.agents/designs/0001-系统设计.md)。
+[设计 20260917-系统设计](../../../.agents/designs/20260917-系统设计.md)。

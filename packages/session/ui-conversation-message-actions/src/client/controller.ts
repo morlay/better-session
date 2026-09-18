@@ -5,6 +5,7 @@ import type {
   SessionSnapshot,
 } from "@deepseek-ai/dsh-api-session-controller/client";
 import type { ObservableSnapshot, SnapshotStore } from "@deepseek-ai/dsh-client-store";
+import type { UiWorkspace } from "@deepseek-ai/dsh-client-ui-workspace/client";
 import { createSnapshotStore } from "@deepseek-ai/dsh-client-store";
 import type { SessionId } from "@deepseek-ai/dsh-session";
 import {
@@ -66,12 +67,12 @@ export class SessionEditorController {
   readonly face: SessionEditorFace;
   private readonly ctx: ClientContext;
   private readonly sessions: ISessions;
+  private readonly uiWorkspace: UiWorkspace;
   private sessionSource: SessionFace | undefined;
   private sessionSourceDispose: (() => void) | undefined;
   private sessionRevision: string | undefined;
   private disposed = false;
   private users = 0;
-  private readonly navigationWaits = new Set<() => void>();
 
   constructor(
     ctx: ClientContext,
@@ -79,6 +80,7 @@ export class SessionEditorController {
   ) {
     this.ctx = ctx;
     this.sessions = ctx.get("sessions") as unknown as ISessions;
+    this.uiWorkspace = ctx.get("uiWorkspace") as unknown as UiWorkspace;
     this.face = {
       hooks: { sessionEditor: this.store },
       acquire: () => {
@@ -109,7 +111,10 @@ export class SessionEditorController {
           () => this.setComposerDraft(this.messageTexts(message)),
         ),
       importSession: (file) => this.importSession(file),
-      openVersion: (sessionId) => this.openWhenListed(sessionId as SessionId),
+      openVersion: (sessionId) => {
+        this.uiWorkspace.openSession(sessionId as SessionId);
+        return Promise.resolve();
+      },
     };
     this.observe();
   }
@@ -231,7 +236,7 @@ export class SessionEditorController {
       const result = value as SessionEditorOperationResult;
 
       if (String(result.sessionId) !== String(this.sessionId)) {
-        await this.openWhenListed(result.sessionId as SessionId);
+        this.uiWorkspace.openSession(result.sessionId as SessionId);
         return true;
       }
 
@@ -334,33 +339,5 @@ export class SessionEditorController {
       });
       return false;
     }
-  }
-
-  private openWhenListed(sessionId: SessionId): Promise<void> {
-    if (this.sessions.list.getSnapshot().byId[sessionId] !== undefined) {
-      this.sessions.open(sessionId);
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      let settled = false;
-      let dispose = (): void => {};
-      const finish = (open: boolean): void => {
-        if (settled) return;
-        settled = true;
-        dispose();
-        this.navigationWaits.delete(cancel);
-        if (open) this.sessions.open(sessionId);
-        resolve();
-      };
-      const cancel = (): void => {
-        finish(false);
-      };
-      this.navigationWaits.add(cancel);
-      dispose = this.sessions.list.subscribe(() => {
-        if (this.sessions.list.getSnapshot().byId[sessionId] === undefined) return;
-        finish(true);
-      });
-      if (this.sessions.list.getSnapshot().byId[sessionId] !== undefined) finish(true);
-    });
   }
 }

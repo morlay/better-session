@@ -47,9 +47,7 @@ describe("better-session patch wiring", () => {
       "session-query-sqlite",
       "session-telemetry-otel",
       "storage-json",
-      "ui-chat",
       "ui-conversation",
-      "ui-input-trigger",
     ]);
   });
 
@@ -58,10 +56,8 @@ describe("better-session patch wiring", () => {
     expect(inserted.sort()).toEqual([
       "session-branch",
       "session-rdb",
-      "ui-chat-fork",
       "ui-conversation-fork",
       "ui-conversation-message-actions",
-      "ui-input-trigger-fork",
       "ui-primitives-fork",
     ]);
     for (const id of inserted) expect(upstreamIds.has(id)).toBe(false);

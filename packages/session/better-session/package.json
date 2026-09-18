@@ -40,9 +40,7 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "@morlay/dsh-client-ui-chat": "workspace:^",
     "@morlay/dsh-client-ui-conversation": "workspace:^",
-    "@morlay/dsh-client-ui-input-trigger": "workspace:^",
     "@morlay/dsh-client-ui-primitives": "workspace:^",
     "@morlay/session-branch": "workspace:^",
     "@morlay/session-rdb": "workspace:^",

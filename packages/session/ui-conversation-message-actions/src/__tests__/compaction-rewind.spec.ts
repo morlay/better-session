@@ -184,7 +184,7 @@ describe("压缩后第一条用户数据的 rewind / retry / edit", () => {
       expect(() =>
         new TokenMeter(ctx).measure(Session.create(SessionIdBrand("src"), after)),
       ).not.toThrow();
-      // 版本效果记在同一个会话上（ADR 0001），重放的输入交给 agent（ADR 0003）
+      // 版本效果记在同一个会话上（ADR-就地编辑重写同一会话而非新建会话），重放的输入交给 agent（ADR-重放经agent驱动而非直接append回复）
       expect(result).toMatchObject({ sessionId: "src", queuedTurns: 0 });
     } finally {
       await dispose();

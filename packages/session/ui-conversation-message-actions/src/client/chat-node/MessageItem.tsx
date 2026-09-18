@@ -1,7 +1,7 @@
 // MessageItem: the user / admitted-steering chat node renderer.
-// 新版 `dsh-client-ui-chat` 已内置全部 chat-node 渲染器；本项目仅**替换**
+// 官方 `@deepseek-ai/dsh-client-ui-chat` 内置全部 chat-node 渲染器；本项目仅**替换**
 // `user`/`steering` 两个 key（keyed slot reuse 即替换），在消息动作行上提供
-// edit / retry（新版无此能力）。其余 key 由新版内置渲染器处理。
+// edit / retry（上游无此能力）。其余 key 由官方内置渲染器处理。
 
 import {
   markdownLabels,
@@ -13,9 +13,9 @@ import { memo, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { InjectFace } from "@deepseek-ai/dsh-client-ui-slots";
 import { Button, Modal } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { UserMessageNode } from "@morlay/dsh-client-ui-chat/client";
+import type { UserMessageNode } from "@deepseek-ai/dsh-client-ui-chat/client";
 import { JsonBlock } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { ChatNodeViewProps, ChatViewSlotProps } from "@morlay/dsh-client-ui-chat/client";
+import type { ChatNodeViewProps, ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-chat/client";
 import type { RenderMessageImages } from "@morlay/dsh-client-ui-conversation/client";
 import { MessageIconActions } from "./MessageIconActions.tsx";
 import { styles } from "./MessageItem.styles.ts";

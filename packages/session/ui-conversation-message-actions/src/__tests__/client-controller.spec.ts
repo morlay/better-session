@@ -49,18 +49,15 @@ interface FakeSessions {
   list: { subscribe: (listener: () => void) => () => void; getSnapshot: () => unknown };
   binding: (id: string) => unknown;
   scope: (id: string) => unknown;
-  open: (id: string) => void;
 }
 
 function fakeSessions(ids: readonly string[] = ["s1"]): {
   sessions: FakeSessions;
   drafts: string[];
   resyncs: string[];
-  opened: string[];
 } {
   const drafts: string[] = [];
   const resyncs: string[] = [];
-  const opened: string[] = [];
   const byId: Record<string, unknown> = {};
   for (const id of ids) byId[id] = {};
   const sessions: FakeSessions = {
@@ -80,10 +77,17 @@ function fakeSessions(ids: readonly string[] = ["s1"]): {
     scope: () => ({
       get: () => ({ input: { for: () => ({ restoreDraft: (d: string) => drafts.push(d) }) } }),
     }),
-    open: (id: string) => opened.push(id),
   };
-  return { sessions, drafts, resyncs, opened };
+  return { sessions, drafts, resyncs };
 }
+
+/** 导航归 ui-workspace：controller 只把目标交给 ctx.uiWorkspace.openSession。 */
+const opened: string[] = [];
+const fakeWorkspace = {
+  openSession: (sessionId: string) => {
+    opened.push(sessionId);
+  },
+};
 
 function timelinePayload(
   id: string,
@@ -100,7 +104,7 @@ function timelinePayload(
 }
 
 function controllerWith(sessions: FakeSessions, id = "s1"): SessionEditorController {
-  const ctx = { get: () => sessions };
+  const ctx = { get: (name: string) => (name === "uiWorkspace" ? fakeWorkspace : sessions) };
   return new SessionEditorController(ctx as never, id as SessionId);
 }
 
@@ -120,6 +124,7 @@ function mutateCalls(calls: readonly FetchCall[]): FetchCall[] {
 
 beforeEach(() => {
   delete (globalThis as { __DSH_TRANSPORT__?: unknown }).__DSH_TRANSPORT__;
+  opened.length = 0;
 });
 
 describe("SessionEditorController（浏览器半）", () => {
@@ -192,8 +197,8 @@ describe("SessionEditorController（浏览器半）", () => {
     expect(resyncs).toEqual(["resync", "truncate(-1)"]);
   });
 
-  it("timeline 打开另一版本会等它出现在列表后导航过去", async () => {
-    const { sessions, opened } = fakeSessions(["s1", "child"]);
+  it("timeline 打开另一版本经 ui-workspace 导航过去", async () => {
+    const { sessions } = fakeSessions(["s1", "child"]);
     const controller = controllerWith(sessions);
 
     await controller.face.openVersion("child");

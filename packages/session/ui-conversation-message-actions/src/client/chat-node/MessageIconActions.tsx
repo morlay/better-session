@@ -12,7 +12,7 @@ import {
   Tooltip,
   writeClipboard,
 } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { ChatViewSlotProps } from "@morlay/dsh-client-ui-chat/client";
+import type { ChatViewSlotProps } from "@deepseek-ai/dsh-client-ui-chat/client";
 import {
   formatLatencySeconds,
   formatMessageClock,
