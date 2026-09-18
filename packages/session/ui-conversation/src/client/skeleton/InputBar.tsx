@@ -42,7 +42,10 @@ import {
   revealDraftSelection,
 } from "../input/editor/view-binding.ts";
 import { resolveSubmitMode } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/input/submission-policy.ts";
-import { attachmentErrorText, imageSizeText } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/image-labels.ts";
+import {
+  attachmentErrorText,
+  imageSizeText,
+} from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/image-labels.ts";
 import { ContextMeter } from "../../../../../../vendor/deepseek-harness/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx";
 import { styles } from "./InputBar.styles.ts";
 
@@ -542,7 +545,6 @@ export const InputBar = memo(function InputBar({
             {sessionId === undefined
               ? null
               : renderSlot("conversation.input.model", { locked: modelSeatLocked })}
-            <ContextMeter useProjection={useProjection} t={t} />
             {interruptible && (
               <Tooltip
                 label={t("input.stop")}
@@ -594,6 +596,8 @@ export const InputBar = memo(function InputBar({
         {variant === "composer" && input !== undefined && sessionId !== undefined
           ? renderSlot("conversation.composer.dock", {})
           : null}
+        {/* 跟随上游位置：上下文占用按钮在卡片下方、会话统计右侧（点击开面板看构成）。 */}
+        <ContextMeter useProjection={useProjection} t={t} />
       </div>
     </div>
   );

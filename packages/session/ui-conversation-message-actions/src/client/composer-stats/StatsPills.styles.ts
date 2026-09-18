@@ -1,15 +1,16 @@
 import type { CSSProps } from "@morlay/dsh-client-ui-primitives/client";
 
 export const styles = {
+  // 上游 `StatsPills.module.css` 的 `.root` 原样：统计行在 composer dock 里是 shrink-wrap 的
+  // 一个条目，与同为 dock 子项的上下文占用按钮并排——行内间距由 dock 的 `gap: 12px` 统一，
+  // 统计自己不再撑满整行（撑满会把占用按钮挤到行尾，两块之间的间距就跟行内间距对不上）。
   root: {
     display: "flex",
     justifyContent: "center",
     gap: "12px",
-    maxWidth: "var(--dsh-chat-content-width)",
-    width: "100%",
-    margin: "0 auto",
+    minWidth: "0",
+    maxWidth: "100%",
     boxSizing: "border-box",
-    padding: "4px calc(var(--dsh-composer-side-clearance) + 16px) 0px",
     fontSize: "var(--dsh-content-font-size-secondary, 13px)",
     lineHeight: "calc(20px + var(--dsh-content-font-delta-secondary, 0px))",
   },

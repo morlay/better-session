@@ -12,6 +12,10 @@
   `src/__tests__/reference-text.spec.ts`、`queue-text.spec.ts`。
 - **输入 / 队列的组装面**（hub、输入外壳、队列行——依赖 DOM 事件与渲染）→ jsdom 组件测试：
   `src/__tests__/input-hub.spec.tsx`、`input-shell.spec.tsx`、`queue-dock.spec.tsx`。
+- **`InputBar` 的呈现面**（哪个席落在哪块 DOM——跟随上游的位置契约）→ jsdom 组件测试：
+  `src/__tests__/input-bar.spec.tsx`。组件是 props 驱动的（`InputBarProps` 自带 `useSession` /
+  `useProjection` / `renderSlot` 等注入面），传 stub props 直接渲染即可，不需要 slot 装配运行时；
+  编辑器传 null 走 inert 分支，所以也不起 Lexical。
 - **剪贴板资源**（粘贴 / 拖入的资源归一）→ `src/__tests__/clipboard-resource.spec.ts`。
 - **不单独测**：`.styles.ts` 样式表与 locale 数据表（机制由 `packages/client/ui-primitives` 的
   styling / token 测试覆盖）、纯类型与桶文件、**不再复制的上游文件**（它们就是上游实现）。
@@ -23,4 +27,5 @@
   **slot 装配面**需要 cordis client 运行时（slots 声明者 / 注册表、locale、renderer、sessions 面），
   而上游 client 半是浏览器模块工厂，node / jsdom 不可加载 →
   [债务 对话UI客户端半的装配面缺测试辅助](../../../ui-conversation-message-actions/.agents/debts/20260917-对话UI客户端半的装配面缺测试辅助.md)。
-  动这些 `apply` / 装配面之前先看该债务的触发条件。
+  动这些 `apply` / 装配面之前先看该债务的触发条件。（组件的**呈现面**不在这个空白里：见上面的
+  `InputBar` 一条——只有「插进哪个槽、注册什么优先级」这类装配行为才需要 harness。）
