@@ -8,11 +8,11 @@ import {
   type ClipboardDataLike,
 } from "../client/input/clipboard-resource.ts";
 
-const REPO = "/Users/morlay/src/github.com/morlay/better-session";
+const REPO = "/Users/morlay/src/github.com/morlay/dsh-plugin";
 const JSON_SNIPPET = [
   '  "repository": {',
   '    "type": "git",',
-  '    "url": "https://github.com/morlay/better-session.git"',
+  '    "url": "https://github.com/morlay/dsh-plugin.git"',
   "  },",
 ].join("\n");
 

@@ -14,7 +14,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/morlay/session-rdb.git"
+    "url": "https://github.com/morlay/dsh-plugin.git"
   },
   "files": [
     "dist",
