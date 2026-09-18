@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLocalPackage } from "@local/devkit";
 import { defineConfig } from "tsdown";
 
 const BIN_NAME = "dsh-desktopify";
@@ -24,6 +25,8 @@ const HOST_EXTERNAL = [
   "@deepseek-ai/dsh/profile-boot",
 ];
 
+// 三个变体都按同一条规则处理 `@local/*`：本地私有包从不发布，一律内联进产物
+// （否则产物里留裸引用、发布清单里留依赖，消费方会去 registry 找一个不存在的包）。
 export default defineConfig([
   {
     name: BIN_NAME,
@@ -39,7 +42,12 @@ export default defineConfig([
     target: "es2024",
     dts: false,
     clean: true,
-    deps: { neverBundle: ["electron"] },
+    // 内联进来的 @local/devkit 客户端打包面要 rolldown / lightningcss：两者都是公开包，
+    // 按既有边界留在产物外（并在清单里声明），否则它们自己的原生二进制解析不到。
+    deps: {
+      neverBundle: ["electron", "lightningcss", "rolldown"],
+      alwaysBundle: isLocalPackage,
+    },
     // Only the manifest is upstream's: it carries the payload's identity and the dependency
     // list the closure walk materializes. `lib/index.js` comes from `./src/desktop-host`.
     copy: [{ from: `${HOST_DIR}/package.json`, to: "dist/desktop-host" }],
@@ -65,7 +73,7 @@ export default defineConfig([
     fixedExtension: false,
     dts: false,
     clean: false,
-    deps: { neverBundle: HOST_EXTERNAL },
+    deps: { neverBundle: HOST_EXTERNAL, alwaysBundle: isLocalPackage },
   },
   {
     entry: {
@@ -77,6 +85,6 @@ export default defineConfig([
     target: "es2024",
     dts: false,
     clean: false,
-    deps: { neverBundle: ["electron"] },
+    deps: { neverBundle: ["electron"], alwaysBundle: isLocalPackage },
   },
 ]);

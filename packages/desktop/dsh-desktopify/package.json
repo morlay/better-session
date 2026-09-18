@@ -49,10 +49,10 @@
   "dependencies": {
     "@deepseek-ai/dsh": "workspace:^",
     "commander": "^15.0.0",
-    "devkit": "workspace:^",
     "electron": "^44.3.0",
     "electron-builder": "^26.16.1",
     "extract-zip": "^2.0.1",
+    "lightningcss": "^1.32.0",
     "pnpm": "12.4.2",
     "rolldown": "1.x",
     "sharp": "^0.35.4",
@@ -68,6 +68,7 @@
     "@deepseek-ai/dsh-jobs": "workspace:^",
     "@deepseek-ai/dsh-skill-office": "workspace:^",
     "@deepseek-ai/dsh-tools": "workspace:^",
+    "@local/devkit": "workspace:^",
     "@types/node": "^26.5.0"
   },
   "peerDependencies": {

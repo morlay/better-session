@@ -10,6 +10,17 @@ import {
 } from "./cordis-client.ts";
 import { cssInlinePlugins } from "./css.ts";
 
+/**
+ * 本地私有包前缀：`@local/*` 只活在本 workspace、从不发布。留在产物里消费方就会去
+ * registry 找不存在的包，所以构建时一律内联进产物，发布清单里也不出现它们。
+ */
+export const LOCAL_PACKAGE_PREFIX = "@local/";
+
+/** 依赖 id 是否属于本地私有包（含子路径）。 */
+export function isLocalPackage(id: string): boolean {
+  return id.startsWith(LOCAL_PACKAGE_PREFIX);
+}
+
 /** `existsSync` 的异步等价物：任何 stat 失败都算条目不存在。 */
 async function entryExists(path: string): Promise<boolean> {
   try {
@@ -76,7 +87,7 @@ export async function defineCordisPluginConfig(options?: {
       neverBundle: (id: string, importer: string | null | undefined) =>
         fromClient(importer) && isClientExternal(id, spec.externals),
       alwaysBundle: (id: string, importer: string | null | undefined) =>
-        fromClient(importer) && !isClientExternal(id, spec.externals),
+        isLocalPackage(id) || (fromClient(importer) && !isClientExternal(id, spec.externals)),
     },
     plugins:
       client === undefined

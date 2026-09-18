@@ -1,4 +1,4 @@
-export { defineCordisPluginConfig } from "./cordis-host.ts";
+export { defineCordisPluginConfig, isLocalPackage, LOCAL_PACKAGE_PREFIX } from "./cordis-host.ts";
 export {
   bundleClientFactory,
   clientBundleSpec,
