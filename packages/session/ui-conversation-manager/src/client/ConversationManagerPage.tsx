@@ -7,7 +7,6 @@ import {
   IconSearchOutline16,
   Input,
   Modal,
-  Pill,
   Tag,
   relativeTime,
 } from "@deepseek-ai/dsh-client-ui-primitives";
@@ -200,18 +199,27 @@ export function ConversationManagerPage({
     <div {...styling.props(styles.page)}>
       <div {...styling.props(styles.header)}>
         <h1 {...styling.props(styles.title)}>{t("title")}</h1>
-        <div {...styling.props(styles.tabs)}>
-          <Pill
-            active={view === "sessions"}
+        <div {...styling.props(styles.tabs)} role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "sessions"}
+            className={styling.className(styles.tab, view === "sessions" && styles.tabActive)}
             onClick={() => {
               setView("sessions");
             }}
           >
             {t("view.sessions")}
-          </Pill>
-          <Pill active={view === "usage"} onClick={openUsage}>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "usage"}
+            className={styling.className(styles.tab, view === "usage" && styles.tabActive)}
+            onClick={openUsage}
+          >
             {t("view.usage")}
-          </Pill>
+          </button>
         </div>
         <div {...styling.props(styles.headerActions)}>
           <Button
@@ -478,10 +486,20 @@ type PageView = "sessions" | "usage";
 /** 统计视图的二层维度。 */
 type UsageTab = "overview" | "daily" | "models" | "sessions";
 
-/** 紧凑明细：输入 · 输出 · 缓存读取 · 推理 · 事件。 */
+/** 输入在显示上含缓存读取（缓存命中的输入），合计随之含缓存。 */
+function inputWithCache(totals: UsageTotals): number {
+  return totals.inputTokens + totals.cacheReadTokens;
+}
+
+/** 显示口径的合计：输入（含缓存）+ 输出。 */
+function usageTotal(totals: UsageTotals): number {
+  return totals.totalTokens + totals.cacheReadTokens;
+}
+
+/** 紧凑明细：输入（含缓存）· 输出 · 缓存读取 · 推理 · 事件。 */
 function usageMeta(totals: UsageTotals, t: Translate): string {
   return [
-    `${t("usage.input")} ${formatTokens(totals.inputTokens)}`,
+    `${t("usage.inputWithCache")} ${formatTokens(inputWithCache(totals))}`,
     `${t("usage.output")} ${formatTokens(totals.outputTokens)}`,
     `${t("usage.cacheRead")} ${formatTokens(totals.cacheReadTokens)}`,
     `${t("usage.reasoning")} ${formatTokens(totals.reasoningTokens)}`,
@@ -524,7 +542,7 @@ function foldBuckets(
     folded.set(key, row);
   }
   return [...folded.values()].sort(
-    (left, right) => right.totals.totalTokens - left.totals.totalTokens,
+    (left, right) => usageTotal(right.totals) - usageTotal(left.totals),
   );
 }
 
@@ -536,7 +554,7 @@ function UsageList({ rows, t }: { rows: readonly UsageListRow[]; t: Translate })
         <li key={row.key} {...styling.props(styles.usageRow)}>
           <span {...styling.props(styles.usageRowLabel)}>{row.label}</span>
           <span {...styling.props(styles.usageRowTotal)}>
-            {formatTokens(row.totals.totalTokens)}
+            {formatTokens(usageTotal(row.totals))}
           </span>
           <span {...styling.props(styles.usageRowMeta)}>{usageMeta(row.totals, t)}</span>
         </li>
@@ -547,11 +565,11 @@ function UsageList({ rows, t }: { rows: readonly UsageListRow[]; t: Translate })
 
 function UsageOverview({ report, t }: { report: SessionUsageReport; t: Translate }): ReactNode {
   const cells = [
-    { key: "input", label: t("usage.input"), value: report.totals.inputTokens },
+    { key: "input", label: t("usage.inputWithCache"), value: inputWithCache(report.totals) },
     { key: "output", label: t("usage.output"), value: report.totals.outputTokens },
     { key: "cache", label: t("usage.cacheRead"), value: report.totals.cacheReadTokens },
     { key: "reasoning", label: t("usage.reasoning"), value: report.totals.reasoningTokens },
-    { key: "total", label: t("usage.total"), value: report.totals.totalTokens },
+    { key: "total", label: t("usage.total"), value: usageTotal(report.totals) },
     { key: "events", label: t("usage.events"), value: report.totals.events },
   ];
   return (
@@ -568,7 +586,7 @@ function UsageOverview({ report, t }: { report: SessionUsageReport; t: Translate
         <li {...styling.props(styles.usageRow)}>
           <span {...styling.props(styles.usageRowLabel)}>{t("usage.subagentOnly")}</span>
           <span {...styling.props(styles.usageRowTotal)}>
-            {formatTokens(report.subagent.totalTokens)}
+            {formatTokens(usageTotal(report.subagent))}
           </span>
           <span {...styling.props(styles.usageRowMeta)}>{usageMeta(report.subagent, t)}</span>
         </li>
@@ -617,21 +635,24 @@ function UsageView({
                 label: row.title ?? row.sessionId,
                 totals: row,
               }))
-              .sort((left, right) => right.totals.totalTokens - left.totals.totalTokens)
+              .sort((left, right) => usageTotal(right.totals) - usageTotal(left.totals))
               .slice(0, USAGE_SESSION_ROWS);
   return (
     <div {...styling.props(styles.usage)}>
-      <div {...styling.props(styles.tabs)}>
+      <div {...styling.props(styles.tabs)} role="tablist">
         {items.map((item) => (
-          <Pill
+          <button
             key={item}
-            active={tab === item}
+            type="button"
+            role="tab"
+            aria-selected={tab === item}
+            className={styling.className(styles.tab, tab === item && styles.tabActive)}
             onClick={() => {
               onTab(item);
             }}
           >
             {labels[item]}
-          </Pill>
+          </button>
         ))}
       </div>
       {loading ? <p {...styling.props(styles.status)}>{t("usage.loading")}</p> : null}

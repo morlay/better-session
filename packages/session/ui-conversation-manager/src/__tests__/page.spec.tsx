@@ -462,13 +462,13 @@ describe("对话管理页面：token 用量统计", () => {
       faces: { loadUsage: vi.fn(async () => REPORT) },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "统计" }));
+    fireEvent.click(screen.getByRole("tab", { name: "统计" }));
     await waitFor(() => {
       expect(faces.loadUsage).toHaveBeenCalledTimes(1);
     });
 
     expect(screen.getByText("总览")).toBeTruthy();
-    expect(screen.getByText("输入")).toBeTruthy();
+    expect(screen.getByText("输入（含缓存）")).toBeTruthy();
     expect(screen.getByText("165")).toBeTruthy();
     expect(screen.getByText("其中子代理")).toBeTruthy();
     expect(screen.getAllByText("55").length).toBeGreaterThan(0);
@@ -476,17 +476,35 @@ describe("对话管理页面：token 用量统计", () => {
 
   it("第二层切维度：按天 / 按模型 / 按会话", async () => {
     renderPage({ archived: [], faces: { loadUsage: vi.fn(async () => REPORT) } });
-    fireEvent.click(screen.getByRole("button", { name: "统计" }));
+    fireEvent.click(screen.getByRole("tab", { name: "统计" }));
     await screen.findByText("总览");
 
-    fireEvent.click(screen.getByRole("button", { name: "按天" }));
+    fireEvent.click(screen.getByRole("tab", { name: "按天" }));
     expect(screen.getByText("2026-09-08")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "按模型" }));
+    fireEvent.click(screen.getByRole("tab", { name: "按模型" }));
     expect(screen.getByText("deepseek-official / v4")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "按会话" }));
+    fireEvent.click(screen.getByRole("tab", { name: "按会话" }));
     expect(screen.getByText("会话 A")).toBeTruthy();
+  });
+
+  it("输入与合计在显示上含缓存读取", async () => {
+    const withCache = {
+      ...REPORT,
+      totals: { ...TOTALS_165, cacheReadTokens: 1_000 },
+      subagent: { ...TOTALS_55, cacheReadTokens: 0 },
+    };
+    renderPage({
+      archived: [],
+      faces: { loadUsage: vi.fn(async () => withCache) },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "统计" }));
+    await screen.findByText("总览");
+
+    // 输入 100 + 缓存 1000 = 1.1K；合计 165 + 1000 = 1.2K
+    expect(screen.getByText("1.1K")).toBeTruthy();
+    expect(screen.getByText("1.2K")).toBeTruthy();
   });
 
   it("统计失败时给出原因", async () => {
@@ -498,7 +516,7 @@ describe("对话管理页面：token 用量统计", () => {
         }),
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "统计" }));
+    fireEvent.click(screen.getByRole("tab", { name: "统计" }));
     await waitFor(() => {
       expect(screen.getByText("操作失败：boom")).toBeTruthy();
     });

@@ -17,16 +17,16 @@ ui-plugin-manager 同一种注册方式）。页面分两层 Tabs（官方 `Pill
 页面是 profile 的一行（由 `@morlay/better-session` 的 patch 插入），装好即在侧栏出现「对话管理」。
 它不新增 host 面，只读既有服务与路由：
 
-| 动作         | 接缝                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------- |
-| 列表与标题   | 框架标准座位 `useSessions`（会话目录、标题、时间）+ `useWorkspaces`（工作区归属、归档集）               |
-| 归档         | `ctx.uiWorkspace.archiveSession`（上游 ui-workspace，未归档行提供）                                     |
-| 取消归档     | `ctx.uiWorkspace.unarchiveSession`（上游 ui-workspace，已归档行提供）                                   |
-| 导出         | `POST /api/session.export`（`@morlay/session-rdb`，直接下载 zip）                                       |
-| 删除         | `POST /api/session.delete`（`@morlay/session-rdb`，仅已归档行可用）                                     |
-| 导入为新会话 | `POST /api/session.import`（`@morlay/session-rdb`，不带 `sessionId` = 新建会话）                        |
-| 清理孤儿数据 | `POST /api/session.gc`（停 agent → 回收孤儿 subagent 会话 → 回收孤儿事件行 → VACUUM；执行期间阻塞界面） |
-| 用量统计     | `POST /api/session.usage`（`@morlay/session-rdb` 全库聚合；进入统计视图时拉一次，维度切换本地折叠）     |
+| 动作         | 接缝                                                                                                        |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| 列表与标题   | 框架标准座位 `useSessions`（会话目录、标题、时间）+ `useWorkspaces`（工作区归属、归档集）                   |
+| 归档         | `ctx.uiWorkspace.archiveSession`（上游 ui-workspace，未归档行提供）                                         |
+| 取消归档     | `ctx.uiWorkspace.unarchiveSession`（上游 ui-workspace，已归档行提供）                                       |
+| 导出         | `POST /api/session.export`（`@morlay/session-rdb`，直接下载 zip）                                           |
+| 删除         | `POST /api/session.delete`（`@morlay/session-rdb`，仅已归档行可用）                                         |
+| 导入为新会话 | `POST /api/session.import`（`@morlay/session-rdb`，不带 `sessionId` = 新建会话）                            |
+| 清理孤儿数据 | `POST /api/session.gc`（停 agent → 回收孤儿 subagent 会话 → 回收孤儿事件行 → VACUUM；执行期间阻塞界面）     |
+| 用量统计     | `POST /api/session.usage`（`@morlay/session-rdb` 读专用用量表聚合；进入统计视图时拉一次，维度切换本地折叠） |
 
 删除、导入与 GC 成功后刷新会话列表（`ctx.sessions.refresh`）；host 拒绝（未归档 / 正在使用 / 不存在）
 时按错误码给出可读文案。列表每页 20 条，搜索框复用官方 `Input`（连同官方图标与焦点样式）。
@@ -47,8 +47,8 @@ GC 是唯一会**停止所有运行中 agent** 的动作：确认后进入不可
   [ADR-删除不再清孤儿与vacuum独立成gc通道](../session-rdb/.agents/adrs/20260918-删除不再清孤儿与vacuum独立成gc通道.md)。
   GC 同时回收**父已不存在的 subagent 会话**（它们是删除父会话后的孤儿）；父还在的子会话不动。
 - 导入只接受含会话日志 artifact 的 zip；导出只导出该 artifact（不含附件等旁路数据）。
-- 统计是一次**全库聚合**（约 1~2 秒），只在进入统计视图时请求一次；口径见
-  [ADR-用量统计走事件行去重与f_role索引](../session-rdb/.agents/adrs/20260918-用量统计走事件行去重与f_role索引.md)。
+- 统计是一次全库聚合（真实库实测约 140ms），只在进入统计视图时请求一次；口径见
+  [ADR-用量统计走专用用量日志表](../session-rdb/.agents/adrs/20260918-用量统计走专用用量日志表.md)。
   按会话的行是各会话自己的日志口径（fork 子会话含继承前缀），所以各行之和 ≥ 总量；「其中子代理」与另一侧
   相加正好等于总量。
 - 统计只反映**库里现有**的用量：删掉的会话与 GC 回收掉的孤儿行都不再计入。
