@@ -8,6 +8,7 @@ import {
   isClientExternal,
   type CordisClientOptions,
 } from "./cordis-client.ts";
+import { cssInlinePlugins } from "./css.ts";
 
 /** `existsSync` 的异步等价物：任何 stat 失败都算条目不存在。 */
 async function entryExists(path: string): Promise<boolean> {
@@ -86,6 +87,10 @@ export async function defineCordisPluginConfig(options?: {
               entry: client.entry ?? "./src/client/index.ts",
               ...(client.externals === undefined ? {} : { externals: client.externals }),
             }),
+            // client 入口的样式内联规则与现场打包共用一份实现：这里的产物虽被
+            // clientEntryPlugin 换成现场打包的字节，但 tsdown 自己的这一次解析也必须
+            // 认得样式 import，否则构建在 generateBundle 之前就断。
+            ...cssInlinePlugins({ name: client.name }),
           ],
   };
 }

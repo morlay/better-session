@@ -40,7 +40,12 @@ async function clientSourceAliases(): Promise<{ find: string; replacement: strin
 export default defineConfig(async () => ({
   resolve: { alias: await clientSourceAliases() },
   test: {
-    include: ["packages/**/src/__tests__/**/*.spec.ts", "packages/**/src/__tests__/**/*.spec.tsx"],
+    include: [
+      "packages/**/src/__tests__/**/*.spec.ts",
+      "packages/**/src/__tests__/**/*.spec.tsx",
+      // 共享工具链（devkit）的测试与被它服务的包同形：src/__tests__/*.spec.ts。
+      "devpackages/**/src/__tests__/**/*.spec.ts",
+    ],
     exclude: ["**/node_modules/**", "target/**"],
   },
 }));

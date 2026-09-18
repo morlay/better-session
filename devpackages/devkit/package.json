@@ -8,6 +8,7 @@
     "./tsconfig.json": "./tsconfig.json"
   },
   "devDependencies": {
+    "lightningcss": "^1.32.0",
     "rolldown": "^1.2.8"
   },
   "peerDependencies": {

@@ -1,5 +1,6 @@
 import { rolldown } from "rolldown";
 import type { Plugin } from "rolldown";
+import { cssInlinePlugins } from "./css.ts";
 
 /** `__ModuleLoader__.load` 手递的三段：banner / intro / footer（构建与现场打包共用）。 */
 const factoryBanner = (name: string): string =>
@@ -140,6 +141,8 @@ export async function bundleClientFactory(options: ClientFactoryOptions): Promis
     resolve: { conditionNames: spec.conditionNames },
     transform: { define: spec.define },
     external: (id: string) => isClientExternal(id, spec.externals),
+    // 样式内联进字节：产物是自包含单文件，样式不能留在外部（见 cssInlinePlugins）。
+    plugins: cssInlinePlugins({ name: options.name }),
   });
   try {
     const { output } = await build.generate({
