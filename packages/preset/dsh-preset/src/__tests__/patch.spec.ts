@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { entryListSchema } from "@deepseek-ai/cordis-plugin-include";
+import { applyEntryPatches, entryListSchema } from "@deepseek-ai/cordis-plugin-include";
 import yaml from "js-yaml";
 import { describe, expect, it } from "vitest";
 
@@ -9,17 +9,43 @@ const UPSTREAM_BASE_PATCH = join(
   process.cwd(),
   "vendor/deepseek-harness/packages/bundle/base/cordis.patch.yml",
 );
+const UPSTREAM_WEB_APP_PATCH = join(
+  process.cwd(),
+  "vendor/deepseek-harness/packages/bundle/web-app/cordis.patch.yml",
+);
 
 interface PatchRow {
   id?: string;
+  name?: string;
   disabled?: boolean;
   config?: Record<string, unknown>;
   insert?: { id?: string; name?: string; config?: Record<string, unknown> }[];
 }
 
-const rows = yaml.load(await readFile(PATCH_PATH, "utf8"), {
-  schema: entryListSchema,
-}) as PatchRow[];
+async function loadPatchRows(path: string): Promise<PatchRow[]> {
+  return yaml.load(await readFile(path, "utf8"), { schema: entryListSchema }) as PatchRow[];
+}
+
+/**
+ * Compose patch layers over an empty root with the include's own patch algorithm —
+ * the single `applyEntryPatches` call `boot()` (and `app-boot`'s `composeEntries`)
+ * makes for a profile whose root file is `[]`, so a layer's id target resolves
+ * against rows an earlier layer inserted.
+ */
+function composeLayers(layers: PatchRow[][]): PatchRow[] {
+  const apply = applyEntryPatches as unknown as (
+    data: unknown[],
+    patches: unknown[],
+    warn: (message: string, ...args: unknown[]) => void,
+  ) => unknown[];
+  return apply([], structuredClone(layers).flat(), () => {}) as PatchRow[];
+}
+
+function rowById(rows: readonly PatchRow[], id: string): PatchRow | undefined {
+  return rows.find((row) => row.id === id);
+}
+
+const rows = await loadPatchRows(PATCH_PATH);
 
 const inserted = rows.flatMap((row) => row.insert ?? []);
 
@@ -41,12 +67,29 @@ describe("dsh-preset patch wiring", () => {
   });
 
   it("disables the shipped sandbox rows and mounts the replacement in one layer", () => {
-    expect(rows.filter((row) => row.disabled === true).map((row) => row.id)).toEqual([
-      "sandbox",
-      "fs-sandbox",
-    ]);
+    expect(rows.filter((row) => row.disabled === true).map((row) => row.id)).toEqual(
+      expect.arrayContaining(["sandbox", "fs-sandbox"]),
+    );
     expect(inserted.filter((row) => row.id === "sandbox-local")).toHaveLength(1);
     expect(sandboxRow?.name).toBe("@morlay/dsh-sandbox-local");
+  });
+
+  it("disables exactly the shipped rows this deployment turns off", () => {
+    const disabled = rows.filter((row) => row.disabled === true).map((row) => row.id);
+
+    expect(disabled).toEqual(["sandbox", "fs-sandbox", "office-to-pdf"]);
+  });
+
+  it("disables the office-to-pdf row the shipped web-app bundle inserts", async () => {
+    const shipped = composeLayers([await loadPatchRows(UPSTREAM_WEB_APP_PATCH)]);
+    const shippedRow = rowById(shipped, "office-to-pdf");
+
+    expect(shippedRow?.name).toBe("@deepseek-ai/dsh-office-to-pdf");
+    expect(shippedRow?.disabled).not.toBe(true);
+
+    const composed = composeLayers([await loadPatchRows(UPSTREAM_WEB_APP_PATCH), rows]);
+
+    expect(rowById(composed, "office-to-pdf")?.disabled).toBe(true);
   });
 
   it("names rows that still exist in the shipped base bundle", async () => {

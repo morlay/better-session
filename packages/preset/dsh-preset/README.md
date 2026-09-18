@@ -8,12 +8,12 @@
 
 ## 内容
 
-| 文件                       | 作用                                                                                                                       |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `cordis.patch.yml`         | bundle patch：禁用官方 preset、注册本包 preset 为默认、声明个人 `llm-pi-ai` route、覆盖沙箱规则、插入 `prompt-reminder` 行 |
-| `tool/generate-presets.ts` | 从上游生成 preset 的模块 + tsdown hooks                                                                                    |
-| `dist/presets/standard/`   | 构建产物：自定义 preset「标准模式」（由上游 `standard` 生成）                                                              |
-| `dist/presets/ptc/`        | 构建产物：自定义 preset「PTC 模式」（由上游 `ptc` 生成）                                                                   |
+| 文件                       | 作用                                                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cordis.patch.yml`         | bundle patch：禁用官方 preset、注册本包 preset 为默认、声明个人 `llm-pi-ai` route、覆盖沙箱规则、禁用官方 `office-to-pdf` 行、插入 `prompt-reminder` 行 |
+| `tool/generate-presets.ts` | 从上游生成 preset 的模块 + tsdown hooks                                                                                                                 |
+| `dist/presets/standard/`   | 构建产物：自定义 preset「标准模式」（由上游 `standard` 生成）                                                                                           |
+| `dist/presets/ptc/`        | 构建产物：自定义 preset「PTC 模式」（由上游 `ptc` 生成）                                                                                                |
 
 ## 装配
 
@@ -28,6 +28,19 @@
 `dsh.desktop.agentPresets` 声明本包的 `dist/presets`，由
 [dsh-desktopify](../../desktop/dsh-desktopify/README.md) 在 dev 项目与种子 profile 里把内容
 物化到该挂载点。
+
+## office 相关
+
+两类 office 内容归属不同，本包只管得住其中一个（判断依据、上游证据与上游需求见
+[设计 预设生成与装配](./.agents/designs/20260917-预设生成与装配.md)）：
+
+- **Office→PDF 转档后端**（`@deepseek-ai/dsh-office-to-pdf`）是官方 web-app bundle 的 profile 行：
+  本 bundle 的 `cordis.patch.yml` 按 id 覆盖 `disabled: true`，不启用。副作用是 Sidebar 文档预览的
+  Office 标签页（docx / xls(x) / ppt(x)）显示 `unavailable`。
+- **office skill**（`@deepseek-ai/dsh-skill-office` 的 docx / pptx / xlsx 三个 skill）不是 profile 行——上游桌面
+  宿主命令式装载它，bundle / preset patch 都没有旋钮。桌面形态改由
+  [dsh-desktopify](../../desktop/dsh-desktopify/README.md) 的自带 host 变体决定：该变体不装载 officeSkills
+  （`runtime/office-skills` 资源仍随包，但没有读者），因此桌面里也不出现这三个 skill。
 
 ## 生成与升级
 
