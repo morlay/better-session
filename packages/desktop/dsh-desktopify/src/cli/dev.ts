@@ -18,11 +18,6 @@ import { writeAppConfig } from "../appconfig.ts";
 import { discoverPresetMounts, materializeAgentPresets } from "./agent-presets.ts";
 import { ensureClientBundlePlaceholders, installProfilePatch } from "./dev-web.ts";
 import {
-  OFFICE_SKILLS_DIR,
-  officeSkillAssetsSource,
-  prepareOfficeSkillAssets,
-} from "./office-assets.ts";
-import {
   DSH_PACKAGE,
   desktopHost,
   hasTsx,
@@ -399,7 +394,6 @@ export async function runDev(options: DevOptions): Promise<void> {
   const desktop = desktopConfig(manifest);
   const runtimeRoot = join(buildRootDir, "runtime");
   await mkdir(runtimeRoot, { recursive: true });
-  await prepareOfficeSkillAssets(officeSkillAssetsSource(), join(runtimeRoot, OFFICE_SKILLS_DIR));
   await writeAppConfig(runtimeRoot, {
     name: manifest.name,
     id: desktop.id,

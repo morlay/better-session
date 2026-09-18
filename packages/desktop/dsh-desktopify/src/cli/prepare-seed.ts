@@ -388,8 +388,8 @@ export async function runPrepareSeed(options: PrepareSeedOptions): Promise<void>
   await mkdir(runtimeDir, { recursive: true });
   await mkdir(profileDir, { recursive: true });
 
-  // 运行时载荷：deploy 闭包就是 host 的 dsh 安装（解析锚点）、前端静态资源与
-  // office skills 的来源；它在产物里不可变，也不再被种进用户的 DSH_HOME。
+  // 运行时载荷：deploy 闭包就是 host 的 dsh 安装（解析锚点）与前端静态资源的来源；
+  // 它在产物里不可变，也不再被种进用户的 DSH_HOME。
   await cp(join(deployRoot, "package.json"), join(runtimeDir, "package.json"));
   await cp(join(deployRoot, "node_modules"), runtimeModulesDir, {
     recursive: true,

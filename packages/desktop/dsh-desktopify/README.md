@@ -83,7 +83,7 @@
 - `runtime/`：随包运行时——`node/`（随包 Node）、`pnpm/bin/pnpm.mjs`（随包 pnpm 的入口，壳把它作为 host
   argv[6] 交给 `profileContext.packageManager`；该 npm 包只是 wrapper，入口会 spawn 同平台
   `@pnpm/exe.<platform>-<arch>` 的原生二进制，所以载荷带上那个平台包）、`bin/`（pnpm 子进程的 `PATH`
-  前置目录，Unix 下是指向 `../node/node` 的相对链接）、`primary-runtime/`、`office-skills/`、
+  前置目录，Unix 下是指向 `../node/node` 的相对链接）、`primary-runtime/`、
   `appconfig.json`；
 - `seed/`：`runtime/`（不可变闭包 = host 的 dsh 安装锚点、前端静态资源与 preset 物化目标）+
   `profiles/desktop/`（初始 profile：app 自己的 bundle 以 `file:` 指向 `vendor/` 副本、`pnpm-workspace.yaml`、

@@ -1,6 +1,6 @@
 {
   "name": "@morlay/ui-conversation-manager",
-  "version": "0.0.2-alpha.1",
+  "version": "0.0.2-alpha.2",
   "description": "「对话管理」全局面板页（浏览器半）：已归档会话的搜索、取消归档、删除，以及导入为新会话。",
   "keywords": [
     "archived-sessions",

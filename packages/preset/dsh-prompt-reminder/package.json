@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-prompt-reminder",
-  "version": "0.0.3-alpha.1",
+  "version": "0.0.3-alpha.2",
   "description": "Demotes the system-prompt sections a reduced prompt leaves out into <system-reminder> user messages, so tool guidance stops diluting the system prompt while it stays in force.",
   "keywords": [
     "dsh",

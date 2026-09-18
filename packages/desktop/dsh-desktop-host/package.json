@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-desktop-host",
-  "version": "0.0.1-alpha.1",
+  "version": "0.0.1-alpha.2",
   "description": "Desktop host process for dsh-desktopify: boots the Web application as the desktop profile and reports its URL to the Electron shell over IPC — upstream apps/desktop-host with the Office skill mount removed.",
   "keywords": [
     "desktop",

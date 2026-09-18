@@ -39,8 +39,9 @@
   Office 标签页（docx / xls(x) / ppt(x)）显示 `unavailable`。
 - **office skill**（`@deepseek-ai/dsh-skill-office` 的 docx / pptx / xlsx 三个 skill）不是 profile 行——上游桌面
   宿主命令式装载它，bundle / preset patch 都没有旋钮。桌面形态改由
-  [dsh-desktopify](../../desktop/dsh-desktopify/README.md) 的自带 host 变体决定：该变体不装载 officeSkills
-  （`runtime/office-skills` 资源仍随包，但没有读者），因此桌面里也不出现这三个 skill。
+  [dsh-desktopify](../../desktop/dsh-desktopify/README.md) 的 host 变体
+  （[`@morlay/dsh-desktop-host`](../../desktop/dsh-desktop-host/README.md)）决定：该变体既不装载 officeSkills，
+  也不再随包它的 assets，因此桌面里不出现这三个 skill。
 
 ## 生成与升级
 

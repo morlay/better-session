@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-desktopify",
-  "version": "0.1.8-alpha.2",
+  "version": "0.1.8-alpha.4",
   "description": "Desktop packaging tool for dsh workspaces: runs the @morlay/dsh-desktop-host child as a shared Web profile and proxies dsh-app:// to it with the Host-issued cookie, with dev (workspace-linked) and bundle (static, unsigned) modes.",
   "keywords": [
     "desktop",

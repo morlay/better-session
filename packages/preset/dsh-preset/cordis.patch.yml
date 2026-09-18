@@ -90,8 +90,9 @@
 # 行 id 来自 `vendor/deepseek-harness/packages/bundle/web-app/cordis.patch.yml`，该 bundle
 # 在本 bundle 之前装配，因此这条覆盖生效；与上面两条官方行同款：禁用行写在本 bundle 的
 # patch（dev web / desktop 与打包形态都生效），不写 app patch（只在打包时作 seed patch 生效）。
-# 桌面宿主还会硬编码装载 `@deepseek-ai/dsh-skill-office`（docx / pptx / xlsx 三个 skill），
-# 那不是 profile 行、本层没有旋钮——结论与上游需求见 README「office 相关」。
+# 上游桌面宿主还会命令式装载 `@deepseek-ai/dsh-skill-office`（docx / pptx / xlsx 三个 skill），
+# 那不是 profile 行、本层没有旋钮——桌面形态由我们的 host 变体接管，它不装载 officeSkills；
+# 结论与上游需求见 README「office 相关」。
 - id: office-to-pdf
   disabled: true
 
