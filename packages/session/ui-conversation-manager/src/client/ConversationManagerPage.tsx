@@ -196,13 +196,14 @@ export function ConversationManagerPage({
   const confirmed = confirming;
 
   return (
-    <div {...styling.props(styles.page)}>
+    <div {...styling.props(styles.page)} data-view={view}>
       <div {...styling.props(styles.header)}>
         <h1 {...styling.props(styles.title)}>{t("title")}</h1>
         <div {...styling.props(styles.tabs)} role="tablist">
           <button
             type="button"
             role="tab"
+            data-tab="sessions"
             aria-selected={view === "sessions"}
             className={styling.className(styles.tab, view === "sessions" && styles.tabActive)}
             onClick={() => {
@@ -214,6 +215,7 @@ export function ConversationManagerPage({
           <button
             type="button"
             role="tab"
+            data-tab="usage"
             aria-selected={view === "usage"}
             className={styling.className(styles.tab, view === "usage" && styles.tabActive)}
             onClick={openUsage}
@@ -225,6 +227,7 @@ export function ConversationManagerPage({
           <Button
             variant="outline"
             size="sm"
+            data-action="import"
             disabled={importing}
             aria-busy={importing}
             aria-label={importing ? t("importing") : t("import")}
@@ -237,6 +240,7 @@ export function ConversationManagerPage({
           <Button
             variant="outline"
             size="sm"
+            data-action="gc"
             disabled={gcPhase !== "idle"}
             aria-label={t("gc.button")}
             onClick={() => {
@@ -289,6 +293,7 @@ export function ConversationManagerPage({
           <div {...styling.props(styles.filters)}>
             <Input
               className={styling.className(styles.search)}
+              data-filter="search"
               type="search"
               icon={<IconSearchOutline16 />}
               value={query}
@@ -299,36 +304,57 @@ export function ConversationManagerPage({
                 setPage(1);
               }}
             />
-            <Checkbox
-              checked={showSubagents}
-              label={t("showSubagents")}
-              onChange={(next) => {
-                setShowSubagents(next);
-                setPage(1);
-              }}
-            />
+            <span data-filter="subagents">
+              <Checkbox
+                checked={showSubagents}
+                label={t("showSubagents")}
+                onChange={(next) => {
+                  setShowSubagents(next);
+                  setPage(1);
+                }}
+              />
+            </span>
           </div>
-          {notice === null ? null : <p {...styling.props(styles.status)}>{notice}</p>}
+          {notice === null ? null : (
+            <p {...styling.props(styles.status)} data-notice="result">
+              {notice}
+            </p>
+          )}
           {failure === null ? null : (
-            <p {...styling.props(styles.failure)} role="alert">
+            <p {...styling.props(styles.failure)} data-failure="result" role="alert">
               {failure}
             </p>
           )}
-          {listed.length === 0 ? <p {...styling.props(styles.status)}>{t("empty")}</p> : null}
+          {listed.length === 0 ? (
+            <p {...styling.props(styles.status)} data-status="empty">
+              {t("empty")}
+            </p>
+          ) : null}
           {listed.length > 0 && matched.length === 0 ? (
-            <p {...styling.props(styles.status)}>{t("emptySearch")}</p>
+            <p {...styling.props(styles.status)} data-status="empty-search">
+              {t("emptySearch")}
+            </p>
           ) : null}
           {visible.length > 0 ? (
-            <ul {...styling.props(styles.list)}>
+            <ul {...styling.props(styles.list)} data-session-list="">
               {visible.map((row) => (
-                <li key={row.id} {...styling.props(styles.row)}>
+                <li
+                  key={row.id}
+                  {...styling.props(styles.row)}
+                  data-session-row=""
+                  data-session-id={String(row.id)}
+                  data-archived={row.archived ? "true" : "false"}
+                  data-subagent={row.subagent ? "true" : "false"}
+                >
                   <span {...styling.props(styles.identity)}>
                     <span {...styling.props(styles.titleLine)}>
-                      <span {...styling.props(styles.rowTitle)}>{row.title}</span>
+                      <span {...styling.props(styles.rowTitle)} data-session-title="">
+                        {row.title}
+                      </span>
                       {row.archived ? <Tag tone="neutral">{t("archived")}</Tag> : null}
                       {row.subagent ? <Tag tone="quiet">{t("subagent")}</Tag> : null}
                     </span>
-                    <span {...styling.props(styles.meta)}>
+                    <span {...styling.props(styles.meta)} data-session-meta="">
                       {[row.workspace, timeLabel(row.updatedAt, now, t)].join(" · ")}
                     </span>
                   </span>
@@ -337,6 +363,7 @@ export function ConversationManagerPage({
                       <Button
                         variant="outline"
                         size="sm"
+                        data-action="unarchive"
                         aria-label={t("unarchiveNamed", { title: row.title })}
                         onClick={() => {
                           run(unarchive(row.id));
@@ -348,6 +375,7 @@ export function ConversationManagerPage({
                       <Button
                         variant="outline"
                         size="sm"
+                        data-action="archive"
                         aria-label={t("archiveNamed", { title: row.title })}
                         onClick={() => {
                           run(archive(row.id));
@@ -359,6 +387,7 @@ export function ConversationManagerPage({
                     <Button
                       variant="outline"
                       size="sm"
+                      data-action="export"
                       aria-label={t("exportNamed", { title: row.title })}
                       onClick={() => {
                         run(exportZip(row.id));
@@ -370,6 +399,7 @@ export function ConversationManagerPage({
                       variant="outline"
                       size="sm"
                       disabled={!row.archived}
+                      data-action="remove"
                       aria-label={t("removeNamed", { title: row.title })}
                       onClick={() => {
                         setFailure(null);
@@ -385,7 +415,12 @@ export function ConversationManagerPage({
             </ul>
           ) : null}
           {matched.length > 0 ? (
-            <div {...styling.props(styles.pagination)}>
+            <div
+              {...styling.props(styles.pagination)}
+              data-pagination=""
+              data-page-current={currentPage}
+              data-page-total={pageCount}
+            >
               <Button
                 variant="ghost"
                 size="sm"
@@ -546,17 +581,40 @@ function foldBuckets(
   );
 }
 
-function UsageList({ rows, t }: { rows: readonly UsageListRow[]; t: Translate }): ReactNode {
-  if (rows.length === 0) return <p {...styling.props(styles.status)}>{t("usage.empty")}</p>;
+function UsageList({
+  rows,
+  kind,
+  t,
+}: {
+  rows: readonly UsageListRow[];
+  kind: string;
+  t: Translate;
+}): ReactNode {
+  if (rows.length === 0) {
+    return (
+      <p {...styling.props(styles.status)} data-usage-status="empty">
+        {t("usage.empty")}
+      </p>
+    );
+  }
   return (
     <ul {...styling.props(styles.usageList)}>
       {rows.map((row) => (
-        <li key={row.key} {...styling.props(styles.usageRow)}>
-          <span {...styling.props(styles.usageRowLabel)}>{row.label}</span>
-          <span {...styling.props(styles.usageRowTotal)}>
+        <li
+          key={row.key}
+          {...styling.props(styles.usageRow)}
+          data-usage-row={kind}
+          data-usage-key={row.key}
+        >
+          <span {...styling.props(styles.usageRowLabel)} data-usage-label="">
+            {row.label}
+          </span>
+          <span {...styling.props(styles.usageRowTotal)} data-usage-total="">
             {formatTokens(usageTotal(row.totals))}
           </span>
-          <span {...styling.props(styles.usageRowMeta)}>{usageMeta(row.totals, t)}</span>
+          <span {...styling.props(styles.usageRowMeta)} data-usage-meta="">
+            {usageMeta(row.totals, t)}
+          </span>
         </li>
       ))}
     </ul>
@@ -576,19 +634,28 @@ function UsageOverview({ report, t }: { report: SessionUsageReport; t: Translate
     <>
       <div {...styling.props(styles.usageGrid)}>
         {cells.map((cell) => (
-          <div key={cell.key} {...styling.props(styles.usageCell)}>
+          <div
+            key={cell.key}
+            {...styling.props(styles.usageCell)}
+            data-usage-cell={cell.key}
+            data-usage-value={cell.value}
+          >
             <span {...styling.props(styles.usageCellLabel)}>{cell.label}</span>
             <span {...styling.props(styles.usageCellValue)}>{formatTokens(cell.value)}</span>
           </div>
         ))}
       </div>
       <ul {...styling.props(styles.usageList)}>
-        <li {...styling.props(styles.usageRow)}>
-          <span {...styling.props(styles.usageRowLabel)}>{t("usage.subagentOnly")}</span>
-          <span {...styling.props(styles.usageRowTotal)}>
+        <li {...styling.props(styles.usageRow)} data-usage-row="subagent" data-usage-key="subagent">
+          <span {...styling.props(styles.usageRowLabel)} data-usage-label="">
+            {t("usage.subagentOnly")}
+          </span>
+          <span {...styling.props(styles.usageRowTotal)} data-usage-total="">
             {formatTokens(usageTotal(report.subagent))}
           </span>
-          <span {...styling.props(styles.usageRowMeta)}>{usageMeta(report.subagent, t)}</span>
+          <span {...styling.props(styles.usageRowMeta)} data-usage-meta="">
+            {usageMeta(report.subagent, t)}
+          </span>
         </li>
       </ul>
     </>
@@ -638,13 +705,14 @@ function UsageView({
               .sort((left, right) => usageTotal(right.totals) - usageTotal(left.totals))
               .slice(0, USAGE_SESSION_ROWS);
   return (
-    <div {...styling.props(styles.usage)}>
+    <div {...styling.props(styles.usage)} data-usage-view={tab}>
       <div {...styling.props(styles.tabs)} role="tablist">
         {items.map((item) => (
           <button
             key={item}
             type="button"
             role="tab"
+            data-usage-tab={item}
             aria-selected={tab === item}
             className={styling.className(styles.tab, tab === item && styles.tabActive)}
             onClick={() => {
@@ -655,16 +723,20 @@ function UsageView({
           </button>
         ))}
       </div>
-      {loading ? <p {...styling.props(styles.status)}>{t("usage.loading")}</p> : null}
+      {loading ? (
+        <p {...styling.props(styles.status)} data-usage-status="loading">
+          {t("usage.loading")}
+        </p>
+      ) : null}
       {error === null ? null : (
-        <p {...styling.props(styles.failure)} role="alert">
+        <p {...styling.props(styles.failure)} data-usage-status="error" role="alert">
           {error}
         </p>
       )}
       {report === null ? null : tab === "overview" ? (
         <UsageOverview report={report} t={t} />
       ) : (
-        <UsageList rows={rows} t={t} />
+        <UsageList rows={rows} kind={tab} t={t} />
       )}
     </div>
   );

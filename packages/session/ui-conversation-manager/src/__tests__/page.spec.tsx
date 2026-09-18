@@ -507,6 +507,43 @@ describe("对话管理页面：token 用量统计", () => {
     expect(screen.getByText("1.2K")).toBeTruthy();
   });
 
+  it("数据位都带 data-* 标注，便于按标注沟通定位", async () => {
+    const { container } = renderPage({
+      archived: [C.id],
+      faces: { loadUsage: vi.fn(async () => REPORT) },
+    });
+
+    // 会话视图：视图、行、字段、按钮、分页都带标注。
+    expect(container.querySelector('[data-view="sessions"]')).toBeTruthy();
+    const rows = [...container.querySelectorAll("[data-session-row]")] as HTMLElement[];
+    // 列表按最近活动降序：首行是未归档的会话 A；归档行的标记在 data-archived 上。
+    expect(rows[0]?.dataset["sessionId"]).toBe("s1");
+    expect(rows[0]?.dataset["archived"]).toBe("false");
+    expect(rows[0]?.dataset["subagent"]).toBe("false");
+    expect(rows[0]?.querySelector("[data-session-title]")).toBeTruthy();
+    expect(rows[0]?.querySelector("[data-session-meta]")).toBeTruthy();
+    expect(rows[0]?.querySelector('[data-action="remove"]')).toBeTruthy();
+    expect(rows.find((el) => el.dataset["archived"] === "true")?.dataset["sessionId"]).toBe("s3");
+    expect(container.querySelector("[data-pagination]")?.getAttribute("data-page-current")).toBe(
+      "1",
+    );
+    expect(container.querySelector('[data-filter="search"]')).toBeTruthy();
+
+    // 统计视图：格子、行、维度也带标注。
+    fireEvent.click(screen.getByRole("tab", { name: "统计" }));
+    await screen.findByText("总览");
+    expect(
+      container.querySelector('[data-usage-cell="total"]')?.getAttribute("data-usage-value"),
+    ).toBe("165");
+    expect(container.querySelector('[data-usage-row="subagent"]')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "按天" }));
+    expect(
+      container.querySelector('[data-usage-row="daily"]')?.getAttribute("data-usage-key"),
+    ).toBe("2026-09-08");
+    expect(container.querySelector('[data-usage-tab="daily"]')).toBeTruthy();
+  });
+
   it("统计失败时给出原因", async () => {
     renderPage({
       archived: [],

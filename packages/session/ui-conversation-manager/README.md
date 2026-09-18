@@ -34,6 +34,28 @@ ui-plugin-manager 同一种注册方式）。页面分两层 Tabs（官方 `Pill
 GC 是唯一会**停止所有运行中 agent** 的动作：确认后进入不可关闭的等待弹窗，避免用户在 VACUUM 期间
 做别的操作。
 
+## 数据位标注（`data-*`）
+
+页面每个数据展示位都带稳定的 `data-*` 标注，沟通时可以直接指着它说（例如
+`data-usage-key=2026-09-14` 那行、`data-session-id=…` 那行的删除按钮）：
+
+| 标注                                                        | 位置               | 含义                                                            |
+| ----------------------------------------------------------- | ------------------ | --------------------------------------------------------------- |
+| `data-view`                                                 | 页面根             | `sessions` / `usage`                                            |
+| `data-tab`                                                  | 一层 tab 按钮      | 该按钮切到的视图                                                |
+| `data-action`                                               | 按钮               | `import` / `gc` / `archive` / `unarchive` / `export` / `remove` |
+| `data-filter`                                               | 过滤器             | `search` / `subagents`                                          |
+| `data-session-list` / `data-session-row`                    | 列表与行           | 会话列表、一条会话行                                            |
+| `data-session-id` / `data-archived` / `data-subagent`       | 会话行             | 该行的会话 id 与状态（`true` / `false`）                        |
+| `data-session-title` / `data-session-meta`                  | 行内字段           | 标题、`工作区 · 时间`                                           |
+| `data-pagination` / `data-page-current` / `data-page-total` | 分页条             | 当前页与总页数                                                  |
+| `data-notice` / `data-failure` / `data-status`              | 顶部提示与空态     | 结果、错误、`empty` / `empty-search`                            |
+| `data-usage-view` / `data-usage-tab`                        | 统计视图与二层 tab | 当前维度（`overview` / `daily` / `models` / `sessions`）        |
+| `data-usage-cell` / `data-usage-value`                      | 总览格子           | 维度键与原始数值（未格式化）                                    |
+| `data-usage-row` / `data-usage-key`                         | 统计划表行         | 维度键（日期 / `provider / model` / 会话 id / `subagent`）      |
+| `data-usage-label` / `data-usage-total` / `data-usage-meta` | 统计行内字段       | 名称、合计、明细                                                |
+| `data-usage-status`                                         | 统计状态行         | `loading` / `error` / `empty`                                   |
+
 ## 已知限制
 
 - 列表是全量会话：未归档行提供**归档**、已归档行提供**取消归档**（同一位置二选一，互斥）；
