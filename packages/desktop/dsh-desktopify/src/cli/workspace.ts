@@ -202,6 +202,19 @@ function topLevelBlocks(lines: readonly string[]): { key: string; start: number;
   return blocks;
 }
 
+/** One top-level YAML block by key, including its indented lines and a trailing newline.
+ * @param text - YAML document text.
+ * @param key - top-level key to extract.
+ * @returns the block text, or undefined when the key is absent.
+ */
+export function topLevelYamlBlock(text: string, key: string): string | undefined {
+  const lines = splitLines(text);
+  const block = topLevelBlocks(lines).find((candidate) => candidate.key === key);
+  return block === undefined
+    ? undefined
+    : `${lines.slice(block.start, block.end + 1).join("\n")}\n`;
+}
+
 export function mergedDeploySettings(source: string, destination: string): string {
   const sourceLines = splitLines(source);
   const inherited = new Map<string, string[]>();

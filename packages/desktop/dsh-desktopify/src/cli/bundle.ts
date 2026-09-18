@@ -4,7 +4,11 @@ import { join, resolve } from "node:path";
 import { writeAppConfig, type AppConfig } from "../appconfig.ts";
 import { buildDesktopApp } from "./electron-builder.ts";
 import { prepareIcons } from "./icon.ts";
-import { OFFICE_SKILLS_DIR, officeSkillAssetsSource, prepareOfficeSkillAssets } from "./office-assets.ts";
+import {
+  OFFICE_SKILLS_DIR,
+  officeSkillAssetsSource,
+  prepareOfficeSkillAssets,
+} from "./office-assets.ts";
 import { runPrepareRuntime } from "./prepare-runtime.ts";
 import { runPrepareSeed } from "./prepare-seed.ts";
 import { buildShell } from "./shell.ts";

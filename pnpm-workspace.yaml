@@ -23,6 +23,7 @@ allowBuilds:
   koffi: true
   msgpackr-extract: true
   node-pty: true
+  pnpm: true
   protobufjs: true
 
 minimumReleaseAge: 0

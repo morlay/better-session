@@ -12,12 +12,15 @@ import {
   symlink,
   unlink,
 } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { PROFILE_NAME } from "./appconfig.ts";
 
 export const SEED_DIR_NAME = "dsh-home";
 
 export const SEED_HASH_NAME = ".seed-hash";
+
+/** Seed-relative directory holding the immutable runtime: the host's dsh installation and the Web frontend. */
+export const SEED_RUNTIME_DIR_NAME = "runtime";
 
 const SEED_SKIP_DIRS = new Set([".nub-store", ".store", ".nub"]);
 
@@ -70,43 +73,48 @@ export async function ensureSeedProfile(seedDir: string, home: string): Promise<
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  await copySeed(seedDir, home);
+  await copySeed(seedProfile, profileDir);
   return true;
 }
 
-async function copySeed(seedDir: string, home: string): Promise<void> {
-  await mkdir(home, { recursive: true });
-  const visit = async (directory: string): Promise<void> => {
+/**
+ * Plant one profile subtree. The seed's runtime lives beside the profile and stays in the
+ * application's read-only resources, so only `profiles/<name>` is copied into the home.
+ */
+async function copySeed(source: string, target: string): Promise<void> {
+  await mkdir(target, { recursive: true });
+  const visit = async (directory: string, prefix: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const source = join(directory, entry.name);
-      const target = join(home, relative(seedDir, source));
+      const path = join(directory, entry.name);
+      const relativePath = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      const destination = join(target, ...relativePath.split("/"));
       if (entry.isSymbolicLink()) {
-        if (await pathExists(target)) continue;
-        await mkdir(dirname(target), { recursive: true });
+        if (await pathExists(destination)) continue;
+        await mkdir(dirname(destination), { recursive: true });
         await symlink(
-          await readlink(source),
-          target,
+          await readlink(path),
+          destination,
           process.platform === "win32" ? "junction" : "dir",
         );
         continue;
       }
       let stat: Stats;
       try {
-        stat = await lstat(source);
+        stat = await lstat(path);
       } catch {
         continue;
       }
       if (stat.isDirectory()) {
         if (SEED_SKIP_DIRS.has(entry.name)) continue;
-        await mkdir(target, { recursive: true });
-        await visit(source);
+        await mkdir(destination, { recursive: true });
+        await visit(path, relativePath);
         continue;
       }
-      if (!stat.isFile() || (await pathExists(target))) continue;
-      await mkdir(dirname(target), { recursive: true });
-      await copyFile(source, target);
-      await chmod(target, stat.mode & 0o777);
+      if (!stat.isFile() || (await pathExists(destination))) continue;
+      await mkdir(dirname(destination), { recursive: true });
+      await copyFile(path, destination);
+      await chmod(destination, stat.mode & 0o777);
     }
   };
-  await visit(seedDir);
+  await visit(source, "");
 }

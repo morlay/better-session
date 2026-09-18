@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { access, cp, glob, mkdir, readFile, readdir, realpath } from "node:fs/promises";
+import { access, cp, glob, mkdir, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,13 +94,50 @@ function desktopHostDir(): string | undefined {
   return dirname(dirname(entry));
 }
 
+/**
+ * The tool's own host payload — never the workspace or vendor copy of
+ * `@deepseek-ai/dsh-desktop-host`.
+ *
+ * `import.meta.resolve` on the tool's own subpath export is a package self-reference, so only the
+ * tool's `dist/desktop-host` can satisfy it; comparing against the tool's manifest root turns that
+ * into a checked invariant, and a resolution from a `node_modules` tree fails here instead of
+ * silently booting a payload this tool does not own.
+ * @returns The payload directory and its manifest version, or `undefined` before the tool build.
+ */
 export async function desktopHost(): Promise<OfficialPackage | undefined> {
   const dir = desktopHostDir();
   if (dir === undefined) return undefined;
+  const toolRoot = dirname(fileURLToPath(import.meta.resolve(`${TOOL_PACKAGE}/package.json`)));
+  if (resolve(dir) !== join(toolRoot, "dist", "desktop-host")) {
+    throw new Error(
+      `dsh-desktopify: ${DESKTOP_HOST_PACKAGE} resolved outside the tool's own payload (${dir})`,
+    );
+  }
   const manifest = await readManifest(dir);
   return typeof manifest.version === "string" && manifest.version !== ""
     ? { dir, version: manifest.version }
     : undefined;
+}
+
+/**
+ * Install the tool's host payload into a closure, replacing whatever payload is already there: a
+ * deployment must boot this tool's composition, so a copy a previous run, the workspace, or the
+ * vendor tree left behind may never satisfy the closure.
+ * @param modulesDir - Closure `node_modules` directory.
+ * @returns The installed payload directory.
+ */
+export async function materializeDesktopHost(modulesDir: string): Promise<string> {
+  const host = await desktopHost();
+  if (host === undefined) {
+    throw new Error(
+      `dsh-desktopify: bundled ${DESKTOP_HOST_PACKAGE} is missing; run the tool build (pnpm build)`,
+    );
+  }
+  const target = join(modulesDir, ...DESKTOP_HOST_PACKAGE.split("/"));
+  // Removing first also replaces a symlink into another tree with the owned copy.
+  await rm(target, { recursive: true, force: true });
+  await copyPackageTree(host.dir, target);
+  return target;
 }
 
 export async function toolModulesDir(input: OfficialResolutionInput): Promise<string | undefined> {
@@ -251,8 +288,10 @@ export async function materializeOfficialClosure(
   modulesDir: string,
   input: OfficialResolutionInput,
 ): Promise<string[]> {
-  const copied: string[] = [];
+  const copied: string[] = [DESKTOP_HOST_PACKAGE];
+  await materializeDesktopHost(modulesDir);
   for (const [name, dir] of await officialClosure({ ...input, closureModulesDir: modulesDir })) {
+    if (name === DESKTOP_HOST_PACKAGE) continue;
     const target = join(modulesDir, ...name.split("/"));
     if (await pathExists(target)) continue;
     await copyPackageTree(dir, target);

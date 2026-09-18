@@ -17,7 +17,11 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { writeAppConfig } from "../appconfig.ts";
 import { discoverPresetMounts, materializeAgentPresets } from "./agent-presets.ts";
 import { ensureClientBundlePlaceholders, installProfilePatch } from "./dev-web.ts";
-import { OFFICE_SKILLS_DIR, officeSkillAssetsSource, prepareOfficeSkillAssets } from "./office-assets.ts";
+import {
+  OFFICE_SKILLS_DIR,
+  officeSkillAssetsSource,
+  prepareOfficeSkillAssets,
+} from "./office-assets.ts";
 import {
   DESKTOP_HOST_PACKAGE,
   DSH_PACKAGE,

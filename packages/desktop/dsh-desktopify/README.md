@@ -2,7 +2,7 @@
 
 把任意 dsh 工作区打包 / 运行为桌面应用的工具：`dev` 链接工作区直接跑，`bundle` 产出静态、无签名的应用目录。
 
-实现机制（壳与 host 协议、依赖闭包与种子指纹、桌面 preset 物化、XDG 路径与 shell 注入）见
+实现机制（壳与 host 协议、依赖闭包与种子指纹、profile 安装、桌面 preset 物化、XDG 路径与 shell 注入）见
 [设计 桌面化工具](./.agents/designs/20260917-桌面化工具.md)；自研离线打包器（而非直接用上游桌面应用）的决策见
 [ADR-20260917-自研离线桌面打包器而非直接用上游桌面应用](../../../.agents/adrs/20260917-自研离线桌面打包器而非直接用上游桌面应用.md)。
 
@@ -15,7 +15,7 @@
 
 工作区取首个位置参数（缺省当前目录），CLI 会把它写进 `DSH_DESKTOP_WORKSPACE`；工具内不写死任何 app 路径或名字。
 壳产物由 `pnpm build` 生成，dev / bundle 只校验它在，不重建——源码形态下产物比源码旧会打印警告（改了壳没重建的话，
-打包出来的 app 跑的还是旧壳）。随包 Node.js 运行时的下载校验与 profile 种子生成是 `bundle` 的内部步骤，
+打包出来的 app 跑的还是旧壳）。随包 Node / pnpm 载荷的准备与校验、profile 种子生成是 `bundle` 的内部步骤，
 不单独暴露命令。本仓库示例工作区：`just custom desktop`（dev）/ `just custom bundle`（打包）。
 
 ## 工作区契约（package.json）
@@ -60,8 +60,8 @@
 | `DSH_DESKTOP_HOST_INSPECT_PORT`   | host 调试端口（默认 9230）                                                                                                                          |
 | `DSH_DESKTOP_MAIN_INSPECT_PORT`   | 主进程调试端口（默认 9229）                                                                                                                         |
 | `DSH_DESKTOP_RENDERER_DEBUG_PORT` | 渲染进程调试端口（默认 9222）                                                                                                                       |
-| `DSH_DESKTOP_TARGET_PLATFORM`     | bundle 随包 Node 的目标平台（默认当前平台）                                                                                                         |
-| `DSH_DESKTOP_TARGET_ARCH`         | bundle 随包 Node 的目标架构（默认当前架构）                                                                                                         |
+| `DSH_DESKTOP_TARGET_PLATFORM`     | bundle 随包载荷的目标平台（默认当前平台；只有构建主机平台能打，见「已知行为」）                                                                     |
+| `DSH_DESKTOP_TARGET_ARCH`         | bundle 随包载荷的目标架构（同上）                                                                                                                   |
 | `DSH_DESKTOP_DIAGNOSTIC_FILE`     | 壳启动失败时把错误栈写入该文件                                                                                                                      |
 | `DSH_APP_DSH_HOME`                | 覆盖运行时 `DSH_HOME`（优先于 `dshHome` 配置）                                                                                                      |
 
@@ -69,13 +69,35 @@
 
 - pnpm workspace（dev 依赖 `findWorkspaceRoot` 装配临时项目；bundle 依赖 `pnpm deploy` 导出 app 闭包，
   工具不改写工作区清单 / lockfile）。
-- `vendor/deepseek-harness` 已构建（`just vendor prepare`：dev 需要 dsh CLI，工具构建需要 desktop-host 的
-  `lib/` 产物来打进 `dist/desktop-host`）。
+- `vendor/deepseek-harness` 已构建（`just vendor prepare`：dev 需要 dsh CLI；工具自带的 host 变体运行期从
+  部署载荷的 `node_modules` 解析上游 `@deepseek-ai/*` 包）。
 - 工具自身已构建（`pnpm build`）：dev / bundle 用 `dist/desktop-host` 里的后端产物。
 - 前端静态资源来自闭包内 `@deepseek-ai/dsh-web-frontend/dist`（`dsh` → `dsh-web-app` 的传递依赖），
   壳按 `<runtimeDir>/node_modules/@deepseek-ai/dsh-web-frontend/dist` 读取。
 
+## 产物布局（打包形态）
+
+`Resources/` 下两棵互不覆盖的树：
+
+- `runtime/`：随包运行时——`node/`（随包 Node）、`pnpm/bin/pnpm.mjs`（随包 pnpm 的入口，壳把它作为 host
+  argv[6] 交给 `profileContext.packageManager`；该 npm 包只是 wrapper，入口会 spawn 同平台
+  `@pnpm/exe.<platform>-<arch>` 的原生二进制，所以载荷带上那个平台包）、`bin/`（pnpm 子进程的 `PATH`
+  前置目录，Unix 下是指向 `../node/node` 的相对链接）、`primary-runtime/`、`office-skills/`、
+  `appconfig.json`；
+- `seed/`：`runtime/`（不可变闭包 = host 的 dsh 安装锚点、前端静态资源与 preset 物化目标）+
+  `profiles/desktop/`（初始 profile：app 自己的 bundle 以 `file:` 指向 `vendor/` 副本、`pnpm-workspace.yaml`、
+  `desktop-runtime-packages.json`、`.seed-hash`）。
+
+用户的 `DSH_HOME` 只放 profile（`profiles/<name>`）：种出 / 替换后由壳用随包 pnpm 离线安装它，官方包与 dsh
+始终取自 `seed/runtime`。
+
 ## 已知行为
 
+- **首次启动会安装 profile**：种子指纹变化时，壳在启动 host 前用随包 pnpm 在 profile 里跑一次
+  `install --prod --ignore-scripts --offline`——依赖全是 `file:` 源与指向 runtime 的 `link:` 覆盖，不需要网络。
+  插件页的安装 / 卸载 / 启停使用同一个随包 pnpm（`<resources>/runtime/pnpm/bin/pnpm.mjs`）。
+- **跨平台打包被拒绝**：随包 pnpm 的载荷只含构建主机平台的 `@pnpm/exe` 二进制，
+  `DSH_DESKTOP_TARGET_PLATFORM` / `DSH_DESKTOP_TARGET_ARCH` 指向别的平台时 `bundle` 在写入前失败
+  （`desktop runtime: bundled pnpm carries the <host> native binary, which cannot serve <target>`）。
 - **启动即静默退出**（残留 `SingletonLock`，无输出、退出码 0）：清掉 `<userData>/Singleton*` 即可恢复；
   机制见 [设计 桌面化工具](./.agents/designs/20260917-桌面化工具.md)。

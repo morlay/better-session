@@ -1,4 +1,4 @@
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, protocol, session } from "electron";
@@ -8,7 +8,13 @@ import { installDesktopDirectoryPicker } from "./directory-picker.ts";
 import { resolveDshHome } from "./dshhome.ts";
 import { DesktopHostProcess } from "./host-process.ts";
 import { DESKTOP_IPC, SCHEME, assertDesktopSender } from "./ipc.ts";
-import { ensureSeedProfile } from "./seed.ts";
+import {
+  PROFILE_WORKSPACE_NAME,
+  installProfile,
+  runtimeOverrides,
+  workspaceWithOverrides,
+} from "./profile-project.ts";
+import { SEED_RUNTIME_DIR_NAME, ensureSeedProfile } from "./seed.ts";
 import { shellWrappedSpawn } from "./shell-env.ts";
 import { authenticateWebHost, forwardWebRequest, serveWebDocument } from "./web-document.ts";
 
@@ -54,6 +60,9 @@ function isLocalDocumentPath(pathname: string): boolean {
 
 interface RuntimeResources {
   readonly node: string;
+  readonly runtime: string;
+  readonly pnpm: string;
+  readonly nodeBin: string;
   readonly seed: string;
   readonly primaryRuntime: string;
 }
@@ -76,7 +85,33 @@ function runtimeResources(): RuntimeResources {
     configured !== undefined && configured !== ""
       ? resolve(configured)
       : join(process.resourcesPath, "runtime", "primary-runtime");
-  return { node, seed, primaryRuntime };
+  return {
+    node,
+    seed,
+    primaryRuntime,
+    // 随包运行时与 pnpm 只在打包产物里存在；dev 形态从工作区解析依赖。
+    runtime: join(seed, SEED_RUNTIME_DIR_NAME),
+    pnpm: join(process.resourcesPath, "runtime", "pnpm", "bin", "pnpm.mjs"),
+    nodeBin: join(process.resourcesPath, "runtime", "bin"),
+  };
+}
+
+/** Install a freshly planted profile offline: link its runtime packages, then run bundled pnpm. */
+async function installPlantedProfile(
+  profileDir: string,
+  resources: RuntimeResources,
+): Promise<void> {
+  const settingsPath = join(profileDir, PROFILE_WORKSPACE_NAME);
+  const overrides = await runtimeOverrides(profileDir, resources.runtime);
+  await writeFile(
+    settingsPath,
+    workspaceWithOverrides(await readFile(settingsPath, "utf8"), overrides),
+  );
+  await installProfile({
+    node: resources.node,
+    pnpmEntry: resources.pnpm,
+    profileDir,
+  });
 }
 
 function developmentProject(): string | undefined {
@@ -162,7 +197,7 @@ async function main(): Promise<void> {
   const hostInspectPort = developmentHostInspectPort(development !== undefined);
   const activeProject = development ?? join(resolveDshHome(config) ?? "", "profiles", PROFILE_NAME);
 
-  const runtimeProject = development ?? join(resources.seed, "profiles", PROFILE_NAME);
+  const runtimeProject = development ?? resources.runtime;
   const webDocumentRoot = join(
     runtimeProject,
     "node_modules",
@@ -174,7 +209,9 @@ async function main(): Promise<void> {
   if (development === undefined) {
     if (dshHome === undefined)
       throw new Error("dsh desktop: packaged applications require a concrete dshHome");
-    await ensureSeedProfile(resources.seed, dshHome);
+    if (await ensureSeedProfile(resources.seed, dshHome)) {
+      await installPlantedProfile(activeProject, resources);
+    }
   }
   if (!(await pathExists(join(webDocumentRoot, "index.html")))) {
     throw new Error(
@@ -233,6 +270,10 @@ async function main(): Promise<void> {
         },
         primaryRuntime: resources.primaryRuntime,
         profileResolution: development === undefined ? "runtime" : "link",
+        // 打包形态的包操作使用随包 pnpm；dev 形态回退到 PATH 上的 pnpm。
+        ...(development === undefined
+          ? { packageManager: { pnpm: resources.pnpm, nodeBin: resources.nodeBin } }
+          : {}),
         spawn: shellWrappedSpawn,
       },
     );

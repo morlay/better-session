@@ -16,15 +16,13 @@ export function officeSkillAssetsSource(): string {
 
 /**
  * Copy the Office skill assets into the Host's sibling directory and fail when the
- * structure check script is missing: `@deepseek-ai/dsh-skill-office` throws at Host
- * startup without `scripts/check_office.py` under its asset root.
+ * structure check script is missing. The bundled host variant loads no office skills,
+ * so these assets are shipped for later use rather than read at startup; the check keeps
+ * the payload honest about what `@deepseek-ai/dsh-skill-office` needs.
  * @param source - `@deepseek-ai/dsh-skill-office` assets directory.
  * @param destination - `office-skills` directory next to the primary runtime payload.
  */
-export async function prepareOfficeSkillAssets(
-  source: string,
-  destination: string,
-): Promise<void> {
+export async function prepareOfficeSkillAssets(source: string, destination: string): Promise<void> {
   await cp(source, destination, { recursive: true, dereference: true });
   await access(join(destination, "scripts", "check_office.py"));
 }

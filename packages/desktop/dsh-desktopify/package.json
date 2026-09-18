@@ -53,14 +53,21 @@
     "electron": "^44.3.0",
     "electron-builder": "^26.16.1",
     "extract-zip": "^2.0.1",
+    "pnpm": "12.4.2",
     "rolldown": "1.x",
     "sharp": "^0.35.4",
     "tar": "^7.5.0",
     "tsdown": "0.22.x"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-app-boot": "workspace:^",
+    "@deepseek-ai/dsh-client-connection": "workspace:^",
     "@deepseek-ai/dsh-desktop-host": "workspace:^",
+    "@deepseek-ai/dsh-home-paths": "workspace:^",
+    "@deepseek-ai/dsh-jobs": "workspace:^",
+    "@deepseek-ai/dsh-skill-office": "workspace:^",
+    "@deepseek-ai/dsh-tools": "workspace:^",
     "@types/node": "^26.5.0"
   },
   "peerDependencies": {

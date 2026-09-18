@@ -26,8 +26,11 @@ pandas / python-docx 等 wheel）与 pnpm，并做 smoke 执行；我们没走�
 
 `office-skills` 资源已随包：`dev` 与 `bundle` 都会把 `@deepseek-ai/dsh-skill-office/assets`
 拷到 `primary-runtime` 的同级 `office-skills`（`packages/desktop/dsh-desktopify/src/cli/office-assets.ts`，
-缺 `scripts/check_office.py` 即失败）—— 因此 Host 启动的 Office 硬要求已满足。
-剩余缺口只有 `primary-runtime` payload 本体（`runtime.json` + python / node / pnpm）。
+缺 `scripts/check_office.py` 即失败）。宿主自己的包操作用 pnpm 也已随包
+（`<resources>/runtime/pnpm/bin/pnpm.mjs` + `<resources>/runtime/bin`，由 shell 经 host argv[6]/[7] 交给
+`profileContext.packageManager`），但那是宿主包操作的入口，与本 payload 的
+`dependencies/{python,node,pnpm}` 不是同一份。剩余缺口只有 `primary-runtime` payload 本体
+（`runtime.json` + python / node / pnpm）。
 
 **影响**
 
