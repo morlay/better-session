@@ -1,10 +1,10 @@
 diff --git a/packages/client/tsdown.client.ts b/packages/client/tsdown.client.ts
-index 4ca225d5ac..d45e2f7c98 100644
+index 3820fba8b0..8b53b57c9f 100644
 --- a/packages/client/tsdown.client.ts
 +++ b/packages/client/tsdown.client.ts
-@@ -508,10 +508,15 @@ function clientConfig(id: string, entry: string): UserConfig {
+@@ -546,10 +546,15 @@ function clientConfig(id: string, entry: string, clientBanner?: (fileName: strin
        },
-     }, tscSourceMapPlugin(), isolation.plugin, {
+     }, tscSourceMapPlugin(), asyncChunkRequirePlugin(), isolation.plugin, {
        name: 'dsh-css-modules-inline',
 -      resolveId(source: string, importer: string | undefined) {
 -        if (!source.endsWith('.module.css')) return null
@@ -22,7 +22,7 @@ index 4ca225d5ac..d45e2f7c98 100644
        },
        async load(virtualId: string) {
          if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
-@@ -533,11 +538,14 @@ function clientConfig(id: string, entry: string): UserConfig {
+@@ -571,11 +576,16 @@ function clientConfig(id: string, entry: string, clientBanner?: (fileName: strin
        },
      }, {
        name: 'dsh-css-text-inline',
@@ -32,6 +32,8 @@ index 4ca225d5ac..d45e2f7c98 100644
 -        const abs = importer !== undefined ? sourceAssetPath(stylesheet, importer) : stylesheet
 -        return INLINE_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
 +      resolveId: {
++        // Rolldown strips the import query before default-order hooks run and
++        // re-appends it to the returned id; pre keeps the raw specifier intact.
 +        order: 'pre' as const,
 +        handler(source: string, importer: string | undefined) {
 +          if (!source.endsWith(`.css${INLINE_CSS_QUERY}`)) return null
@@ -42,7 +44,7 @@ index 4ca225d5ac..d45e2f7c98 100644
        },
        async load(virtualId: string) {
          if (!virtualId.startsWith(INLINE_CSS_VIRTUAL_PREFIX)) return null
-@@ -549,10 +557,13 @@ function clientConfig(id: string, entry: string): UserConfig {
+@@ -587,10 +597,15 @@ function clientConfig(id: string, entry: string, clientBanner?: (fileName: strin
        },
      }, {
        name: 'dsh-css-global-inline',
@@ -51,6 +53,8 @@ index 4ca225d5ac..d45e2f7c98 100644
 -        const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
 -        return GLOBAL_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
 +      resolveId: {
++        // Rolldown strips the import query before default-order hooks run and
++        // re-appends it to the returned id; pre keeps the raw specifier intact.
 +        order: 'pre' as const,
 +        handler(source: string, importer: string | undefined) {
 +          if (!source.endsWith('.css') || source.endsWith('.module.css')) return null
