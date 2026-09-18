@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-reference-injection",
-  "version": "0.0.2-alpha.0",
+  "version": "0.0.2-alpha.1",
   "description": "Expands a referenced skill (`skill:name`) into an injected <skill_content> instructions message at the pre-step boundary.",
   "keywords": [
     "context",

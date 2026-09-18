@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-client-ui-primitives",
-  "version": "0.0.2-alpha.0",
+  "version": "0.0.2-alpha.1",
   "description": "css-in-js styling kit (styled / Token / Styling) for the forked conversation UI: consumes the official --dsw-* design tokens, so no CSS Modules precompile step is needed.",
   "keywords": [
     "client",
