@@ -40,7 +40,7 @@ describe("prepareShellAppDirectory", () => {
     const buildRoot = await workDir();
     await mkdir(join(appRoot, "dist"), { recursive: true });
     await writeFile(join(appRoot, "dist", "index.mjs"), "export {};\n");
-    await writeFile(join(appRoot, "dist", "preload.cjs"), "module.exports = {};\n");
+    await writeFile(join(appRoot, "dist", "preload-app.cjs"), "module.exports = {};\n");
     await writeFile(
       join(appRoot, "package.json"),
       `${JSON.stringify({ name: "@morlay/dsh-desktopify", description: "d", author: "a" })}\n`,
@@ -64,6 +64,6 @@ describe("prepareShellAppDirectory", () => {
     expect(manifest.main).toBe("dist/index.mjs");
     expect(manifest.version).toBe("0.1.5");
     expect(manifest.dependencies).toBeUndefined();
-    expect(await exists(join(appDir, "dist", "preload.cjs"))).toBe(true);
+    expect(await exists(join(appDir, "dist", "preload-app.cjs"))).toBe(true);
   });
 });

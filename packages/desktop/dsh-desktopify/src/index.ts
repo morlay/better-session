@@ -1,15 +1,17 @@
-import { mkdir, readFile } from "node:fs/promises";
-import { extname, join, normalize, resolve, sep } from "node:path";
+import { access, mkdir } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, protocol } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, protocol, session } from "electron";
 import type { BrowserWindowConstructorOptions } from "electron";
 import { loadAppConfig, PROFILE_NAME, type AppConfig } from "./appconfig.ts";
+import { installDesktopDirectoryPicker } from "./directory-picker.ts";
 import { resolveDshHome } from "./dshhome.ts";
 import { DesktopHostProcess } from "./host-process.ts";
+import { DESKTOP_IPC, SCHEME, assertDesktopSender } from "./ipc.ts";
 import { ensureSeedProfile } from "./seed.ts";
 import { shellWrappedSpawn } from "./shell-env.ts";
+import { authenticateWebHost, forwardWebRequest, serveWebDocument } from "./web-document.ts";
 
-const SCHEME = "dsh-app";
 let focusPrimaryWindow = (): void => {};
 
 protocol.registerSchemesAsPrivileged([
@@ -19,23 +21,41 @@ protocol.registerSchemesAsPrivileged([
       standard: true,
       secure: true,
       supportFetchAPI: true,
-      corsEnabled: false,
+      corsEnabled: true,
       stream: true,
       codeCache: true,
     },
   },
 ]);
 
-const MIME: Readonly<Record<string, string>> = {
-  ".css": "text/css; charset=utf-8",
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".svg": "image/svg+xml",
-};
+const WEB_FRONTEND_PACKAGE = "@deepseek-ai/dsh-web-frontend";
+
+const APPLICATION_URL = `${SCHEME}://app/`;
+
+const LOCAL_DOCUMENT_PATHS = ["/favicon.svg", "/manifest.webmanifest"];
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLocalDocumentPath(pathname: string): boolean {
+  return (
+    pathname === "/" ||
+    pathname === "/index.html" ||
+    pathname.startsWith("/assets/") ||
+    LOCAL_DOCUMENT_PATHS.includes(pathname)
+  );
+}
 
 interface RuntimeResources {
   readonly node: string;
   readonly seed: string;
+  readonly primaryRuntime: string;
 }
 
 function runtimeResources(): RuntimeResources {
@@ -51,7 +71,12 @@ function runtimeResources(): RuntimeResources {
   const seed =
     (development ? process.env.DSH_DESKTOP_SEED_DIR : undefined) ??
     join(process.resourcesPath, "seed");
-  return { node, seed };
+  const configured = process.env.DSH_DESKTOP_PRIMARY_RUNTIME_DIR;
+  const primaryRuntime =
+    configured !== undefined && configured !== ""
+      ? resolve(configured)
+      : join(process.resourcesPath, "runtime", "primary-runtime");
+  return { node, seed, primaryRuntime };
 }
 
 function developmentProject(): string | undefined {
@@ -99,32 +124,15 @@ function createWindow(
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {
-    if (new URL(url).protocol !== `${SCHEME}:`) event.preventDefault();
+    const destination = new URL(url);
+    const current = new URL(window.webContents.getURL());
+    if (
+      destination.protocol !== `${SCHEME}:` &&
+      !(destination.protocol === "http:" && destination.origin === current.origin)
+    )
+      event.preventDefault();
   });
   return window;
-}
-
-async function serveShellAsset(request: Request): Promise<Response> {
-  if (request.method !== "GET" && request.method !== "HEAD")
-    return new Response(null, { status: 405 });
-  const root = resolve(app.getAppPath(), "renderer");
-  const url = new URL(request.url);
-  let pathname: string;
-  try {
-    pathname = decodeURIComponent(url.pathname);
-  } catch {
-    return new Response(null, { status: 400 });
-  }
-  const target = resolve(normalize(join(root, pathname)));
-  if (target !== root && !target.startsWith(root + sep)) return new Response(null, { status: 403 });
-  try {
-    const body = request.method === "HEAD" ? null : await readFile(target);
-    return new Response(body, {
-      headers: { "content-type": MIME[extname(target)] ?? "application/octet-stream" },
-    });
-  } catch {
-    return new Response(null, { status: 404 });
-  }
 }
 
 function developmentHostInspectPort(enabled: boolean): number | undefined {
@@ -155,6 +163,12 @@ async function main(): Promise<void> {
   const activeProject = development ?? join(resolveDshHome(config) ?? "", "profiles", PROFILE_NAME);
 
   const runtimeProject = development ?? join(resources.seed, "profiles", PROFILE_NAME);
+  const webDocumentRoot = join(
+    runtimeProject,
+    "node_modules",
+    ...WEB_FRONTEND_PACKAGE.split("/"),
+    "dist",
+  );
   const dshHome = resolveDshHome(config);
 
   if (development === undefined) {
@@ -162,8 +176,17 @@ async function main(): Promise<void> {
       throw new Error("dsh desktop: packaged applications require a concrete dshHome");
     await ensureSeedProfile(resources.seed, dshHome);
   }
+  if (!(await pathExists(join(webDocumentRoot, "index.html")))) {
+    throw new Error(
+      `dsh desktop: the Web frontend is missing at ${webDocumentRoot}; ` +
+        `the runtime closure must carry ${WEB_FRONTEND_PACKAGE}`,
+    );
+  }
 
   let host: DesktopHostProcess | undefined;
+  let hostUrl: string | undefined;
+  let hostCookie: string | undefined;
+  let injections: readonly unknown[] = [];
   let mainWindow: BrowserWindow | undefined;
   let quitConfirmed = false;
   let quitPrompting = false;
@@ -208,22 +231,80 @@ async function main(): Promise<void> {
           ...(dshHome === undefined ? {} : { DSH_HOME: dshHome }),
           ...(development === undefined ? {} : { ELECTRON_RUN_AS_NODE: "1" }),
         },
+        primaryRuntime: resources.primaryRuntime,
+        profileResolution: development === undefined ? "runtime" : "link",
         spawn: shellWrappedSpawn,
       },
     );
-    await next.start();
+    const ready = await next.start();
+    hostCookie = await authenticateWebHost(ready.url);
+    hostUrl = ready.url;
+    if (ready.injections === undefined)
+      throw new Error("dsh desktop: Host did not provide boot injections");
+    injections = ready.injections;
     return next;
   };
 
   protocol.handle(SCHEME, (request) => {
     const url = new URL(request.url);
-    if (url.hostname === "shell") return serveShellAsset(request);
     if (url.hostname !== "app") return Promise.resolve(new Response(null, { status: 404 }));
-    const active = host;
-    if (active === undefined)
-      return Promise.resolve(new Response("backend unavailable", { status: 503 }));
-    return active.fetch(request);
+    if (isLocalDocumentPath(url.pathname)) return serveWebDocument(request, webDocumentRoot);
+    if (host === undefined || hostUrl === undefined || hostCookie === undefined)
+      return Promise.resolve(new Response(null, { status: 503 }));
+    return forwardWebRequest(request, hostUrl, hostCookie);
   });
+
+  installDesktopDirectoryPicker(() => mainWindow);
+
+  ipcMain.handle(DESKTOP_IPC.boot, (event) => {
+    assertDesktopSender(event, ["app"]);
+    if (host === undefined || hostUrl === undefined)
+      throw new Error("dsh desktop: Host is unavailable");
+    return { injections, streamBaseUrl: new URL(hostUrl).origin };
+  });
+
+  ipcMain.handle(DESKTOP_IPC.bootFailed, (event, message: unknown) => {
+    assertDesktopSender(event, ["app"]);
+    if (event.sender !== mainWindow?.webContents || event.senderFrame !== event.sender.mainFrame)
+      throw new Error("dsh desktop: rejected startup failure from a non-primary frame");
+    if (typeof message !== "string") throw new Error("dsh desktop: startup failure must be text");
+    console.error(new Error(message));
+  });
+
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ["ws://127.0.0.1/*"] },
+    (details, callback) => {
+      if (
+        hostUrl === undefined ||
+        hostCookie === undefined ||
+        details.webContentsId !== mainWindow?.webContents.id
+      ) {
+        callback({});
+        return;
+      }
+      const target = new URL(hostUrl);
+      const requested = new URL(details.url);
+      if (requested.host !== target.host) {
+        callback({});
+        return;
+      }
+      const headers = Object.fromEntries(
+        Object.entries(details.requestHeaders).map(([name, value]) => [name.toLowerCase(), value]),
+      );
+      if (headers.origin !== `${SCHEME}://app`) {
+        callback({ cancel: true });
+        return;
+      }
+      callback({
+        requestHeaders: {
+          ...headers,
+          origin: target.origin,
+          cookie: hostCookie,
+          "sec-fetch-site": "same-origin",
+        },
+      });
+    },
+  );
 
   const createMainWindow = (): BrowserWindow => {
     const window = createWindow(appPreload, config.window);
@@ -245,7 +326,7 @@ async function main(): Promise<void> {
     const window = mainWindow;
     if (window === undefined || window.isDestroyed()) {
       const replacement = createMainWindow();
-      void replacement.loadURL(`${SCHEME}://app/index.html`);
+      void replacement.loadURL(APPLICATION_URL);
       return;
     }
     if (window.isMinimized()) window.restore();
@@ -256,7 +337,7 @@ async function main(): Promise<void> {
   host = await startHost();
 
   mainWindow = createMainWindow();
-  await mainWindow.loadURL(`${SCHEME}://app/index.html`);
+  await mainWindow.loadURL(APPLICATION_URL);
   if (development !== undefined && process.env.DSH_DESKTOP_OPEN_DEVTOOLS !== "0") {
     mainWindow.webContents.openDevTools({ mode: "detach" });
   }
@@ -277,9 +358,14 @@ async function main(): Promise<void> {
     event.preventDefault();
     const active = host;
     host = undefined;
-    void active.stop().finally(() => {
-      app.quit();
-    });
+    void active
+      .stop()
+      .catch((error: unknown) => {
+        console.error(error);
+      })
+      .finally(() => {
+        app.quit();
+      });
   });
 }
 

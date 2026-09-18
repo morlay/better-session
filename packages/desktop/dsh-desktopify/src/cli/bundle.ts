@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { writeAppConfig, type AppConfig } from "../appconfig.ts";
 import { buildDesktopApp } from "./electron-builder.ts";
 import { prepareIcons } from "./icon.ts";
+import { OFFICE_SKILLS_DIR, officeSkillAssetsSource, prepareOfficeSkillAssets } from "./office-assets.ts";
 import { runPrepareRuntime } from "./prepare-runtime.ts";
 import { runPrepareSeed } from "./prepare-seed.ts";
 import { buildShell } from "./shell.ts";
@@ -105,6 +106,10 @@ export async function runBundle(options: BundleOptions): Promise<void> {
   const icons = await prepareIcons(workspace, buildRootDir, desktop.icon);
 
   await mkdir(join(buildRootDir, "runtime"), { recursive: true });
+  await prepareOfficeSkillAssets(
+    officeSkillAssetsSource(),
+    join(buildRootDir, "runtime", OFFICE_SKILLS_DIR),
+  );
   await writeAppConfig(join(buildRootDir, "runtime"), appConfig);
 
   await buildDesktopApp({

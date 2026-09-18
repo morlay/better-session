@@ -17,6 +17,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { writeAppConfig } from "../appconfig.ts";
 import { discoverPresetMounts, materializeAgentPresets } from "./agent-presets.ts";
 import { ensureClientBundlePlaceholders, installProfilePatch } from "./dev-web.ts";
+import { OFFICE_SKILLS_DIR, officeSkillAssetsSource, prepareOfficeSkillAssets } from "./office-assets.ts";
 import {
   DESKTOP_HOST_PACKAGE,
   DSH_PACKAGE,
@@ -222,10 +223,6 @@ async function prepareDevelopmentProject(
       2,
     )}\n`,
   );
-  await writeFile(
-    join(projectDir, "desktop.cordis.yml"),
-    "# Development composition root; the launcher owns this file.\n[]\n",
-  );
   const destinationModules = join(projectDir, "node_modules");
   await mkdir(destinationModules, { recursive: true });
   await mirrorDependencyLinks(workspaceDependencyDir, destinationModules);
@@ -315,6 +312,7 @@ async function launchElectron(
     DSH_HOME: home,
     DSH_DESKTOP_APPCONFIG_DIR: join(buildRootDir, "runtime"),
     DSH_DESKTOP_DEV_PROJECT_DIR: projectDir,
+    DSH_DESKTOP_PRIMARY_RUNTIME_DIR: join(buildRootDir, "runtime", "primary-runtime"),
     DSH_DESKTOP_HOST_INSPECT_PORT: String(hostPort),
     DSH_DESKTOP_NODE_BINARY: systemNode,
 
@@ -394,10 +392,11 @@ export async function runDev(options: DevOptions): Promise<void> {
     workspace,
     input,
   );
-
   const desktop = desktopConfig(manifest);
-  await mkdir(join(buildRootDir, "runtime"), { recursive: true });
-  await writeAppConfig(join(buildRootDir, "runtime"), {
+  const runtimeRoot = join(buildRootDir, "runtime");
+  await mkdir(runtimeRoot, { recursive: true });
+  await prepareOfficeSkillAssets(officeSkillAssetsSource(), join(runtimeRoot, OFFICE_SKILLS_DIR));
+  await writeAppConfig(runtimeRoot, {
     name: manifest.name,
     id: desktop.id,
     version: desktop.version,

@@ -27,10 +27,6 @@ export default defineConfig([
     deps: { neverBundle: ["electron"] },
     copy: [
       { from: `${HOST_DIR}/lib/index.js`, to: "dist/desktop-host/lib" },
-      {
-        from: `${HOST_DIR}/config/desktop.cordis.patch.yml`,
-        to: "dist/desktop-host/config",
-      },
       { from: `${HOST_DIR}/package.json`, to: "dist/desktop-host" },
     ],
     exports: {
@@ -47,7 +43,6 @@ export default defineConfig([
   },
   {
     entry: {
-      preload: "./src/preload.ts",
       "preload-app": "./src/preload-app.ts",
     },
     outDir: "dist",

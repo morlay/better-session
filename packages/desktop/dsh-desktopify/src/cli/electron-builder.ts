@@ -51,8 +51,6 @@ export async function prepareShellAppDirectory(options: DesktopBuildOptions): Pr
   await rm(appDir, { recursive: true, force: true });
   await mkdir(appDir, { recursive: true });
   await cp(join(appRoot, "dist"), join(appDir, "dist"), { recursive: true });
-  const renderer = join(appRoot, "renderer");
-  if (await pathExists(renderer)) await cp(renderer, join(appDir, "renderer"), { recursive: true });
   await writeFile(join(appDir, "pnpm-workspace.yaml"), "packages: []\n");
   const tool = JSON.parse(await readFile(join(appRoot, "package.json"), "utf8")) as ToolManifest;
   await writeFile(
@@ -87,7 +85,7 @@ export async function buildDesktopApp(options: DesktopBuildOptions): Promise<str
     ...(electron.dist === undefined ? {} : { electronDist: electron.dist }),
     directories: { output: join(buildRoot, "artifacts") },
     asar: true,
-    files: ["dist/**", "renderer/**/*", "package.json"],
+    files: ["dist/**", "package.json"],
     extraResources: [
       { from: join(buildRoot, "runtime"), to: "runtime" },
       { from: join(buildRoot, "seed"), to: "seed" },

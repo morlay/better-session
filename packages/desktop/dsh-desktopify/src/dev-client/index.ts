@@ -26,7 +26,7 @@ interface RouteHost {
 interface ModuleTable {
   graph(): { entries: readonly { id: string }[] };
   clientPath(id: string): string | undefined;
-  fetchBundle(request: Request): Response;
+  fetchBundle(request: Request): Promise<Response>;
 }
 
 const DEFAULT_PREFIXES = ["@morlay/"];
@@ -89,11 +89,19 @@ export function apply(ctx: Context, config: Config = {}): void {
     stripSourceMapTrailer(await readFile(builtPathOf(id), "utf8"));
 
   const fallback = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const response = modules.fetchBundle(
-      new Request(new URL(req.url ?? COMBO_PATH, "http://dsh.invalid"), {
-        method: req.method ?? "GET",
-      }),
-    );
+    let response: Response;
+    try {
+      response = await modules.fetchBundle(
+        new Request(new URL(req.url ?? COMBO_PATH, "http://dsh.invalid"), {
+          method: req.method ?? "GET",
+        }),
+      );
+    } catch (error) {
+      ctx.logger.error(error);
+      res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+      res.end("dev-client-bundles: clientModules.fetchBundle failed\n");
+      return;
+    }
     const headers: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       headers[key] = value;
