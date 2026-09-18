@@ -101,9 +101,13 @@ subagent 会话**（`origin = 'subagent'`、父不在表里；有 open handle / 
 ## 用量统计
 
 `POST /api/session.usage` 一次回报三份数据：`totals`（含 `subagent` / `human` 拆分）、按
-天 × provider/model × subagent 的桶、按会话的行。只算被会话引用的事件行（fork 共享行计一次、孤儿行不计），
-走现成的 `f_role` 索引，并同时兼容两种 `f_data` 结构。口径与性能取舍见
-[ADR-用量统计走事件行去重与f_role索引](.agents/adrs/20260918-用量统计走事件行去重与f_role索引.md)。
+天 × provider/model × subagent 的桶、按会话的行。
+
+用量写在**专用表 `t_event_usage`**（写路径顺带记录，一条 `assistant/message` 事件行一行），统计只读它，
+不再逐行解析事件 JSON——真实库实测 **1.6s → ~140ms**。老库在首次打开时**一次性回填**（表为空才跑，
+约 2.2s / 1.99 万行），两种 `f_data` 结构都认。口径不变：只算被会话引用的事件行（fork 共享行计一次、
+孤儿行不计），GC 顺带回收不再有事件行的用量行。口径与取舍见
+[ADR-用量统计走专用用量日志表](.agents/adrs/20260918-用量统计走专用用量日志表.md)。
 
 ## storages 接管（workspace 与投影缓存）
 

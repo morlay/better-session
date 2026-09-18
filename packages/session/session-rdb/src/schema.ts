@@ -30,6 +30,8 @@ export const tWorkspaceState = sqliteTables["t_workspace_state"]!;
 
 export const tSessionProjcacheRows = sqliteTables["t_session_projcache_row"]!;
 
+export const tEventUsage = sqliteTables["t_event_usage"]!;
+
 export type { SessionRow } from "./backend.ts";
 
 export type { EventRow } from "./backend.ts";

@@ -1,6 +1,10 @@
 // 用量统计口径闭环：POST /api/session.usage 按事件行去重（fork 共享行只算一次）、
 // 排除无会话引用的孤儿行，并把 subagent 会话的消耗单独拆出；另给按天×模型的桶与按会话的行。
 import { afterEach, describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Context } from "@deepseek-ai/cordis";
 import {
   SessionId,
@@ -70,6 +74,16 @@ async function harness(): Promise<{ ctx: Context; persistence: SessionPersistenc
   const fiber = await ctx.plugin(SessionPersistenceRdb, { type: "sqlite", path: ":memory:" });
   disposers.push(() => fiber.dispose());
   return { ctx, persistence: ctx.sessionPersistence as SessionPersistenceRdb };
+}
+
+/** 文件库 harness：回填只在"表为空"时发生，需要在同一文件上重开。 */
+async function harnessAt(path: string): Promise<{ ctx: Context; dispose: () => Promise<void> }> {
+  const ctx = new Context();
+  await ctx.plugin(EmptySettings);
+  await ctx.plugin(SessionStore);
+  new SessionProjectionRegistry(ctx);
+  const fiber = await ctx.plugin(SessionPersistenceRdb, { type: "sqlite", path });
+  return { ctx, dispose: () => fiber.dispose() };
 }
 
 async function createPersisted(
@@ -257,6 +271,39 @@ describe("用量统计口径", () => {
     const byId = new Map(value.sessions.map((row) => [row.sessionId, row]));
     expect(byId.get("human")).toMatchObject({ subagent: false, archived: false, inputTokens: 100 });
     expect(byId.get("child")).toMatchObject({ subagent: true, archived: true, inputTokens: 50 });
+  });
+
+  it("旧库回填：用量表为空时按事件行补一次（历史数据迁移）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "usage-backfill-"));
+    const dbPath = join(dir, "sessions.sqlite");
+    try {
+      const first = await harnessAt(dbPath);
+      await createPersisted(
+        first.ctx,
+        meta("old"),
+        turnWithUsage(DAY_ONE, { provider: "p", model: "m" }, usageOf(100, 10, 0, 0)),
+      );
+      await first.dispose();
+
+      // 模拟历史库：事件行在，用量表被清空（旧版本从未写过 t_event_usage）。
+      const raw = new DatabaseSync(dbPath);
+      raw.exec("DELETE FROM t_event_usage");
+      raw.close();
+
+      const second = await harnessAt(dbPath);
+      const value = await report(second.ctx);
+      expect(value.totals.inputTokens).toBe(100);
+      expect(value.totals.events).toBe(1);
+
+      // 幂等：再开一次不会重复累计。
+      await second.dispose();
+      const third = await harnessAt(dbPath);
+      const again = await report(third.ctx);
+      expect(again.totals.inputTokens).toBe(100);
+      await third.dispose();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("被删除会话留下的事件行（无引用）不计入统计", async () => {

@@ -15,12 +15,13 @@ import {
   type EventRow,
   type SessionRow,
 } from "./backend.ts";
-import { sessionConflictRow, sessionInsertRow, titleOfEventData } from "./log.ts";
+import { sessionConflictRow, sessionInsertRow, titleOfEventData, usageRowOf } from "./log.ts";
 import type { UsageAggregate, UsageTotals } from "./usage.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   SCHEMA_VERSION,
   SESSION_PERSISTENCE_SQLITE_APPLICATION_ID,
+  tEventUsage,
   tEvents,
   tPersistenceState,
   tSessionEvents,
@@ -49,6 +50,36 @@ interface RawUsageRow {
   cache_read_tokens: number | null;
   reasoning_tokens: number | null;
   total_tokens: number | null;
+}
+
+/**
+ * 一次性回填：旧库的用量从未写过 `t_event_usage`，建表后按事件行补一次（幂等：表非空即跳过）。
+ */
+function backfillEventUsage(db: DatabaseSync): void {
+  const pending = db.prepare("SELECT count(*) AS n FROM t_event_usage").get() as { n: number };
+  if (pending.n > 0) return;
+  db.exec(`INSERT OR IGNORE INTO t_event_usage (
+      f_event_id, f_created_at, f_provider, f_model,
+      f_input_tokens, f_output_tokens, f_cache_read_tokens, f_reasoning_tokens, f_total_tokens)
+    SELECT e.f_event_id, e.f_created_at,
+           coalesce(json_extract(e.f_data, '$.data.message.source.provider'),
+                    json_extract(e.f_data, '$.message.source.provider')),
+           coalesce(json_extract(e.f_data, '$.data.message.source.model'),
+                    json_extract(e.f_data, '$.message.source.model')),
+           coalesce(json_extract(e.f_data, '$.data.usage.inputTokens'),
+                    json_extract(e.f_data, '$.usage.inputTokens'), 0),
+           coalesce(json_extract(e.f_data, '$.data.usage.outputTokens'),
+                    json_extract(e.f_data, '$.usage.outputTokens'), 0),
+           coalesce(json_extract(e.f_data, '$.data.usage.cacheReadTokens'),
+                    json_extract(e.f_data, '$.usage.cacheReadTokens'), 0),
+           coalesce(json_extract(e.f_data, '$.data.usage.reasoningTokens'),
+                    json_extract(e.f_data, '$.usage.reasoningTokens'), 0),
+           coalesce(json_extract(e.f_data, '$.data.usage.totalTokens'),
+                    json_extract(e.f_data, '$.usage.totalTokens'), 0)
+      FROM t_events e
+     WHERE e.f_type = 'assistant/message'
+       AND (json_extract(e.f_data, '$.data.usage') IS NOT NULL
+            OR json_extract(e.f_data, '$.usage') IS NOT NULL)`);
 }
 
 /** SQL 的缺失求和是 NULL：没有 usage 字段的行使该字段计 0。 */
@@ -107,6 +138,7 @@ export async function openDatabase(
       await baselineV2(db);
     }
     migrate(dbx, { migrationsFolder: sqliteMigrationsDir });
+    backfillEventUsage(db);
 
     dbx
       .insert(tPersistenceState)
@@ -434,6 +466,14 @@ export class SqliteBackend implements Backend {
         .values(events.slice(i, i + SqliteBackend.INSERT_BATCH_ROWS).map((event) => ({ ...event })))
         .run();
     }
+    // 用量顺带落 t_event_usage：统计不再逐行解析事件 JSON（重复事件行忽略，fork 复用不重复记）。
+    const usage = events.flatMap((event) => {
+      const row = usageRowOf(event);
+      return row === undefined ? [] : [row];
+    });
+    if (usage.length > 0) {
+      this.db.insert(tEventUsage).values(usage).onConflictDoNothing().run();
+    }
   }
 
   private async insertBridges(
@@ -519,6 +559,16 @@ export class SqliteBackend implements Backend {
   async collectOrphans(): Promise<number> {
     const referenced = this.db.select({ fEventId: tSessionEvents.fEventId }).from(tSessionEvents);
     const info = this.db.delete(tEvents).where(notInArray(tEvents.fEventId, referenced)).run();
+    // 用量行跟着事件行走：没有事件行的用量不再计入统计。
+    this.db
+      .delete(tEventUsage)
+      .where(
+        notInArray(
+          tEventUsage.fEventId,
+          this.db.select({ fEventId: tEvents.fEventId }).from(tEvents),
+        ),
+      )
+      .run();
     return Number(info.changes);
   }
 
@@ -551,28 +601,20 @@ export class SqliteBackend implements Backend {
   async usageReport(): Promise<UsageAggregate> {
     const buckets = this.db.$client
       .prepare(
-        `SELECT date(e.f_created_at / 1000, 'unixepoch', 'localtime') AS day,
-                coalesce(json_extract(e.f_data, '$.data.message.source.provider'),
-                         json_extract(e.f_data, '$.message.source.provider')) AS provider,
-                coalesce(json_extract(e.f_data, '$.data.message.source.model'),
-                         json_extract(e.f_data, '$.message.source.model')) AS model,
+        `SELECT date(u.f_created_at / 1000, 'unixepoch', 'localtime') AS day,
+                u.f_provider AS provider,
+                u.f_model AS model,
                 EXISTS (SELECT 1 FROM t_session_events sb
                           JOIN t_sessions ss ON ss.f_session_id = sb.f_session_id
-                         WHERE sb.f_event_id = e.f_event_id AND ss.f_origin = 'subagent') AS subagent,
+                         WHERE sb.f_event_id = u.f_event_id AND ss.f_origin = 'subagent') AS subagent,
                 count(*) AS events,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.inputTokens'),
-                             json_extract(e.f_data, '$.usage.inputTokens'))) AS input_tokens,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.outputTokens'),
-                             json_extract(e.f_data, '$.usage.outputTokens'))) AS output_tokens,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.cacheReadTokens'),
-                             json_extract(e.f_data, '$.usage.cacheReadTokens'))) AS cache_read_tokens,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.reasoningTokens'),
-                             json_extract(e.f_data, '$.usage.reasoningTokens'))) AS reasoning_tokens,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.totalTokens'),
-                             json_extract(e.f_data, '$.usage.totalTokens'))) AS total_tokens
-           FROM t_events e
-          WHERE e.f_role = 'assistant' AND e.f_type = 'assistant/message'
-            AND EXISTS (SELECT 1 FROM t_session_events rb WHERE rb.f_event_id = e.f_event_id)
+                sum(u.f_input_tokens) AS input_tokens,
+                sum(u.f_output_tokens) AS output_tokens,
+                sum(u.f_cache_read_tokens) AS cache_read_tokens,
+                sum(u.f_reasoning_tokens) AS reasoning_tokens,
+                sum(u.f_total_tokens) AS total_tokens
+           FROM t_event_usage u
+          WHERE EXISTS (SELECT 1 FROM t_session_events rb WHERE rb.f_event_id = u.f_event_id)
           GROUP BY day, provider, model, subagent`,
       )
       .all() as unknown as RawUsageRow[];
@@ -583,20 +625,14 @@ export class SqliteBackend implements Backend {
                 (s.f_origin = 'subagent') AS subagent,
                 (s.f_archived_at IS NOT NULL) AS archived,
                 count(*) AS events,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.inputTokens'),
-                             json_extract(e.f_data, '$.usage.inputTokens'))) AS input_tokens,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.outputTokens'),
-                             json_extract(e.f_data, '$.usage.outputTokens'))) AS output_tokens,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.cacheReadTokens'),
-                             json_extract(e.f_data, '$.usage.cacheReadTokens'))) AS cache_read_tokens,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.reasoningTokens'),
-                             json_extract(e.f_data, '$.usage.reasoningTokens'))) AS reasoning_tokens,
-                sum(coalesce(json_extract(e.f_data, '$.data.usage.totalTokens'),
-                             json_extract(e.f_data, '$.usage.totalTokens'))) AS total_tokens
+                sum(u.f_input_tokens) AS input_tokens,
+                sum(u.f_output_tokens) AS output_tokens,
+                sum(u.f_cache_read_tokens) AS cache_read_tokens,
+                sum(u.f_reasoning_tokens) AS reasoning_tokens,
+                sum(u.f_total_tokens) AS total_tokens
            FROM t_session_events b
-           JOIN t_events e ON e.f_event_id = b.f_event_id
+           JOIN t_event_usage u ON u.f_event_id = b.f_event_id
            JOIN t_sessions s ON s.f_session_id = b.f_session_id
-          WHERE e.f_role = 'assistant' AND e.f_type = 'assistant/message'
           GROUP BY b.f_session_id, s.f_title, s.f_origin, s.f_archived_at`,
       )
       .all() as unknown as Array<
