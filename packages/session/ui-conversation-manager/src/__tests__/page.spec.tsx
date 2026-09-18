@@ -506,9 +506,14 @@ describe("对话管理页面：token 用量统计", () => {
     await screen.findByText("总览");
 
     // 输入含缓存：100 + 1000 = 1100（原始值挂在 data-usage-value 上）。
-    const input = container.querySelector('[data-usage-cell="input"]');
-    expect(input?.getAttribute("data-usage-value")).toBe("1100");
+    const metric = (key: string): string | null | undefined =>
+      container.querySelector(`[data-usage-cell="${key}"]`)?.getAttribute("data-usage-value");
+    expect(metric("input")).toBe("1100");
     expect(screen.getByText("1.1K")).toBeTruthy();
+    // 缓存输入是它的子项；命中率是缓存输入占总输入（含缓存）的比例。
+    expect(metric("cacheInput")).toBe("1000");
+    expect(Number(metric("cacheRate"))).toBeCloseTo(90.9, 1);
+    expect(screen.getByText("90.9%")).toBeTruthy();
   });
 
   it("统计行：label 在上，单项内部上下、单项之间横向，且没有 total 项", () => {

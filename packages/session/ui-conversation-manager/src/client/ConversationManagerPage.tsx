@@ -20,7 +20,7 @@ import {
   type UsageBucket,
   type UsageTotals,
 } from "./controller.ts";
-import { formatTokens } from "./format.ts";
+import { formatPercent, formatTokens } from "./format.ts";
 import { styles } from "./ConversationManagerPage.styles.ts";
 
 /** 一页的行数（会话列表）。 */
@@ -522,20 +522,47 @@ type UsageTab = "overview" | "daily" | "models" | "sessions";
 interface UsageMetric {
   key: string;
   label: string;
+  /** 原始值：token 数，或百分点（`percent` 项）。 */
   value: number;
+  kind: "tokens" | "percent";
 }
 
-/** 显示口径的单项：输入（含缓存读取）、输出、推理、事件——没有单独的合计项。 */
+/** 缓存命中率（百分点）：缓存输入占总输入（含缓存）的比例。 */
+function cacheHitPercent(totals: UsageTotals): number {
+  const total = totals.inputTokens + totals.cacheReadTokens;
+  if (total <= 0) return 0;
+  return (totals.cacheReadTokens / total) * 100;
+}
+
+/** 显示口径的单项：输入（含缓存输入）、缓存输入、缓存命中率、输出、推理、事件——没有合计项。 */
 function usageMetrics(totals: UsageTotals, t: Translate): UsageMetric[] {
   return [
     {
       key: "input",
       label: t("usage.inputWithCache"),
       value: totals.inputTokens + totals.cacheReadTokens,
+      kind: "tokens",
     },
-    { key: "output", label: t("usage.output"), value: totals.outputTokens },
-    { key: "reasoning", label: t("usage.reasoning"), value: totals.reasoningTokens },
-    { key: "events", label: t("usage.events"), value: totals.events },
+    {
+      key: "cacheInput",
+      label: t("usage.cacheInput"),
+      value: totals.cacheReadTokens,
+      kind: "tokens",
+    },
+    {
+      key: "cacheRate",
+      label: t("usage.cacheRate"),
+      value: cacheHitPercent(totals),
+      kind: "percent",
+    },
+    { key: "output", label: t("usage.output"), value: totals.outputTokens, kind: "tokens" },
+    {
+      key: "reasoning",
+      label: t("usage.reasoning"),
+      value: totals.reasoningTokens,
+      kind: "tokens",
+    },
+    { key: "events", label: t("usage.events"), value: totals.events, kind: "tokens" },
   ];
 }
 
@@ -607,7 +634,9 @@ function UsageRow({
             data-usage-value={metric.value}
           >
             <span {...styling.props(styles.usageMetricLabel)}>{metric.label}</span>
-            <span {...styling.props(styles.usageMetricValue)}>{formatTokens(metric.value)}</span>
+            <span {...styling.props(styles.usageMetricValue)}>
+              {metric.kind === "percent" ? formatPercent(metric.value) : formatTokens(metric.value)}
+            </span>
           </span>
         ))}
       </span>

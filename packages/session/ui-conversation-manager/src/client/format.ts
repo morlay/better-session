@@ -13,3 +13,10 @@ export function formatTokens(value: number): string {
   if (value < 1_000_000_000) return `${trim(value / 1_000_000)}M`;
   return `${trim(value / 1_000_000_000)}B`;
 }
+
+/** @param value - 百分点（0~100）。 @returns 紧凑百分比，例如 `98.4%`、`100%`。 */
+export function formatPercent(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0%";
+  const rounded = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded}%`;
+}
