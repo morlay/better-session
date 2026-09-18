@@ -7,7 +7,7 @@
 
 桌面打包产物要支持 Web 插件页（`@deepseek-ai/dsh-plugin-manager`）的安装 / 卸载 / 启停。原先的种子只有一个
 `dsh-home/profiles/desktop`：它是 `pnpm deploy` 闭包的复制品，而 `package.json` 却是 app 自己的 manifest
-（依赖里带 `workspace:^`）。在打包产物里用插件页做包操作时，pnpm 拿到的是一份与磁盘不一致的依赖图
+（依赖里带 `workspace:*`）。在打包产物里用插件页做包操作时，pnpm 拿到的是一份与磁盘不一致的依赖图
 （手工复制进闭包的包不在图里），任何 `install` / `add` 都会把那些包 prune 掉；随后启停触发的 Loader 解析就
 报模块解析错误。同时，壳当时也没有把 pnpm 交给 host（缺 `profileContext.packageManager`）。
 

@@ -10,7 +10,7 @@ describe("cleanDeployedSpec", () => {
   it("passes through a spec pnpm wrote without a peer suffix", () => {
     expect(cleanDeployedSpec("0.0.19")).toBe("0.0.19");
     expect(cleanDeployedSpec("^1.0.2")).toBe("^1.0.2");
-    expect(cleanDeployedSpec("workspace:^")).toBe("workspace:^");
+    expect(cleanDeployedSpec("workspace:*")).toBe("workspace:*");
   });
 
   it("cuts a flat peer suffix (hash-shaped peers)", () => {

@@ -1,6 +1,6 @@
 {
   "name": "@morlay/session-branch",
-  "version": "0.0.10-alpha.2",
+  "version": "0.0.10-alpha.3",
   "description": "Provider abstraction + high-level service for rewind / retry / fork over DeepSeek Harness event-sourced sessions.",
   "keywords": [
     "dsh",
@@ -41,10 +41,10 @@
     "prepublishOnly": "pnpm run build"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-invariants": "workspace:^",
-    "@deepseek-ai/dsh-session": "workspace:^",
-    "@deepseek-ai/dsh-session-persistence": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:*",
+    "@deepseek-ai/dsh-invariants": "workspace:*",
+    "@deepseek-ai/dsh-session": "workspace:*",
+    "@deepseek-ai/dsh-session-persistence": "workspace:*"
   },
   "dsh": {
     "bundle": {

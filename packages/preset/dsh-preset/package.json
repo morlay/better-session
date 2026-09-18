@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-preset",
-  "version": "0.0.6-alpha.2",
+  "version": "0.0.6-alpha.3",
   "description": "Personal dsh profile bundle: disables the shipped agent presets, builds generated standard / ptc presets into dist, declares personal llm-pi-ai provider routes, and carries the deployment sandbox access rules.",
   "keywords": [
     "dsh",
@@ -37,18 +37,18 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "@morlay/dsh-prompt-reminder": "workspace:^",
-    "@morlay/dsh-reference-injection": "workspace:^",
-    "@morlay/dsh-sandbox-local": "workspace:^"
+    "@morlay/dsh-prompt-reminder": "workspace:*",
+    "@morlay/dsh-reference-injection": "workspace:*",
+    "@morlay/dsh-sandbox-local": "workspace:*"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis-plugin-include": "workspace:^",
-    "@deepseek-ai/dsh-agent-presets": "workspace:^",
+    "@deepseek-ai/cordis-plugin-include": "workspace:*",
+    "@deepseek-ai/dsh-agent-presets": "workspace:*",
     "@types/js-yaml": "^4.0.9",
     "js-yaml": "^4.1.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:*"
   },
   "dsh": {
     "bundle": {

@@ -40,7 +40,7 @@
 }
 ```
 
-`dsh.version` 是 `@deepseek-ai/dsh` 的依赖 spec：仓库内项目可配 `workspace:^`（从 vendor 源码解析），
+`dsh.version` 是 `@deepseek-ai/dsh` 的依赖 spec：仓库内项目可配 `workspace:*`（从 vendor 源码解析），
 仓库外项目配具体版本（从 registry 安装）；缺省时回退到工作区已解析的 dsh 版本。配 `workspace:` 时工具不把它落成
 版本号（本地源码可能尚未发布），而是指向解析到的包目录。打包时工作区没有的官方包（实验包这类）按这个版本钉住
 装进部署项目；`workspace:` 与缺省 dsh.version 都不行时，只能靠工作区自己装齐官方包。

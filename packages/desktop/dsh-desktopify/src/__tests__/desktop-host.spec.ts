@@ -88,7 +88,7 @@ describe("desktop host 载荷", () => {
       workspace: TOOL_ROOT,
       workspaceRoot: process.cwd(),
       toolRoot: TOOL_ROOT,
-      dshVersion: "workspace:^",
+      dshVersion: "workspace:*",
     };
 
     const closure = await officialClosure(input);

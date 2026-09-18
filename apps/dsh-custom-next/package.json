@@ -12,16 +12,16 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@morlay/dsh-desktopify": "workspace:^",
-    "@morlay/better-session": "workspace:^",
-    "@morlay/dsh-preset": "workspace:^",
+    "@morlay/dsh-desktopify": "workspace:*",
+    "@morlay/better-session": "workspace:*",
+    "@morlay/dsh-preset": "workspace:*",
     "dsh-context": "0.52.2"
   },
   "peerDependencies": {
     "tsx": "*"
   },
   "dsh": {
-    "version": "workspace:^",
+    "version": "workspace:*",
     "profile": {
       "bundles": [
         "@morlay/better-session",

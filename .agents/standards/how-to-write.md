@@ -19,7 +19,7 @@
   合并接口有额外硬约束——见该包层规范。
 - **上游不可修改**：`vendor/**` 与 `node_modules` 只读；扩展走 cordis 插件层（plugin / patch bundle /
   settings namespace）。本地 patch 是例外，流程见 `dsh-plugin-upstream-sync` 技能。
-- **工具链在根**：各包 `package.json` 只声明自身依赖；上游包以 `workspace:^` 声明在 `peerDependencies`
+- **工具链在根**：各包 `package.json` 只声明自身依赖；上游包以 `workspace:*` 声明在 `peerDependencies`
   （插件契约面）或 `devDependencies`（测试用）。
 
 ## 包出口

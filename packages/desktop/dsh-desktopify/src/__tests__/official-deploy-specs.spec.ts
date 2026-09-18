@@ -75,7 +75,7 @@ describe("official deploy specs", () => {
         workspace: join(root, "app"),
         workspaceRoot: root,
         toolRoot: join(root, "tool", "pkg"),
-        dshVersion: "workspace:^",
+        dshVersion: "workspace:*",
       },
       "1.2.3",
     );

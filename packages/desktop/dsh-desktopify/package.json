@@ -1,6 +1,6 @@
 {
   "name": "@morlay/dsh-desktopify",
-  "version": "0.1.8-alpha.4",
+  "version": "0.1.8-alpha.5",
   "description": "Desktop packaging tool for dsh workspaces: runs the @morlay/dsh-desktop-host child as a shared Web profile and proxies dsh-app:// to it with the Host-issued cookie, with dev (workspace-linked) and bundle (static, unsigned) modes.",
   "keywords": [
     "desktop",
@@ -45,8 +45,8 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "workspace:^",
-    "@morlay/dsh-desktop-host": "workspace:^",
+    "@deepseek-ai/dsh": "workspace:*",
+    "@morlay/dsh-desktop-host": "workspace:*",
     "commander": "^15.0.0",
     "electron": "^44.3.0",
     "electron-builder": "^26.16.1",
@@ -59,17 +59,17 @@
     "tsdown": "0.22.x"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-agent": "workspace:^",
-    "@deepseek-ai/dsh-app-boot": "workspace:^",
-    "@deepseek-ai/dsh-client-connection": "workspace:^",
-    "@deepseek-ai/dsh-tools": "workspace:^",
-    "@local/devkit": "workspace:^",
+    "@deepseek-ai/dsh-agent": "workspace:*",
+    "@deepseek-ai/dsh-app-boot": "workspace:*",
+    "@deepseek-ai/dsh-client-connection": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*",
+    "@local/devkit": "workspace:*",
     "@types/node": "^26.5.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-client-modules": "workspace:^",
-    "@deepseek-ai/dsh-host-webserver": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:*",
+    "@deepseek-ai/dsh-client-modules": "workspace:*",
+    "@deepseek-ai/dsh-host-webserver": "workspace:*"
   },
   "engines": {
     "node": ">=24.11.0"

@@ -30,8 +30,8 @@ async function closureFixture(): Promise<{ root: string; modules: string }> {
     join(modules, "@morlay", "plugin", "package.json"),
     JSON.stringify({
       name: "@morlay/plugin",
-      dependencies: { zod: "^4.4.3", "@deepseek-ai/dsh-llm": "workspace:^" },
-      peerDependencies: { "@deepseek-ai/dsh-session": "workspace:^" },
+      dependencies: { zod: "^4.4.3", "@deepseek-ai/dsh-llm": "workspace:*" },
+      peerDependencies: { "@deepseek-ai/dsh-session": "workspace:*" },
     }),
   );
   await write(
@@ -53,7 +53,7 @@ function app(bundles: readonly string[]): WorkspaceManifest {
   return {
     name: "dsh-custom",
     version: "0.1.6",
-    dsh: { version: "workspace:^", profile: { bundles: [...bundles] } },
+    dsh: { version: "workspace:*", profile: { bundles: [...bundles] } },
   } as WorkspaceManifest;
 }
 

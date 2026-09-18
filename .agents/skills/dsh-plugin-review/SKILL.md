@@ -38,7 +38,7 @@ disable-model-invocation: true
 2. **生命周期与并发**：cordis 插件的注册与 disposer、异步建立、回调、子进程；发布前的竞态、await
    期间的取消、回收是否静默。
 3. **边界与所有权**：只读区是否被改（上游源码、`node_modules`）；依赖是否按用途声明（运行期契约面用
-   `peerDependencies`、测试面用 `devDependencies`，且一律 `workspace:^`）；抽象是否只服务当前调用方
+   `peerDependencies`、测试面用 `devDependencies`，且一律 `workspace:*`）；抽象是否只服务当前调用方
    （多出来的公开面就是多余扩展）。
 4. **范围与必要性**：每个抽象、状态机、选项、兼容路径是否对应现行契约与真实调用方；规格没要求的东西
    是否被顺手加进来。

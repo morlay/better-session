@@ -91,7 +91,7 @@ describe("profile bundles", () => {
 
   it("reads dsh.version verbatim and rejects a broken one", () => {
     expect(dshVersion({ name: "app" })).toBeUndefined();
-    expect(dshVersion({ name: "app", dsh: { version: "workspace:^" } })).toBe("workspace:^");
+    expect(dshVersion({ name: "app", dsh: { version: "workspace:*" } })).toBe("workspace:*");
     expect(dshVersion({ name: "app", dsh: { version: "0.1.6-alpha.1" } })).toBe("0.1.6-alpha.1");
     expect(() => dshVersion({ name: "app", dsh: { version: "" } })).toThrow(
       /has an invalid dsh\.version/u,

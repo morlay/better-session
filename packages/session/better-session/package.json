@@ -1,6 +1,6 @@
 {
   "name": "@morlay/better-session",
-  "version": "0.0.21-alpha.2",
+  "version": "0.0.21-alpha.3",
   "description": "Example dsh profile bundle: assembles @morlay/session-rdb and @morlay/ui-conversation-message-actions into a web profile — rewind / retry / fork closed loop on RDB persistence.",
   "keywords": [
     "dsh",
@@ -40,15 +40,15 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "@morlay/dsh-client-ui-conversation": "workspace:^",
-    "@morlay/dsh-client-ui-primitives": "workspace:^",
-    "@morlay/session-branch": "workspace:^",
-    "@morlay/session-rdb": "workspace:^",
-    "@morlay/ui-conversation-manager": "workspace:^",
-    "@morlay/ui-conversation-message-actions": "workspace:^"
+    "@morlay/dsh-client-ui-conversation": "workspace:*",
+    "@morlay/dsh-client-ui-primitives": "workspace:*",
+    "@morlay/session-branch": "workspace:*",
+    "@morlay/session-rdb": "workspace:*",
+    "@morlay/ui-conversation-manager": "workspace:*",
+    "@morlay/ui-conversation-message-actions": "workspace:*"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:*"
   },
   "dsh": {
     "bundle": {

@@ -34,6 +34,6 @@ tag `dsh-v{version}` 优先、回退同名 branch。
   验证 `just test` / `just lint` / `just build`（门禁与 CI 一致）。
 - vendor 目录删除后必须重新 `just vendor sync` 才能恢复（`pnpm install`
   不会重新克隆）。
-- 本仓库自己的包对上游包用 `workspace:^`：契约面放 `peerDependencies`，
+- 本仓库自己的包对上游包用 `workspace:*`：契约面放 `peerDependencies`，
   仅测试 / 装配辅助用放 `devDependencies`（清单见 skill）；不依赖 vendor
   的构建脚本。

@@ -17,12 +17,12 @@ autoInstallPeers: true
 ```
 
 - **`linkWorkspacePackages: true`**：workspace 内互引一律链接——保证
-  `@deepseek-ai/*` 全仓库只有**一份上游源码**。否则 `workspace:^` 之外的上游
+  `@deepseek-ai/*` 全仓库只有**一份上游源码**。否则 `workspace:*` 之外的上游
   依赖会从 registry 解析成**发布副本**，与源码副本并存 → 同名 branded
   类型 / 枚举出现两份，tsc 下互不兼容（类型唯一性破坏）。
 - **`hoistWorkspacePackages` + `autoInstallPeers`**：peer 依赖（如
   `@deepseek-ai/cordis`）自动安装并提升到根——各插件包只需声明运行期
-  import 的上游包为 `workspace:^` 的 peerDependencies，无需为每个上游包
+  import 的上游包为 `workspace:*` 的 peerDependencies，无需为每个上游包
   重复声明 devDeps。
 
 工具链集中 `devpackages/devkit`（private workspace 包，TS 源码直出），

@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 以 side workspace 形态基于上游 deepseek-harness（dsh）开发 cordis 插件集合：
 上游以完整 git 仓库 vendor 到 `vendor/<name>/`（保留 `.git`），经 git 同步锁定到
-指定提交，构建完整上游；插件包以 `workspace:^` 引用其源码。背景与取舍见
+指定提交，构建完整上游；插件包以 `workspace:*` 引用其源码。背景与取舍见
 [RATIONALE.md](./RATIONALE.md)。
 
 上游是**锁版本的只读源码副本**——版本常量与 vendor 路径在 `mise.toml`，只读红线与
@@ -17,7 +17,7 @@ disable-model-invocation: true
 ```
 <your-repo>/
 ├── vendor/<upstream>/       # 上游完整 git clone（保留 .git）
-├── packages/<plugin-pkg>/   # 插件包（workspace:^ 引用上游，见扩展面清单）
+├── packages/<plugin-pkg>/   # 插件包（workspace:* 引用上游，见扩展面清单）
 ├── patches/                 # steps.json + *.patch（被脚本读取，仓库维护）
 ├── pnpm-workspace.yaml      # 对齐上游 + 三个 workspace 配置（见初始化）
 └── 版本变量配置               # 如 mise.toml：DEEPSEEK_HARNESS_*
@@ -66,14 +66,14 @@ skill 自带脚本 `scripts/{sync,patch,build}.ts`，用 **`tsx` 执行**（勿�
 
 4. **根安装一次**：`pnpm install`。此后日常依赖变更才需再次根安装。
 
-5. **插件包依赖声明**：对上游 `@deepseek-ai/*` 一律用 **`workspace:^`**
+5. **插件包依赖声明**：对上游 `@deepseek-ai/*` 一律用 **`workspace:*`**
    版本（不用 registry 版本号 / `latest`）——保证解析到 vendor 源码而非
    发布副本。按用途放对位置：
 
    ```jsonc
    {
-     "peerDependencies": { "@deepseek-ai/dsh-session": "workspace:^" }, // 契约面：插件 import 的上游类型/服务
-     "devDependencies": { "@deepseek-ai/dsh-token-meter": "workspace:^" }, // 测试面：仅测试装配用
+     "peerDependencies": { "@deepseek-ai/dsh-session": "workspace:*" }, // 契约面：插件 import 的上游类型/服务
+     "devDependencies": { "@deepseek-ai/dsh-token-meter": "workspace:*" }, // 测试面：仅测试装配用
    }
    ```
 

@@ -76,7 +76,7 @@ export function dshVersion(manifest: WorkspaceManifest): string | undefined {
   if (typeof version !== "string" || version === "") {
     throw new Error(
       `dsh-desktopify: workspace ${String(manifest.name)} has an invalid dsh.version ` +
-        `(expected a dependency spec such as "0.1.5-rc.1" or "workspace:^")`,
+        `(expected a dependency spec such as "0.1.5-rc.1" or "workspace:*")`,
     );
   }
   return version;

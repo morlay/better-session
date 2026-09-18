@@ -17,7 +17,7 @@ description: 实现插件改动时用——先约定接缝再写测试（红→�
 - **契约面**——上游类型 / 服务的公开面，以及我们自己的 branded 类型与错误类型；
 - **服务与依赖的公开面**——本仓库插件的 `ctx.<service>`（如 `ctx.sessionBranch`、`ctx.sessionEditor`、
   `ctx.sessionPersistence`）取值与注入的地方；
-- **装配面**——`cordis.patch.yml`、依赖声明（`workspace:^` 放 peer 还是 dev）、client 声明；
+- **装配面**——`cordis.patch.yml`、依赖声明（`workspace:*` 放 peer 还是 dev）、client 声明；
 - **出口与命令**——包暴露什么、HTTP 路由（如 `/session-editor`）与命令行 / just 命令的对外行为。
 
 本仓库这些接缝具体落在哪，见**改动所属层**的 `.agents/standards/`——不复制其中条目。

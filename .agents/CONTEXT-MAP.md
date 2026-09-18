@@ -36,7 +36,7 @@
   [债务 临时接管上游对话UI的client半](../packages/session/ui-conversation/.agents/debts/20260917-临时接管上游对话UI的client半.md)）；
   `session/dsh-reference-injection` 与 `preset/dsh-preset` 的装配行一起工作。
 - **仓库 → 上游**：`vendor/deepseek-harness/` 是上游按版本克隆的 side workspace（`DEEPSEEK_HARNESS_VERSION`
-  锁定），本仓库所有包经 `workspace:^` 解析到该固定版本源码（见
+  锁定），本仓库所有包经 `workspace:*` 解析到该固定版本源码（见
   [ADR-上游以side-workspace版本锁定完整代码而非发布版本](./adrs/20260917-上游以side-workspace版本锁定完整代码而非发布版本.md)）。
 
 ## 分层
