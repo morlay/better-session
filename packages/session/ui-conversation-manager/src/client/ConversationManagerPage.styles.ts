@@ -39,14 +39,8 @@ export const styles = {
     lineHeight: "24px",
     fontWeight: "500",
   },
-  // 与官方会话头部的 tab 条同形（ConversationRoot.module.css 的 .tabs/.tab/.tabActive）。
-  // 时间范围是一组筛选（Pill），与维度 tab 分开。
-  ranges: {
-    display: "flex",
-    alignItems: "center",
-    gap: "6px",
-    flex: "none",
-  },
+  // 与官方会话头部的 tab 条同形（ConversationRoot.module.css 的 .tabs/.tab/.tabActive）：
+  // 时间范围与维度切换共用这一套，选中态是品牌蓝文字 + 2px 下划线。
   tabs: {
     position: "relative",
     zIndex: "1",

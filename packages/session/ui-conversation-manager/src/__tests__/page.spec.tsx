@@ -493,17 +493,17 @@ describe("对话管理页面：token 用量统计", () => {
     // 「按天」这一栏已被时间范围取代。
     expect(screen.queryByRole("tab", { name: "按天" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "近 7 天" }));
+    fireEvent.click(screen.getByRole("radio", { name: "近 7 天" }));
     await waitFor(() => {
       expect(loadUsage).toHaveBeenLastCalledWith("7d");
     });
 
     // 自然边界也走同一套语义键。
-    fireEvent.click(screen.getByRole("button", { name: "本日" }));
+    fireEvent.click(screen.getByRole("radio", { name: "本日" }));
     await waitFor(() => {
       expect(loadUsage).toHaveBeenLastCalledWith("day");
     });
-    fireEvent.click(screen.getByRole("button", { name: "本周" }));
+    fireEvent.click(screen.getByRole("radio", { name: "本周" }));
     await waitFor(() => {
       expect(loadUsage).toHaveBeenLastCalledWith("week");
     });

@@ -7,7 +7,6 @@ import {
   IconSearchOutline16,
   Input,
   Modal,
-  Pill,
   Tag,
   relativeTime,
 } from "@deepseek-ai/dsh-client-ui-primitives";
@@ -748,18 +747,21 @@ function UsageView({
             .slice(0, USAGE_SESSION_ROWS);
   return (
     <div {...styling.props(styles.usage)} data-usage-view={tab} data-usage-range={range}>
-      <div {...styling.props(styles.ranges)} role="group" aria-label={t("usage.range")}>
+      <div {...styling.props(styles.tabs)} role="radiogroup" aria-label={t("usage.range")}>
         {USAGE_RANGES.map((option) => (
-          <Pill
+          <button
             key={option}
-            active={range === option}
+            type="button"
+            role="radio"
+            aria-checked={range === option}
             data-range={option}
+            className={styling.className(styles.tab, range === option && styles.tabActive)}
             onClick={() => {
               onRange(option);
             }}
           >
             {rangeLabel(option, t)}
-          </Pill>
+          </button>
         ))}
       </div>
       <div {...styling.props(styles.tabs)} role="tablist">

@@ -47,6 +47,11 @@ GC 是唯一会**停止所有运行中 agent** 的动作：确认后进入不可
 只标"最小身份 + DOM 读不出的状态"：视图/维度由 `data-view`、`data-tab`、`data-usage-tab` 表达，
 行内合计与明细、行标题这类页面上直接可见的内容不再重复标注。
 
+时间范围的按钮与维度 tab 共用**同一套官方 tab 条视觉**（文字 13/16 wt500、选中态品牌蓝 + 2px 下划线，
+取自会话头部的 `ConversationRoot.module.css`），只在其语义上用 `radiogroup`（单选筛选）区别于维度的 `tab`；
+**不用 `Pill`**——官方 `ui-primitives` README 写明它的选中态是按钮填充风格（`button-ghost-active-fill` + 内描边），
+且视图切换应使用消费方自有的 tab 条组合，`Pill` 在官方代码里只用于只读状态（`TerminalBlock`）。
+
 统计的每一行（总览与列表）是同一形态：行 label + 横向排布的单项，所以读法一致——
 「`data-usage-key=2026-09-14` 行里 `data-usage-cell=input` 的 `data-usage-value`」。
 
