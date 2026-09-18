@@ -1,8 +1,30 @@
 import type { ChildProcess } from "node:child_process";
+import { access } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { rcFileFor, shellQuote, shellWrappedSpawn } from "../shell-env.ts";
 
 const ORIGINAL_SHELL = process.env.SHELL;
+
+async function firstInstalled(candidates: readonly string[]): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // 不在这个 runner 上，试下一个
+    }
+  }
+  return undefined;
+}
+
+// 包装行为与具体 shell 无关，用 runner 上第一个带 rc 文件的 shell：CI（ubuntu-latest）没有 zsh。
+const RC_SHELL = await firstInstalled(["/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh"]);
+
+function useRcShell(): string {
+  if (RC_SHELL === undefined) throw new Error("runner has no bash/zsh to wrap with");
+  process.env.SHELL = RC_SHELL;
+  return RC_SHELL;
+}
 
 interface Outcome {
   readonly code: number | null;
@@ -77,7 +99,7 @@ describe("shellWrappedSpawn", () => {
   it.skipIf(process.platform === "win32")(
     "runs the command through the login shell with quoted arguments intact",
     async () => {
-      process.env.SHELL = "/bin/bash";
+      useRcShell();
       const outcome = await runWrapped("/bin/echo", ["a b'c", "d"]);
 
       expect(outcome.code).toBe(0);
@@ -88,7 +110,7 @@ describe("shellWrappedSpawn", () => {
   it.skipIf(process.platform === "win32")(
     "keeps the command in the same process, so its status is the shell's status",
     async () => {
-      process.env.SHELL = "/bin/zsh";
+      useRcShell();
       const outcome = await runWrapped("/bin/sh", ["-c", "exit 7"]);
 
       expect(outcome.code).toBe(7);
@@ -98,11 +120,11 @@ describe("shellWrappedSpawn", () => {
   it.skipIf(process.platform === "win32")(
     "passes the environment through the wrapper without leaking rc output",
     async () => {
-      process.env.SHELL = "/bin/bash";
+      const shell = useRcShell();
       const outcome = await runWrapped(process.execPath, ["-p", "process.env.SHELL"]);
 
       expect(outcome.code).toBe(0);
-      expect(outcome.stdout.trim()).toBe("/bin/bash");
+      expect(outcome.stdout.trim()).toBe(shell);
       expect(outcome.stderr).toBe("");
     },
   );
