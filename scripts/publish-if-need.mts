@@ -25,6 +25,18 @@ function resolveRegistry(): string {
   return DEFAULT_REGISTRY;
 }
 
+/**
+ * 解析 dist-tag：预发布版本不占用 latest，避免 `npm i <pkg>` 装到未稳定的版本。
+ * `1.2.3` → latest；`1.2.3-alpha.1` → alpha；其余预发布（rc / beta / …）→ next。
+ */
+function resolveTag(version: string): string {
+  const dash = version.indexOf("-");
+  if (dash < 0) return "latest";
+  const prerelease = version.slice(dash + 1).split("+")[0]!;
+  const identifier = prerelease.split(".")[0]!;
+  return identifier === "alpha" ? "alpha" : "next";
+}
+
 /** 捕获 stdout/stderr 地跑子进程：非零退出不抛，交给调用方按退出码判断。 */
 async function capture(
   command: string,
@@ -82,10 +94,13 @@ if (!view.stderr.includes("E404")) {
   process.exit(1);
 }
 
-console.log(`to publish: ${name}@${version}`);
+const tag = resolveTag(version);
+
+console.log(`to publish: ${name}@${version} (tag: ${tag})`);
 const status = await runInherited("pnpm", [
   "publish",
   "--access=public",
+  `--tag=${tag}`,
   `--publish-branch=${process.env["GITHUB_REF_NAME"] ?? "main"}`,
   "--registry",
   REGISTRY,

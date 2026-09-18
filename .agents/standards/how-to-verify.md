@@ -34,6 +34,8 @@
 
 - **发布走 CI**：`.github/workflows/release.yml`（`main` 与 `next` 分支：`vendor prepare` → `dep` →
   `build` → `lint` → `test`（注入外部服务门控所需的环境变量）→ `build` → GitHub Packages publish）。
+- **dist-tag 随版本号走**（[`scripts/publish-if-need.mts`](../../scripts/publish-if-need.mts)）：稳定版 →
+  `latest`；`-alpha.*` → `alpha`；其余预发布（rc / beta / …）→ `next`。预发布绝不落在 `latest`。
 - **严禁本地私自 `pnpm publish`**（包括用 `--registry` 指向 GitHub Packages 的发布）。版本 bump
   提交后由 CI 发布；本地只构建验证。
 - 改动收尾时 `just lint` 只要不引入**新**错误即可，必要时 `just fmt`。
