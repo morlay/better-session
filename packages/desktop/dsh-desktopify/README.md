@@ -69,9 +69,10 @@
 
 - pnpm workspace（dev 依赖 `findWorkspaceRoot` 装配临时项目；bundle 依赖 `pnpm deploy` 导出 app 闭包，
   工具不改写工作区清单 / lockfile）。
-- `vendor/deepseek-harness` 已构建（`just vendor prepare`：dev 需要 dsh CLI；工具自带的 host 变体运行期从
-  部署载荷的 `node_modules` 解析上游 `@deepseek-ai/*` 包）。
-- 工具自身已构建（`pnpm build`）：dev / bundle 用 `dist/desktop-host` 里的后端产物。
+- `vendor/deepseek-harness` 已构建（`just vendor prepare`：dev 需要 dsh CLI；后端变体
+  [`@morlay/dsh-desktop-host`](../dsh-desktop-host/README.md) 运行期从部署载荷的 `node_modules` 解析上游
+  `@deepseek-ai/*` 包）。
+- 工具与后端变体都已构建（`pnpm build`）：dev / bundle 用 `@morlay/dsh-desktop-host` 的 `lib/index.js`。
 - 前端静态资源来自闭包内 `@deepseek-ai/dsh-web-frontend/dist`（`dsh` → `dsh-web-app` 的传递依赖），
   壳按 `<runtimeDir>/node_modules/@deepseek-ai/dsh-web-frontend/dist` 读取。
 

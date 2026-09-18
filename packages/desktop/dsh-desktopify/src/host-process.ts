@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { join } from "node:path";
+import { DESKTOP_HOST_PACKAGE } from "./official.ts";
 
 interface ReadyEvent {
   readonly type: "ready";
@@ -114,11 +115,11 @@ export class DesktopHostProcess {
 
   async start(): Promise<DesktopHostReady> {
     if (this.child !== undefined) return this.readyPromise;
+    // 部署里的 host 是工具自己的变体包（@morlay/dsh-desktop-host），落位名字与入口路径都要对上。
     const entry = join(
       this.runtimeDir,
       "node_modules",
-      "@deepseek-ai",
-      "dsh-desktop-host",
+      ...DESKTOP_HOST_PACKAGE.split("/"),
       "lib",
       "index.js",
     );

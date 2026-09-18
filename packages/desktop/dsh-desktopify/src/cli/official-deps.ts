@@ -3,15 +3,9 @@ import { access, cp, glob, mkdir, readFile, readdir, realpath, rm } from "node:f
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OFFICIAL_RUNTIME_PACKAGES } from "../official.ts";
+import { DESKTOP_HOST_PACKAGE, OFFICIAL_RUNTIME_PACKAGES } from "../official.ts";
 
 export const DSH_PACKAGE = "@deepseek-ai/dsh";
-
-export const DESKTOP_HOST_PACKAGE = "@deepseek-ai/dsh-desktop-host";
-
-const TOOL_PACKAGE = "@morlay/dsh-desktopify";
-
-const DESKTOP_HOST_EXPORT = `${TOOL_PACKAGE}/desktop-host`;
 
 export interface OfficialPackage {
   readonly dir: string;
@@ -83,39 +77,25 @@ export async function resolveOfficialPackage(
   return undefined;
 }
 
-function desktopHostDir(): string | undefined {
-  let entry: string;
+/**
+ * The tool's own dependency on the desktop host variant — never a copy the workspace or vendor tree
+ * happens to carry under another name.
+ *
+ * `import.meta.resolve` runs from this module, so it can only reach the tool's own dependency; the
+ * payload directory therefore needs no path invariant to prove it is ours.
+ * @returns The payload directory and its manifest version, or `undefined` before the variant is built.
+ */
+export async function desktopHost(): Promise<OfficialPackage | undefined> {
+  let manifestPath: string;
   try {
-    entry = fileURLToPath(import.meta.resolve(DESKTOP_HOST_EXPORT));
+    manifestPath = fileURLToPath(import.meta.resolve(`${DESKTOP_HOST_PACKAGE}/package.json`));
   } catch {
     return undefined;
   }
-
-  return dirname(dirname(entry));
-}
-
-/**
- * The tool's own host payload — never the workspace or vendor copy of
- * `@deepseek-ai/dsh-desktop-host`.
- *
- * `import.meta.resolve` on the tool's own subpath export is a package self-reference, so only the
- * tool's `dist/desktop-host` can satisfy it; comparing against the tool's manifest root turns that
- * into a checked invariant, and a resolution from a `node_modules` tree fails here instead of
- * silently booting a payload this tool does not own.
- * @returns The payload directory and its manifest version, or `undefined` before the tool build.
- */
-export async function desktopHost(): Promise<OfficialPackage | undefined> {
-  const dir = desktopHostDir();
-  if (dir === undefined) return undefined;
-  const toolRoot = dirname(fileURLToPath(import.meta.resolve(`${TOOL_PACKAGE}/package.json`)));
-  if (resolve(dir) !== join(toolRoot, "dist", "desktop-host")) {
-    throw new Error(
-      `dsh-desktopify: ${DESKTOP_HOST_PACKAGE} resolved outside the tool's own payload (${dir})`,
-    );
-  }
+  const dir = dirname(manifestPath);
   const manifest = await readManifest(dir);
   return typeof manifest.version === "string" && manifest.version !== ""
-    ? { dir, version: manifest.version }
+    ? { dir: await realpath(dir), version: manifest.version }
     : undefined;
 }
 

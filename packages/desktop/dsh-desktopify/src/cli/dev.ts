@@ -23,7 +23,6 @@ import {
   prepareOfficeSkillAssets,
 } from "./office-assets.ts";
 import {
-  DESKTOP_HOST_PACKAGE,
   DSH_PACKAGE,
   desktopHost,
   hasTsx,
@@ -32,6 +31,7 @@ import {
   toolModulesDir,
   type OfficialResolutionInput,
 } from "./official-deps.ts";
+import { DESKTOP_HOST_PACKAGE } from "../official.ts";
 import { buildShell, SHELL_ENTRY } from "./shell.ts";
 import {
   PROFILE_NAME,
@@ -238,7 +238,7 @@ async function prepareDevelopmentProject(
   const dshLink = join(destinationModules, "@deepseek-ai", "dsh");
   await removeOwnedPath(dshLink);
   await copyPackage(dsh.dir, dshLink);
-  const hostLink = join(destinationModules, "@deepseek-ai", "dsh-desktop-host");
+  const hostLink = join(destinationModules, ...DESKTOP_HOST_PACKAGE.split("/"));
   await removeOwnedPath(hostLink);
   await copyPackage(host.dir, hostLink);
   await materializeAgentPresets(

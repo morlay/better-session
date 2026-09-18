@@ -1,7 +1,7 @@
 {
   "name": "@morlay/dsh-desktopify",
-  "version": "0.1.8-alpha.1",
-  "description": "Desktop packaging tool for dsh workspaces: runs the upstream dsh-desktop-host child as a shared Web profile and proxies dsh-app:// to it with the Host-issued cookie, with dev (workspace-linked) and bundle (static, unsigned) modes.",
+  "version": "0.1.8-alpha.2",
+  "description": "Desktop packaging tool for dsh workspaces: runs the @morlay/dsh-desktop-host child as a shared Web profile and proxies dsh-app:// to it with the Host-issued cookie, with dev (workspace-linked) and bundle (static, unsigned) modes.",
   "keywords": [
     "desktop",
     "dsh",
@@ -27,8 +27,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./dev-client-bundles": "./src/dev-client/index.ts",
-    "./package.json": "./package.json",
-    "./desktop-host": "./dist/desktop-host/lib/index.js"
+    "./package.json": "./package.json"
   },
   "publishConfig": {
     "bin": {
@@ -37,8 +36,7 @@
     "exports": {
       ".": "./dist/index.mjs",
       "./dev-client-bundles": "./dist/dev-client-bundles.mjs",
-      "./package.json": "./package.json",
-      "./desktop-host": "./dist/desktop-host/lib/index.js"
+      "./package.json": "./package.json"
     }
   },
   "scripts": {
@@ -48,6 +46,7 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh": "workspace:^",
+    "@morlay/dsh-desktop-host": "workspace:^",
     "commander": "^15.0.0",
     "electron": "^44.3.0",
     "electron-builder": "^26.16.1",
@@ -63,10 +62,6 @@
     "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-app-boot": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
-    "@deepseek-ai/dsh-desktop-host": "workspace:^",
-    "@deepseek-ai/dsh-home-paths": "workspace:^",
-    "@deepseek-ai/dsh-jobs": "workspace:^",
-    "@deepseek-ai/dsh-skill-office": "workspace:^",
     "@deepseek-ai/dsh-tools": "workspace:^",
     "@local/devkit": "workspace:^",
     "@types/node": "^26.5.0"

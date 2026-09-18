@@ -63,7 +63,8 @@ describe("official deploy specs", () => {
     expect(specs[nonHarness]).toBeUndefined();
 
     expect(specs[sourceTree]).toBeUndefined();
-    expect(specs["@deepseek-ai/dsh-desktop-host"]).toBeUndefined();
+    // host 是工具自己的变体包，由闭包以 `link:` 装配，不进部署的 registry specs。
+    expect(specs["@morlay/dsh-desktop-host"]).toBeUndefined();
   });
 
   it("leaves a workspace-sourced app entirely to the closure walk", async () => {

@@ -5,8 +5,8 @@
  * from `./office.ts` (no office skills), `update-tasks` is imported straight from upstream, and
  * `process.disconnect` is called optionally for this repository's type face. Every other line follows
  * upstream so the argv / IPC contract stays theirs; `tsdown.config.ts` builds this to
- * `dist/desktop-host/lib/index.js`, the path the shell starts, so deployments boot this composition
- * instead of the upstream artifact.
+ * `lib/index.js`, the path `@morlay/dsh-desktopify` copies into a deployment (and starts in dev
+ * mode) — deployments therefore boot this composition instead of the upstream artifact.
  */
 
 import { delimiter, join } from "node:path";
@@ -17,7 +17,7 @@ import type {} from "@deepseek-ai/dsh-host-webserver";
 import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import * as desktopOffice from "./office.ts";
 
-import { installDesktopUpdateTaskControl } from "../../../../../vendor/deepseek-harness/apps/desktop-host/src/update-tasks.ts";
+import { installDesktopUpdateTaskControl } from "../../../../vendor/deepseek-harness/apps/desktop-host/src/update-tasks.ts";
 
 async function main(): Promise<void> {
   const runtimeDir = process.argv[2] as string;

@@ -29,6 +29,7 @@ DeepSeek Harness Plugin 自用开发插件集合。
 | `sandbox/dsh-sandbox-local/`               | 额外可写根 + 拒绝项（替换 `ctx.sandbox` / `ctx.fs`）                                                          | [README](packages/sandbox/dsh-sandbox-local/README.md)               |
 | **desktop**（桌面化）                      |                                                                                                               |                                                                      |
 | `desktop/dsh-desktopify/`                  | 桌面化打包工具（`dsh-desktopify` CLI：dev / bundle）                                                          | [README](packages/desktop/dsh-desktopify/README.md)                  |
+| `desktop/dsh-desktop-host/`                | 桌面部署的 host 进程（上游 host 的变体：`desktop` profile、URL / IPC 上报给壳，不挂 office 技能）             | [README](packages/desktop/dsh-desktop-host/README.md)                |
 | **workspace**（非发布）                    |                                                                                                               |                                                                      |
 | `apps/dsh-custom-next/`                    | 示例工作区：web 模式（`dsh web`）与 desktop 模式（Electron 壳）                                               | [justfile](apps/dsh-custom-next/justfile)                            |
 | `devpackages/devkit/`                      | 共享开发配置 `@local/devkit`（本地私有包，不发布）：cordis 插件 tsdown 预设 + tsconfig（`packages/*/*` 复用） | [tsconfig](devpackages/devkit/tsconfig.json)                         |

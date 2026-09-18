@@ -1,0 +1,48 @@
+{
+  "name": "@morlay/dsh-desktop-host",
+  "version": "0.0.1-alpha.1",
+  "description": "Desktop host process for dsh-desktopify: boots the Web application as the desktop profile and reports its URL to the Electron shell over IPC — upstream apps/desktop-host with the Office skill mount removed.",
+  "keywords": [
+    "desktop",
+    "dsh",
+    "dsh-plugin",
+    "electron",
+    "host"
+  ],
+  "license": "MIT",
+  "author": "morlay",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/morlay/dsh-plugin.git"
+  },
+  "files": [
+    "lib"
+  ],
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "pnpm exec tsdown",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "workspace:^",
+    "@deepseek-ai/dsh-app-boot": "workspace:^",
+    "@deepseek-ai/dsh-home-paths": "workspace:^"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-client-connection": "workspace:^",
+    "@deepseek-ai/dsh-host-webserver": "workspace:^",
+    "@types/node": "^26.5.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  }
+}

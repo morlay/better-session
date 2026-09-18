@@ -5,12 +5,12 @@
  * `@deepseek-ai/dsh-skill-office` mount: the profile still gets the bundled payload installer
  * (`workspace-dependencies`, imported from upstream below) but registers no docx / pptx / xlsx
  * skills. Name, config fields, and the argv contract stay upstream's, so the host entry sees no
- * difference. `tsdown` inlines the upstream module into `dist/desktop-host`, so the published
- * tool carries this composition instead of resolving a source path at run time.
+ * difference. `tsdown` inlines the upstream module into `dist`, so the published package carries this
+ * composition instead of resolving a source path at run time.
  */
 
 import type { Context } from "@deepseek-ai/cordis";
-import * as workspaceDependencies from "../../../../../vendor/deepseek-harness/apps/desktop-host/src/workspace-dependencies.ts";
+import * as workspaceDependencies from "../../../../vendor/deepseek-harness/apps/desktop-host/src/workspace-dependencies.ts";
 
 /** Loader identity for the application-owned workspace dependency composition. */
 export const name = "desktop-office";

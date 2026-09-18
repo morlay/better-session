@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { OFFICIAL_PROFILE_BUNDLES, OFFICIAL_RUNTIME_PACKAGES } from "../official.ts";
+import {
+  OFFICIAL_PROFILE_BUNDLES,
+  OFFICIAL_RUNTIME_PACKAGES,
+  DESKTOP_HOST_PACKAGE,
+} from "../official.ts";
 import { OFFICIAL_PROFILE_PACKAGES } from "../official-packages.generated.ts";
 
 describe("official runtime packages", () => {
-  it("starts with the two packages the desktop transport owns", () => {
+  it("starts with the harness install anchor and our own desktop host", () => {
     expect(OFFICIAL_RUNTIME_PACKAGES.slice(0, 2)).toEqual([
       "@deepseek-ai/dsh",
-      "@deepseek-ai/dsh-desktop-host",
+      DESKTOP_HOST_PACKAGE,
     ]);
   });
 
@@ -18,11 +22,13 @@ describe("official runtime packages", () => {
     expect(new Set(OFFICIAL_RUNTIME_PACKAGES).size).toBe(OFFICIAL_RUNTIME_PACKAGES.length);
   });
 
-  it("declares only deepseek packages", () => {
+  it("declares deepseek packages plus the tool's own host variant", () => {
     for (const name of OFFICIAL_RUNTIME_PACKAGES) {
+      if (name === DESKTOP_HOST_PACKAGE) continue;
       expect(name.startsWith("@deepseek-ai/")).toBe(true);
       expect(name.split("/")).toHaveLength(2);
     }
+    expect(DESKTOP_HOST_PACKAGE).toBe("@morlay/dsh-desktop-host");
   });
 
   it("boots the base and web app bundles", () => {

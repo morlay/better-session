@@ -60,7 +60,7 @@ function harness(options: DesktopHostOptions = {}, inspectPort?: number) {
 const ENTRY = join(
   "/app/seed/profiles/desktop",
   "node_modules",
-  "@deepseek-ai",
+  "@morlay",
   "dsh-desktop-host",
   "lib",
   "index.js",
