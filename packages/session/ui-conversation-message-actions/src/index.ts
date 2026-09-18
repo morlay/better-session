@@ -529,12 +529,6 @@ interface HttpServerLike {
   }): () => void;
 }
 
-declare module "@deepseek-ai/cordis" {
-  interface Context {
-    webServer: HttpServerLike;
-  }
-}
-
 function objectValue(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("请求体必须是 JSON 对象。");
@@ -731,7 +725,9 @@ async function handleRoute(
 
 function registerHttpRoutes(ctx: Context): void {
   ctx.effect(() => {
-    const webServer = ctx.get("webServer") as HttpServerLike | undefined;
+    // webServer 的类型由上游 @deepseek-ai/dsh-host-webserver 声明（`Context.webServer: WebServer`）；
+    // 这里只按用到的 register 面做结构转换，不再 declare module 覆盖，否则两处声明冲突（TS2717）。
+    const webServer = ctx.get("webServer") as unknown as HttpServerLike | undefined;
     if (webServer === undefined) return () => {};
     const editor = ctx.sessionEditor;
     return webServer.register({
