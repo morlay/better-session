@@ -66,8 +66,13 @@ function renderDock(
     inbox?: InboxState["next-turn"];
     projectionsUnavailable?: boolean;
   } = {},
-): { notify: ReturnType<typeof vi.fn>; updateQueue: ReturnType<typeof vi.fn> } {
+): {
+  notify: ReturnType<typeof vi.fn>;
+  updateQueue: ReturnType<typeof vi.fn>;
+  restoreDraft: ReturnType<typeof vi.fn>;
+} {
   const notify = vi.fn();
+  const restoreDraft = vi.fn();
   const updateQueue = vi.fn(faces.updateQueue ?? (() => Promise.resolve()));
   const inbox: InboxState = {
     "next-turn": faces.inbox ?? [],
@@ -76,15 +81,16 @@ function renderDock(
   const props = {
     useSession: ((selector: (state: SessionSnapshot) => unknown) =>
       selector(snapshot)) as unknown as SnapshotSelectorHook<SessionSnapshot>,
-    useProjection: ((key: string) => (key === "inbox" ? inbox : undefined)) as unknown as
-      QueueDockProps["useProjection"],
+    useProjection: ((key: string) =>
+      key === "inbox" ? inbox : undefined) as unknown as QueueDockProps["useProjection"],
     updateQueue,
     notify,
     loadImage: () => Promise.resolve("blob:image"),
+    restoreDraft,
     t,
   };
   render(<QueueDock {...(props as unknown as QueueDockProps)} />);
-  return { notify, updateQueue };
+  return { notify, updateQueue, restoreDraft };
 }
 
 describe("QueueDock: 队列行的文本", () => {
@@ -113,6 +119,11 @@ describe("QueueDock: 队列行的文本", () => {
       inbox: [row("q1", [{ type: "text", text: "看这个" }, { type: "image" } as ContentBlock])],
     });
     expect(document.querySelector("[data-queue-dock]")?.textContent).toContain("看这个");
+  });
+
+  it("多段文本只落在同一个单行预览宿主上（单行展示靠它上面的 CSS 压平）", () => {
+    renderDock(sessionOf(), { inbox: [textRow("q1", "第一段\n\n第二段")] });
+    expect(document.querySelectorAll("[data-queue-preview]")).toHaveLength(1);
   });
 });
 
@@ -181,6 +192,51 @@ describe("QueueDock: 行操作门控", () => {
     await waitFor(() => {
       expect(updateQueue).toHaveBeenCalledWith("q1", { kind: "remove" });
     });
+  });
+});
+
+describe("QueueDock: 队列行撤回", () => {
+  it("点编辑按钮直接撤回：移除队列项并把文本回填输入框，不进入行内编辑", async () => {
+    const { updateQueue, restoreDraft } = renderDock(sessionOf(), {
+      inbox: [textRow("q1", "先跑测试")],
+    });
+    fireEvent.click(screen.getByLabelText("编辑排队消息"));
+
+    await waitFor(() => {
+      expect(updateQueue).toHaveBeenCalledWith("q1", { kind: "remove" });
+      expect(restoreDraft).toHaveBeenCalledWith("先跑测试");
+    });
+    expect(document.querySelector("input")).toBeNull();
+  });
+
+  it("撤回的是未截断的原始文本，而不是预览用的截断文本", async () => {
+    const filler = "凑长度".repeat(70);
+    const { restoreDraft } = renderDock(sessionOf(), {
+      inbox: [
+        row("q1", [
+          { type: "text", text: filler },
+          { type: "text", text: "看 file:src/a.ts#L3-L5" },
+        ]),
+      ],
+    });
+    fireEvent.click(screen.getByLabelText("编辑排队消息"));
+
+    await waitFor(() => {
+      expect(restoreDraft).toHaveBeenCalledWith(`${filler}看 file:src/a.ts#L3-L5`);
+    });
+  });
+
+  it("撤回失败：不回填输入框，并给出错误提示", async () => {
+    const { notify, restoreDraft } = renderDock(sessionOf(), {
+      inbox: [textRow("q1", "先跑测试")],
+      updateQueue: () => Promise.reject(new Error("boom")),
+    });
+    fireEvent.click(screen.getByLabelText("编辑排队消息"));
+
+    await waitFor(() => {
+      expect(notify).toHaveBeenCalledWith("error", "编辑失败：这条消息可能已经开始发送。");
+    });
+    expect(restoreDraft).not.toHaveBeenCalled();
   });
 });
 

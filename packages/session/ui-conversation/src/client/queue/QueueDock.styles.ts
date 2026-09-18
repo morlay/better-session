@@ -150,6 +150,7 @@ export const styles = {
     objectFit: "cover",
   },
   preview: {
+    display: "block",
     flex: "1 1 auto",
     minWidth: "0",
     font: "var(--dsw-font-xs-13)",
@@ -159,23 +160,17 @@ export const styles = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
     wordBreak: "break-word",
-  },
-  editor: {
-    flex: "1 1 auto",
-    minWidth: "0",
-    font: "var(--dsw-font-xs-13)",
-    fontFamily: "Inter, var(--dsw-font-family)",
-    boxSizing: "border-box",
-    height: "28px",
-    padding: "0 8px",
-    border: "0.5px solid var(--dsw-alias-border-l4)",
-    borderRadius: "6px",
-    outline: "none",
-    background: "var(--dsw-alias-bg-base)",
-    color: "var(--dsw-alias-label-primary)",
-    "&:focus": {
-      borderColor: "var(--dsw-alias-state-business-primary)",
-    },
+    // 单行展示：队列行渲染的是原始 markdown，段落 / 列表 / 代码块这些块级结构各自换行
+    // （36px 的行高装不下）。这里只把渲染出来的块级结构压成 inline 流，交给上面的
+    // nowrap + ellipsis 裁成一行——队列行的数据与文本投影（queue-text.ts）不变。
+    // 选择器带宿主属性是为了特异性高于官方 markdown 表的 `.markdown p` / `.markdown hr` 一类规则。
+    "&[data-queue-preview] :is(p, div, ul, ol, li, h1, h2, h3, h4, h5, h6, blockquote, pre, hr, table, thead, tbody, tfoot, tr, td, th, img, figure, section)":
+      {
+        display: "inline",
+        margin: "0",
+        padding: "0",
+        whiteSpace: "nowrap",
+      },
   },
   actions: {
     display: "flex",

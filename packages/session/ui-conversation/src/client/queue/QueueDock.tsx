@@ -10,10 +10,8 @@ import type { FileAttachmentRef, ImageAttachmentRef } from "@deepseek-ai/dsh-att
 import type { PropsLocale, PropsRuntime } from "@deepseek-ai/dsh-client-ui-slots";
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
 import {
-  IconCheckOutline16,
   IconChevronDownOutline14,
   IconChevronUpOutline14,
-  IconCloseOutline16,
   FileTypeIcon,
   fileSizeText,
   IconEditOutline16,
@@ -35,6 +33,8 @@ const EMPTY_QUEUE = [] as const;
 export interface QueueDockInjected {
   updateQueue: (itemId: MessageId, action: QueueAction) => Promise<void>;
   notify: (level: "info" | "error", text: string) => void;
+  /** Replace the composer draft with one row's raw text (the recall target). */
+  restoreDraft: (text: string) => void;
   /** Resolve one durable queued image into a session-scoped browser URL. */
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>;
 }
@@ -123,12 +123,16 @@ export type QueueDockProps = PropsRuntime<"conversation.input.dock"> &
  * Queue strip: one item renders directly; multiple items default to a
  * collapsible count header; an empty queue renders nothing. Local submissions
  * show sending status and disabled actions until their Host queue rows arrive.
+ * Editing a row recalls it: unlike the transcript's recall it asks for no
+ * confirmation — the row leaves the queue and its raw text returns to the
+ * composer draft.
  */
 export function QueueDock({
   useSession,
   useProjection,
   updateQueue,
   notify,
+  restoreDraft,
   loadImage,
   t,
 }: QueueDockProps) {
@@ -137,7 +141,9 @@ export function QueueDock({
   const pendingSubmissions = useSession((s) => s.pendingSubmissions);
   const pendingQueue = useMemo(() => {
     const admitted = new Set(
-      queue.flatMap(({ source }) => (source.kind === "user" && "rpcId" in source ? [source.rpcId] : [])),
+      queue.flatMap(({ source }) =>
+        source.kind === "user" && "rpcId" in source ? [source.rpcId] : [],
+      ),
     );
     return pendingSubmissions.filter(
       (submission) => submission.placement === "queued" && !admitted.has(submission.requestId),
@@ -148,7 +154,6 @@ export function QueueDock({
   const queueMutable = useSession(
     (s) => s.subagent === null || s.subagent.address.mode === "continuable",
   );
-  const [editing, setEditing] = useState<{ id: MessageId; text: string } | null>(null);
   const [busy, setBusy] = useState<MessageId | null>(null);
   const [collapsed, setCollapsed] = useState(true);
   const listId = useId();
@@ -158,13 +163,11 @@ export function QueueDock({
 
   useEffect(() => {
     if (rowCount === 0 && !collapsed) setCollapsed(true);
-    if (editing !== null && (!queueMutable || !queue.some((row) => row.id === editing.id)))
-      setEditing(null);
-  }, [collapsed, editing, queue, queueMutable, rowCount]);
+  }, [collapsed, rowCount]);
 
   if (rowCount === 0) return null;
 
-  const interactionActive = queueMutable && (editing !== null || busy !== null);
+  const interactionActive = queueMutable && busy !== null;
   const expanded = !collapsed || interactionActive;
   const listVisible = rowCount === 1 || expanded;
 
@@ -185,16 +188,10 @@ export function QueueDock({
     }
   };
 
-  const saveEdit = async (): Promise<void> => {
-    if (editing === null || editing.text.trim() === "") return;
-    if (
-      await applyAction(
-        editing.id,
-        { kind: "edit", content: [{ type: "text", text: editing.text }] },
-        t("queue.editFailed"),
-      )
-    )
-      setEditing(null);
+  // Recall: leave the queue first, and only then hand the raw text back to the
+  // draft — a failed removal must not leave the text in both places.
+  const recall = async (itemId: MessageId, text: string): Promise<void> => {
+    if (await applyAction(itemId, { kind: "remove" }, t("queue.editFailed"))) restoreDraft(text);
   };
 
   return (
@@ -238,146 +235,84 @@ export function QueueDock({
                       <IconQueueOutline14 />
                     </span>
                   )}
-                  {editing?.id === row.id ? (
-                    <input
-                      autoFocus
-                      {...styling.props(styles.editor)}
-                      aria-label={t("queue.edit")}
-                      value={editing.text}
-                      onChange={(event) => {
-                        setEditing({ id: row.id, text: event.currentTarget.value });
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          setEditing(null);
-                          return;
-                        }
-                        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                          event.preventDefault();
-                          void saveEdit();
-                        }
-                      }}
-                    />
-                  ) : (
-                    <>
-                      {attachments.length > 0 && (
-                        <span {...styling.props(styles.attachments)} data-queue-attachments="">
-                          {attachments.map((item, index) =>
-                            item.type === "image" ? (
-                              <QueueThumb
-                                key={`${item.attachment.attachmentId}:${index}`}
-                                attachment={item.attachment}
-                                loadImage={loadImage}
-                                label={t("queue.image")}
-                              />
-                            ) : (
-                              <QueueFile
-                                key={`${item.attachment.attachmentId}:${item.attachment.name}:${index}`}
-                                attachment={item.attachment}
-                                label={t("queue.file", { name: item.attachment.name })}
-                              />
-                            ),
-                          )}
-                        </span>
+                  {attachments.length > 0 && (
+                    <span {...styling.props(styles.attachments)} data-queue-attachments="">
+                      {attachments.map((item, index) =>
+                        item.type === "image" ? (
+                          <QueueThumb
+                            key={`${item.attachment.attachmentId}:${index}`}
+                            attachment={item.attachment}
+                            loadImage={loadImage}
+                            label={t("queue.image")}
+                          />
+                        ) : (
+                          <QueueFile
+                            key={`${item.attachment.attachmentId}:${item.attachment.name}:${index}`}
+                            attachment={item.attachment}
+                            label={t("queue.file", { name: item.attachment.name })}
+                          />
+                        ),
                       )}
-                      <span {...styling.props(styles.preview)}>
-                        <ReferenceMarkdown text={queueTextOf(rowText)} labels={labels} />
-                      </span>
-                    </>
+                    </span>
                   )}
+                  <span {...styling.props(styles.preview)} data-queue-preview="">
+                    <ReferenceMarkdown text={queueTextOf(rowText)} labels={labels} />
+                  </span>
                   {queueMutable && (
                     <div {...styling.props(styles.actions)}>
-                      {editing?.id === row.id ? (
-                        <>
-                          <Tooltip label={t("queue.save")} side="bottom" delayMs={500}>
-                            <button
-                              type="button"
-                              {...styling.props(styles.action)}
-                              aria-label={t("queue.save")}
-                              disabled={busy !== null || editing.text.trim() === ""}
-                              onClick={() => {
-                                void saveEdit();
-                              }}
-                            >
-                              <IconCheckOutline16 size={14} />
-                            </button>
-                          </Tooltip>
-                          <Tooltip label={t("queue.cancelEdit")} side="bottom" delayMs={500}>
-                            <button
-                              type="button"
-                              {...styling.props(styles.action)}
-                              aria-label={t("queue.cancelEdit")}
-                              disabled={busy !== null}
-                              onClick={() => {
-                                setEditing(null);
-                              }}
-                            >
-                              <IconCloseOutline16 size={14} />
-                            </button>
-                          </Tooltip>
-                        </>
-                      ) : (
-                        <>
-                          <Tooltip
-                            label={t("queue.edit")}
-                            side="bottom"
-                            delayMs={500}
-                            disabled={rowText.text === null}
-                          >
-                            <button
-                              type="button"
-                              {...styling.props(styles.action)}
-                              aria-label={t("queue.edit")}
-                              // Disabled buttons fire no hover events, so the
-                              // unsupported hint stays a native title.
-                              title={rowText.text === null ? t("queue.edit.unsupported") : undefined}
-                              disabled={busy !== null || rowText.text === null}
-                              onClick={() => {
-                                if (rowText.text !== null)
-                                  setEditing({ id: row.id, text: rowText.text });
-                              }}
-                            >
-                              <IconEditOutline16 size={14} />
-                            </button>
-                          </Tooltip>
-                          <Tooltip label={t("queue.remove")} side="bottom" delayMs={500}>
-                            <button
-                              type="button"
-                              {...styling.props(styles.action)}
-                              aria-label={t("queue.remove")}
-                              disabled={busy !== null}
-                              onClick={() => {
-                                void applyAction(
-                                  row.id,
-                                  { kind: "remove" },
-                                  t("queue.removeFailed"),
-                                );
-                              }}
-                            >
-                              <IconTrashOutline16 size={14} />
-                            </button>
-                          </Tooltip>
-                          <Tooltip
-                            label={t("queue.steer")}
-                            side="bottom"
-                            delayMs={500}
-                            disabled={!running}
-                          >
-                            <button
-                              type="button"
-                              {...styling.props(styles.action)}
-                              aria-label={t("queue.steer")}
-                              title={running ? undefined : t("queue.steer.unavailable")}
-                              disabled={busy !== null || !running}
-                              onClick={() => {
-                                void applyAction(row.id, { kind: "steer" }, t("queue.steerFailed"));
-                              }}
-                            >
-                              <IconSendOutline14 />
-                            </button>
-                          </Tooltip>
-                        </>
-                      )}
+                      <Tooltip
+                        label={t("queue.edit")}
+                        side="bottom"
+                        delayMs={500}
+                        disabled={rowText.text === null}
+                      >
+                        <button
+                          type="button"
+                          {...styling.props(styles.action)}
+                          aria-label={t("queue.edit")}
+                          // Disabled buttons fire no hover events, so the
+                          // unsupported hint stays a native title.
+                          title={rowText.text === null ? t("queue.edit.unsupported") : undefined}
+                          disabled={busy !== null || rowText.text === null}
+                          onClick={() => {
+                            if (rowText.text !== null) void recall(row.id, rowText.text);
+                          }}
+                        >
+                          <IconEditOutline16 size={14} />
+                        </button>
+                      </Tooltip>
+                      <Tooltip label={t("queue.remove")} side="bottom" delayMs={500}>
+                        <button
+                          type="button"
+                          {...styling.props(styles.action)}
+                          aria-label={t("queue.remove")}
+                          disabled={busy !== null}
+                          onClick={() => {
+                            void applyAction(row.id, { kind: "remove" }, t("queue.removeFailed"));
+                          }}
+                        >
+                          <IconTrashOutline16 size={14} />
+                        </button>
+                      </Tooltip>
+                      <Tooltip
+                        label={t("queue.steer")}
+                        side="bottom"
+                        delayMs={500}
+                        disabled={!running}
+                      >
+                        <button
+                          type="button"
+                          {...styling.props(styles.action)}
+                          aria-label={t("queue.steer")}
+                          title={running ? undefined : t("queue.steer.unavailable")}
+                          disabled={busy !== null || !running}
+                          onClick={() => {
+                            void applyAction(row.id, { kind: "steer" }, t("queue.steerFailed"));
+                          }}
+                        >
+                          <IconSendOutline14 />
+                        </button>
+                      </Tooltip>
                     </div>
                   )}
                 </li>
@@ -486,6 +421,9 @@ export const queueDockEntry = {
               updateQueue: (itemId, action) => conversation.updateQueue(itemId, action),
               notify: (level, text) => {
                 conversation.input.for(actx).notify(level, text);
+              },
+              restoreDraft: (text) => {
+                conversation.input.for(actx).restoreDraft(text);
               },
               loadImage: (attachment) => ctx.uiConversation.imageUrl(sessionId, attachment),
             };
