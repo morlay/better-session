@@ -457,7 +457,7 @@ const REPORT = {
 
 describe("对话管理页面：token 用量统计", () => {
   it("第一层切到统计：拉一次数据，默认总览含子代理拆分", async () => {
-    const { faces } = renderPage({
+    const { faces, container } = renderPage({
       archived: [],
       faces: { loadUsage: vi.fn(async () => REPORT) },
     });
@@ -467,11 +467,14 @@ describe("对话管理页面：token 用量统计", () => {
       expect(faces.loadUsage).toHaveBeenCalledTimes(1);
     });
 
-    expect(screen.getByText("总览")).toBeTruthy();
-    expect(screen.getByText("输入（含缓存）")).toBeTruthy();
-    expect(screen.getByText("165")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "总览" })).toBeTruthy();
+    expect(screen.getByText("全部")).toBeTruthy();
+    expect(screen.getAllByText("输入（含缓存）").length).toBe(2);
+    expect(screen.getByText("65")).toBeTruthy();
     expect(screen.getByText("其中子代理")).toBeTruthy();
     expect(screen.getAllByText("55").length).toBeGreaterThan(0);
+    // 行内不再有「合计」项。
+    expect(container.querySelector('[data-usage-cell="total"]')).toBeNull();
   });
 
   it("第二层切维度：按天 / 按模型 / 按会话", async () => {
@@ -489,30 +492,31 @@ describe("对话管理页面：token 用量统计", () => {
     expect(screen.getByText("会话 A")).toBeTruthy();
   });
 
-  it("输入与合计在显示上含缓存读取", async () => {
+  it("输入在显示上含缓存读取（单项原始值随之）", async () => {
     const withCache = {
       ...REPORT,
       totals: { ...TOTALS_165, cacheReadTokens: 1_000 },
       subagent: { ...TOTALS_55, cacheReadTokens: 0 },
     };
-    renderPage({
+    const { container } = renderPage({
       archived: [],
       faces: { loadUsage: vi.fn(async () => withCache) },
     });
     fireEvent.click(screen.getByRole("tab", { name: "统计" }));
     await screen.findByText("总览");
 
-    // 输入 100 + 缓存 1000 = 1.1K；合计 165 + 1000 = 1.2K
+    // 输入含缓存：100 + 1000 = 1100（原始值挂在 data-usage-value 上）。
+    const input = container.querySelector('[data-usage-cell="input"]');
+    expect(input?.getAttribute("data-usage-value")).toBe("1100");
     expect(screen.getByText("1.1K")).toBeTruthy();
-    expect(screen.getByText("1.2K")).toBeTruthy();
   });
 
-  it("统计行与总览格子同一套上下布局", () => {
-    // 两边都是「标签小字在上、值大字在下、明细一行」。
+  it("统计行：label 在上，单项内部上下、单项之间横向，且没有 total 项", () => {
     expect(styles.usageRow.flexDirection).toBe("column");
-    expect(styles.usageCell.flexDirection).toBe("column");
-    expect(styles.usageRow.padding).toBe(styles.usageCell.padding);
-    expect(styles.usageRowTotal.fontSize).toBe(styles.usageCellValue.fontSize);
+    expect(styles.usageMetric.flexDirection).toBe("column");
+    expect(styles.usageMetrics.flexDirection).toBe("row");
+    expect(styles).not.toHaveProperty("usageRowTotal");
+    expect(styles).not.toHaveProperty("usageCell");
   });
 
   it("数据位都带 data-* 标注，便于按标注沟通定位", async () => {
@@ -539,8 +543,8 @@ describe("对话管理页面：token 用量统计", () => {
     fireEvent.click(screen.getByRole("tab", { name: "统计" }));
     await screen.findByText("总览");
     expect(
-      container.querySelector('[data-usage-cell="total"]')?.getAttribute("data-usage-value"),
-    ).toBe("165");
+      container.querySelector('[data-usage-cell="output"]')?.getAttribute("data-usage-value"),
+    ).toBe("65");
     expect(container.querySelector('[data-usage-key="subagent"]')).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "按天" }));

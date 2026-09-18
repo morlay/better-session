@@ -82,46 +82,11 @@ export const styles = {
     gap: "12px",
     flex: "none",
   },
-  usageGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-    gap: "8px",
-    flex: "none",
-  },
-  usageCell: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "2px",
-    padding: "10px 12px",
-    border: "1px solid var(--dsw-alias-border-l1)",
-    borderRadius: "10px",
-    background: "var(--dsw-alias-bg-base)",
-  },
-  usageCellLabel: {
-    fontSize: "12px",
-    lineHeight: "18px",
-    color: "var(--dsw-alias-label-tertiary)",
-  },
-  usageCellValue: {
-    fontSize: "16px",
-    lineHeight: "24px",
-    fontWeight: "500",
-    fontVariantNumeric: "tabular-nums",
-  },
-  usageList: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "4px",
-    margin: "0",
-    padding: "0",
-    listStyle: "none",
-    flex: "none",
-  },
-  // 列表行与总览格子同一套上下布局：标签小字在上、值大字在下、明细一行。
+  // 一行用量：label 在上，下面是横向排布的单项（每个单项内部上下）。
   usageRow: {
     display: "flex",
     flexDirection: "column",
-    gap: "2px",
+    gap: "6px",
     padding: "10px 12px",
     border: "1px solid var(--dsw-alias-border-l1)",
     borderRadius: "10px",
@@ -136,16 +101,36 @@ export const styles = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  usageRowTotal: {
+  usageMetrics: {
+    display: "flex",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: "6px 20px",
+  },
+  usageMetric: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+  },
+  usageMetricLabel: {
+    fontSize: "12px",
+    lineHeight: "18px",
+    color: "var(--dsw-alias-label-tertiary)",
+  },
+  usageMetricValue: {
     fontSize: "16px",
     lineHeight: "24px",
     fontWeight: "500",
     fontVariantNumeric: "tabular-nums",
   },
-  usageRowMeta: {
-    fontSize: "12px",
-    lineHeight: "18px",
-    color: "var(--dsw-alias-label-tertiary)",
+  usageList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "4px",
+    margin: "0",
+    padding: "0",
+    listStyle: "none",
+    flex: "none",
   },
   filters: {
     display: "flex",

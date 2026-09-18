@@ -518,25 +518,30 @@ type PageView = "sessions" | "usage";
 /** 统计视图的二层维度。 */
 type UsageTab = "overview" | "daily" | "models" | "sessions";
 
-/** 输入在显示上含缓存读取（缓存命中的输入），合计随之含缓存。 */
-function inputWithCache(totals: UsageTotals): number {
-  return totals.inputTokens + totals.cacheReadTokens;
+/** 一个用量单项：标签在上、值在下；单项之间横向排布。 */
+interface UsageMetric {
+  key: string;
+  label: string;
+  value: number;
 }
 
-/** 显示口径的合计：输入（含缓存）+ 输出。 */
-function usageTotal(totals: UsageTotals): number {
-  return totals.totalTokens + totals.cacheReadTokens;
-}
-
-/** 紧凑明细：输入（含缓存）· 输出 · 缓存读取 · 推理 · 事件。 */
-function usageMeta(totals: UsageTotals, t: Translate): string {
+/** 显示口径的单项：输入（含缓存读取）、输出、推理、事件——没有单独的合计项。 */
+function usageMetrics(totals: UsageTotals, t: Translate): UsageMetric[] {
   return [
-    `${t("usage.inputWithCache")} ${formatTokens(inputWithCache(totals))}`,
-    `${t("usage.output")} ${formatTokens(totals.outputTokens)}`,
-    `${t("usage.cacheRead")} ${formatTokens(totals.cacheReadTokens)}`,
-    `${t("usage.reasoning")} ${formatTokens(totals.reasoningTokens)}`,
-    `${t("usage.events")} ${formatTokens(totals.events)}`,
-  ].join(" · ");
+    {
+      key: "input",
+      label: t("usage.inputWithCache"),
+      value: totals.inputTokens + totals.cacheReadTokens,
+    },
+    { key: "output", label: t("usage.output"), value: totals.outputTokens },
+    { key: "reasoning", label: t("usage.reasoning"), value: totals.reasoningTokens },
+    { key: "events", label: t("usage.events"), value: totals.events },
+  ];
+}
+
+/** 折叠行的排序口径（不显示）：输入（含缓存）+ 输出。 */
+function sortWeight(totals: UsageTotals): number {
+  return totals.inputTokens + totals.cacheReadTokens + totals.outputTokens;
 }
 
 interface UsageListRow {
@@ -556,7 +561,7 @@ function emptyTotals(): UsageTotals {
   };
 }
 
-/** 把桶按一个键折叠成行并按合计降序（按天 / 按模型都用它）。 */
+/** 把桶按一个键折叠成行并按用量降序（按天 / 按模型都用它）。 */
 function foldBuckets(
   buckets: readonly UsageBucket[],
   keyOf: (bucket: UsageBucket) => string,
@@ -574,7 +579,39 @@ function foldBuckets(
     folded.set(key, row);
   }
   return [...folded.values()].sort(
-    (left, right) => usageTotal(right.totals) - usageTotal(left.totals),
+    (left, right) => sortWeight(right.totals) - sortWeight(left.totals),
+  );
+}
+
+/** 一行用量：label 在上，下面是横向排布的单项。 */
+function UsageRow({
+  rowKey,
+  label,
+  totals,
+  t,
+}: {
+  rowKey: string;
+  label: string;
+  totals: UsageTotals;
+  t: Translate;
+}): ReactNode {
+  return (
+    <li {...styling.props(styles.usageRow)} data-usage-key={rowKey}>
+      <span {...styling.props(styles.usageRowLabel)}>{label}</span>
+      <span {...styling.props(styles.usageMetrics)}>
+        {usageMetrics(totals, t).map((metric) => (
+          <span
+            key={metric.key}
+            {...styling.props(styles.usageMetric)}
+            data-usage-cell={metric.key}
+            data-usage-value={metric.value}
+          >
+            <span {...styling.props(styles.usageMetricLabel)}>{metric.label}</span>
+            <span {...styling.props(styles.usageMetricValue)}>{formatTokens(metric.value)}</span>
+          </span>
+        ))}
+      </span>
+    </li>
   );
 }
 
@@ -589,52 +626,19 @@ function UsageList({ rows, t }: { rows: readonly UsageListRow[]; t: Translate })
   return (
     <ul {...styling.props(styles.usageList)}>
       {rows.map((row) => (
-        <li key={row.key} {...styling.props(styles.usageRow)} data-usage-key={row.key}>
-          <span {...styling.props(styles.usageRowLabel)}>{row.label}</span>
-          <span {...styling.props(styles.usageRowTotal)}>
-            {formatTokens(usageTotal(row.totals))}
-          </span>
-          <span {...styling.props(styles.usageRowMeta)}>{usageMeta(row.totals, t)}</span>
-        </li>
+        <UsageRow key={row.key} rowKey={row.key} label={row.label} totals={row.totals} t={t} />
       ))}
     </ul>
   );
 }
 
+/** 总览：全部与「其中子代理」两行，与列表行同形。 */
 function UsageOverview({ report, t }: { report: SessionUsageReport; t: Translate }): ReactNode {
-  const cells = [
-    { key: "input", label: t("usage.inputWithCache"), value: inputWithCache(report.totals) },
-    { key: "output", label: t("usage.output"), value: report.totals.outputTokens },
-    { key: "cache", label: t("usage.cacheRead"), value: report.totals.cacheReadTokens },
-    { key: "reasoning", label: t("usage.reasoning"), value: report.totals.reasoningTokens },
-    { key: "total", label: t("usage.total"), value: usageTotal(report.totals) },
-    { key: "events", label: t("usage.events"), value: report.totals.events },
-  ];
   return (
-    <>
-      <div {...styling.props(styles.usageGrid)}>
-        {cells.map((cell) => (
-          <div
-            key={cell.key}
-            {...styling.props(styles.usageCell)}
-            data-usage-cell={cell.key}
-            data-usage-value={cell.value}
-          >
-            <span {...styling.props(styles.usageCellLabel)}>{cell.label}</span>
-            <span {...styling.props(styles.usageCellValue)}>{formatTokens(cell.value)}</span>
-          </div>
-        ))}
-      </div>
-      <ul {...styling.props(styles.usageList)}>
-        <li {...styling.props(styles.usageRow)} data-usage-key="subagent">
-          <span {...styling.props(styles.usageRowLabel)}>{t("usage.subagentOnly")}</span>
-          <span {...styling.props(styles.usageRowTotal)}>
-            {formatTokens(usageTotal(report.subagent))}
-          </span>
-          <span {...styling.props(styles.usageRowMeta)}>{usageMeta(report.subagent, t)}</span>
-        </li>
-      </ul>
-    </>
+    <ul {...styling.props(styles.usageList)}>
+      <UsageRow rowKey="all" label={t("usage.all")} totals={report.totals} t={t} />
+      <UsageRow rowKey="subagent" label={t("usage.subagentOnly")} totals={report.subagent} t={t} />
+    </ul>
   );
 }
 
@@ -678,7 +682,7 @@ function UsageView({
                 label: row.title ?? row.sessionId,
                 totals: row,
               }))
-              .sort((left, right) => usageTotal(right.totals) - usageTotal(left.totals))
+              .sort((left, right) => sortWeight(right.totals) - sortWeight(left.totals))
               .slice(0, USAGE_SESSION_ROWS);
   return (
     <div {...styling.props(styles.usage)} data-usage-view={tab}>
