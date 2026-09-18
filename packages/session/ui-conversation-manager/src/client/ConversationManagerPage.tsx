@@ -336,25 +336,22 @@ export function ConversationManagerPage({
             </p>
           ) : null}
           {visible.length > 0 ? (
-            <ul {...styling.props(styles.list)} data-session-list="">
+            <ul {...styling.props(styles.list)}>
               {visible.map((row) => (
                 <li
                   key={row.id}
                   {...styling.props(styles.row)}
-                  data-session-row=""
                   data-session-id={String(row.id)}
                   data-archived={row.archived ? "true" : "false"}
                   data-subagent={row.subagent ? "true" : "false"}
                 >
                   <span {...styling.props(styles.identity)}>
                     <span {...styling.props(styles.titleLine)}>
-                      <span {...styling.props(styles.rowTitle)} data-session-title="">
-                        {row.title}
-                      </span>
+                      <span {...styling.props(styles.rowTitle)}>{row.title}</span>
                       {row.archived ? <Tag tone="neutral">{t("archived")}</Tag> : null}
                       {row.subagent ? <Tag tone="quiet">{t("subagent")}</Tag> : null}
                     </span>
-                    <span {...styling.props(styles.meta)} data-session-meta="">
+                    <span {...styling.props(styles.meta)}>
                       {[row.workspace, timeLabel(row.updatedAt, now, t)].join(" · ")}
                     </span>
                   </span>
@@ -581,15 +578,7 @@ function foldBuckets(
   );
 }
 
-function UsageList({
-  rows,
-  kind,
-  t,
-}: {
-  rows: readonly UsageListRow[];
-  kind: string;
-  t: Translate;
-}): ReactNode {
+function UsageList({ rows, t }: { rows: readonly UsageListRow[]; t: Translate }): ReactNode {
   if (rows.length === 0) {
     return (
       <p {...styling.props(styles.status)} data-usage-status="empty">
@@ -600,21 +589,12 @@ function UsageList({
   return (
     <ul {...styling.props(styles.usageList)}>
       {rows.map((row) => (
-        <li
-          key={row.key}
-          {...styling.props(styles.usageRow)}
-          data-usage-row={kind}
-          data-usage-key={row.key}
-        >
-          <span {...styling.props(styles.usageRowLabel)} data-usage-label="">
-            {row.label}
-          </span>
-          <span {...styling.props(styles.usageRowTotal)} data-usage-total="">
+        <li key={row.key} {...styling.props(styles.usageRow)} data-usage-key={row.key}>
+          <span {...styling.props(styles.usageRowLabel)}>{row.label}</span>
+          <span {...styling.props(styles.usageRowTotal)}>
             {formatTokens(usageTotal(row.totals))}
           </span>
-          <span {...styling.props(styles.usageRowMeta)} data-usage-meta="">
-            {usageMeta(row.totals, t)}
-          </span>
+          <span {...styling.props(styles.usageRowMeta)}>{usageMeta(row.totals, t)}</span>
         </li>
       ))}
     </ul>
@@ -646,16 +626,12 @@ function UsageOverview({ report, t }: { report: SessionUsageReport; t: Translate
         ))}
       </div>
       <ul {...styling.props(styles.usageList)}>
-        <li {...styling.props(styles.usageRow)} data-usage-row="subagent" data-usage-key="subagent">
-          <span {...styling.props(styles.usageRowLabel)} data-usage-label="">
-            {t("usage.subagentOnly")}
-          </span>
-          <span {...styling.props(styles.usageRowTotal)} data-usage-total="">
+        <li {...styling.props(styles.usageRow)} data-usage-key="subagent">
+          <span {...styling.props(styles.usageRowLabel)}>{t("usage.subagentOnly")}</span>
+          <span {...styling.props(styles.usageRowTotal)}>
             {formatTokens(usageTotal(report.subagent))}
           </span>
-          <span {...styling.props(styles.usageRowMeta)} data-usage-meta="">
-            {usageMeta(report.subagent, t)}
-          </span>
+          <span {...styling.props(styles.usageRowMeta)}>{usageMeta(report.subagent, t)}</span>
         </li>
       </ul>
     </>
@@ -736,7 +712,7 @@ function UsageView({
       {report === null ? null : tab === "overview" ? (
         <UsageOverview report={report} t={t} />
       ) : (
-        <UsageList rows={rows} kind={tab} t={t} />
+        <UsageList rows={rows} t={t} />
       )}
     </div>
   );

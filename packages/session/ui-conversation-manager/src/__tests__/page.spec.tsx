@@ -507,21 +507,27 @@ describe("对话管理页面：token 用量统计", () => {
     expect(screen.getByText("1.2K")).toBeTruthy();
   });
 
+  it("统计行与总览格子同一套上下布局", () => {
+    // 两边都是「标签小字在上、值大字在下、明细一行」。
+    expect(styles.usageRow.flexDirection).toBe("column");
+    expect(styles.usageCell.flexDirection).toBe("column");
+    expect(styles.usageRow.padding).toBe(styles.usageCell.padding);
+    expect(styles.usageRowTotal.fontSize).toBe(styles.usageCellValue.fontSize);
+  });
+
   it("数据位都带 data-* 标注，便于按标注沟通定位", async () => {
     const { container } = renderPage({
       archived: [C.id],
       faces: { loadUsage: vi.fn(async () => REPORT) },
     });
 
-    // 会话视图：视图、行、字段、按钮、分页都带标注。
+    // 会话视图：视图、行状态、按钮、分页带标注（行标题/明细页面上可见，不重复标注）。
     expect(container.querySelector('[data-view="sessions"]')).toBeTruthy();
-    const rows = [...container.querySelectorAll("[data-session-row]")] as HTMLElement[];
-    // 列表按最近活动降序：首行是未归档的会话 A；归档行的标记在 data-archived 上。
+    const rows = [...container.querySelectorAll("[data-session-id]")] as HTMLElement[];
+    // 列表按最近活动降序：首行是未归档的会话 A；归档/子代理标记在行自身的 data-* 上。
     expect(rows[0]?.dataset["sessionId"]).toBe("s1");
     expect(rows[0]?.dataset["archived"]).toBe("false");
     expect(rows[0]?.dataset["subagent"]).toBe("false");
-    expect(rows[0]?.querySelector("[data-session-title]")).toBeTruthy();
-    expect(rows[0]?.querySelector("[data-session-meta]")).toBeTruthy();
     expect(rows[0]?.querySelector('[data-action="remove"]')).toBeTruthy();
     expect(rows.find((el) => el.dataset["archived"] === "true")?.dataset["sessionId"]).toBe("s3");
     expect(container.querySelector("[data-pagination]")?.getAttribute("data-page-current")).toBe(
@@ -535,12 +541,10 @@ describe("对话管理页面：token 用量统计", () => {
     expect(
       container.querySelector('[data-usage-cell="total"]')?.getAttribute("data-usage-value"),
     ).toBe("165");
-    expect(container.querySelector('[data-usage-row="subagent"]')).toBeTruthy();
+    expect(container.querySelector('[data-usage-key="subagent"]')).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "按天" }));
-    expect(
-      container.querySelector('[data-usage-row="daily"]')?.getAttribute("data-usage-key"),
-    ).toBe("2026-09-08");
+    expect(container.querySelector('[data-usage-key="2026-09-08"]')).toBeTruthy();
     expect(container.querySelector('[data-usage-tab="daily"]')).toBeTruthy();
   });
 
