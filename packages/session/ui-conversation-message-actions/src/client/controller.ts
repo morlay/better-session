@@ -26,7 +26,7 @@ function editorApiPath(): string {
 export interface SessionEditorState {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
-  pending: VersionOperation | "recall" | "import" | null;
+  pending: VersionOperation | "recall" | null;
   timeline: SessionEditorTimeline | null;
 }
 
@@ -43,8 +43,6 @@ export interface SessionEditorFace {
   reroll(): Promise<boolean>;
   rewind(toBoundary: number): Promise<boolean>;
   recall(message: EditableMessageBlock): Promise<boolean>;
-
-  importSession(file: File): Promise<boolean>;
   openVersion(sessionId: string): Promise<void>;
 }
 
@@ -110,7 +108,6 @@ export class SessionEditorController {
           { action: "recall", sessionId: this.sessionId, eventSeq: message.eventSeq },
           () => this.setComposerDraft(this.messageTexts(message)),
         ),
-      importSession: (file) => this.importSession(file),
       openVersion: (sessionId) => {
         this.uiWorkspace.openSession(sessionId as SessionId);
         return Promise.resolve();
@@ -291,53 +288,5 @@ export class SessionEditorController {
         }
       | undefined;
     conversation?.input?.for(scoped).restoreDraft(texts.join("\n\n"));
-  }
-
-  private async importSession(file: File): Promise<boolean> {
-    const current = this.store.getSnapshot();
-    if (current.pending !== null) return false;
-    this.store.update((state) => {
-      state.pending = "import";
-      state.error = null;
-    });
-    try {
-      const zip = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = typeof reader.result === "string" ? reader.result : "";
-          const comma = dataUrl.indexOf(",");
-          resolve(comma < 0 ? dataUrl : dataUrl.slice(comma + 1));
-        };
-        reader.onerror = () =>
-          reject(reader.error ?? new Error("failed to read the selected file"));
-        reader.readAsDataURL(file);
-      });
-      const response = await fetch("/api/session.import", {
-        method: "POST",
-        headers: { accept: "application/json", "content-type": "application/json" },
-        body: JSON.stringify({ zip, sessionId: this.sessionId }),
-      });
-      const value = (await response.json()) as unknown;
-      if (this.disposed) return true;
-      if (!response.ok) {
-        const error = (value as { error?: unknown })["error"];
-        throw new Error(
-          typeof error === "string" ? error : `请求失败：HTTP ${String(response.status)}`,
-        );
-      }
-      this.store.update((state) => {
-        state.pending = null;
-      });
-
-      location.reload();
-      return true;
-    } catch (error) {
-      if (this.disposed) return false;
-      this.store.update((state) => {
-        state.pending = null;
-        state.error = messageOf(error);
-      });
-      return false;
-    }
   }
 }

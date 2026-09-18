@@ -44,6 +44,7 @@
     "@morlay/dsh-client-ui-primitives": "workspace:^",
     "@morlay/session-branch": "workspace:^",
     "@morlay/session-rdb": "workspace:^",
+    "@morlay/ui-conversation-manager": "workspace:^",
     "@morlay/ui-conversation-message-actions": "workspace:^"
   },
   "peerDependencies": {

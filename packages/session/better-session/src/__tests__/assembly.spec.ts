@@ -59,12 +59,12 @@ describe("better-session 装配面", () => {
     }
   });
 
-  it("fork 的 client 半声明了 client-modules 需要的入口与平台", () => {
-    const clientForkPackages = insertedPackageNames(patch).filter((name) =>
-      name.startsWith("@morlay/dsh-client-ui-"),
+  it("有 client 半的插入包声明了 client-modules 需要的入口与平台", () => {
+    const clientPackages = insertedPackageNames(patch).filter(
+      (name) => manifestOf(name).dsh?.client !== undefined,
     );
-    expect(clientForkPackages.length).toBeGreaterThan(0);
-    for (const name of clientForkPackages) {
+    expect(clientPackages.length).toBeGreaterThan(0);
+    for (const name of clientPackages) {
       const entry = manifestOf(name).exports?.["./client"];
       expect(entry?.types, `${name} client types`).toBeDefined();
       expect(entry?.default, `${name} client bundle`).toBeDefined();

@@ -17,6 +17,7 @@ DeepSeek Harness Plugin 自用开发插件集合。
 | `session/ui-conversation-message-actions/` | 编排层：edit / retry / recall / fork 编排 + client UI 替换                            | [README](packages/session/ui-conversation-message-actions/README.md) |
 | `session/ui-conversation/`                 | 上游对话外壳的**薄壳 fork**（只留我们改过的文件，其余 import 指向上游源码、构建内联） | [README](packages/session/ui-conversation/README.md)                 |
 | `session/dsh-reference-injection/`         | skill 引用后注入（`skill:name` → `<skill_content>`）                                  | [README](packages/session/dsh-reference-injection/README.md)         |
+| `session/ui-conversation-manager/`         | 「对话管理」全局面板页：已归档会话的搜索 / 取消归档 / 删除 / 导入为新会话             | [README](packages/session/ui-conversation-manager/README.md)         |
 | **client**（浏览器半基础）                 |                                                                                       |                                                                      |
 | `client/ui-primitives/`                    | CSS-in-JS 样式层 + 引用统一解析 / 渲染转换                                            | [README](packages/client/ui-primitives/README.md)                    |
 | **llm**（LLM 适配）                        |                                                                                       |                                                                      |

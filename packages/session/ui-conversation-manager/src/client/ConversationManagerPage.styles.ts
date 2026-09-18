@@ -1,0 +1,153 @@
+import { styling, type CSSProps } from "@morlay/dsh-client-ui-primitives/client";
+
+const spin = styling.keyframes({
+  from: { transform: "rotate(0deg)" },
+  to: { transform: "rotate(360deg)" },
+});
+
+/** 「对话管理」页面的样式表（官方 --dsw-* 变量 + 我们的 css-in-js 层）。
+ * 页面根是纵向 flex + 整页滚动：除列表外的项都 `flex: none`，否则内容变长时
+ * flex 会把这些项压到 min-content（官方 Input 的 32px 高会被压成一行文字高）。 */
+export const styles = {
+  page: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+    boxSizing: "border-box",
+    width: "100%",
+    height: "100%",
+    padding: "24px 28px",
+    overflow: "auto",
+    color: "var(--dsw-alias-label-primary)",
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+    flex: "none",
+  },
+  headerActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    flex: "none",
+  },
+  title: {
+    margin: "0",
+    fontSize: "16px",
+    lineHeight: "24px",
+    fontWeight: "500",
+  },
+  filters: {
+    display: "flex",
+    alignItems: "center",
+    gap: "16px",
+    flex: "none",
+  },
+  // 官方 Input 的 wrap 是 inline-flex：这里只补宽度，其余样式仍归官方。
+  search: {
+    width: "360px",
+    maxWidth: "100%",
+    flex: "none",
+  },
+  list: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "4px",
+    margin: "0",
+    padding: "0",
+    listStyle: "none",
+    flex: "none",
+  },
+  row: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "16px",
+    padding: "10px 12px",
+    border: "1px solid var(--dsw-alias-border-l1)",
+    borderRadius: "10px",
+    background: "var(--dsw-alias-bg-base)",
+    flex: "none",
+  },
+  identity: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+    minWidth: "0",
+  },
+  titleLine: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    minWidth: "0",
+  },
+  rowTitle: {
+    overflow: "hidden",
+    fontSize: "13px",
+    lineHeight: "20px",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  meta: {
+    fontSize: "12px",
+    lineHeight: "18px",
+    color: "var(--dsw-alias-label-tertiary)",
+  },
+  actions: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    flex: "none",
+  },
+  pagination: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: "8px",
+    marginTop: "4px",
+    flex: "none",
+  },
+  paginationLabel: {
+    fontSize: "12px",
+    lineHeight: "18px",
+    color: "var(--dsw-alias-label-tertiary)",
+    fontVariantNumeric: "tabular-nums",
+  },
+  status: {
+    margin: "0",
+    fontSize: "13px",
+    lineHeight: "20px",
+    color: "var(--dsw-alias-label-tertiary)",
+    flex: "none",
+  },
+  failure: {
+    margin: "0",
+    fontSize: "13px",
+    lineHeight: "20px",
+    color: "var(--dsw-alias-label-error, var(--dsw-alias-label-primary))",
+    flex: "none",
+  },
+  blocking: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "14px",
+    padding: "32px 40px",
+    color: "var(--dsw-alias-label-primary)",
+  },
+  spinner: {
+    width: "28px",
+    height: "28px",
+    border: "2px solid var(--dsw-alias-border-l2)",
+    borderTopColor: "var(--dsw-alias-label-primary)",
+    borderRadius: "50%",
+    animation: `${spin} 900ms linear infinite`,
+  },
+  blockingText: {
+    margin: "0",
+    fontSize: "13px",
+    lineHeight: "20px",
+  },
+} satisfies Record<string, CSSProps>;

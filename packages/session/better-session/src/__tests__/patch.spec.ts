@@ -48,6 +48,7 @@ describe("better-session patch wiring", () => {
       "session-telemetry-otel",
       "storage-json",
       "ui-conversation",
+      "ui-settings-unarchive-sessions",
     ]);
   });
 
@@ -57,6 +58,7 @@ describe("better-session patch wiring", () => {
       "session-branch",
       "session-rdb",
       "ui-conversation-fork",
+      "ui-conversation-manager",
       "ui-conversation-message-actions",
       "ui-primitives-fork",
     ]);
